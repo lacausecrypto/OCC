@@ -1,5 +1,11 @@
 # OCC — Claude Chain Orchestrator
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-brightgreen)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
+[![Tests](https://github.com/lacausecrypto/OCC/actions/workflows/ci.yml/badge.svg)](https://github.com/lacausecrypto/OCC/actions)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-purple)](https://modelcontextprotocol.io)
+
 A powerful workflow orchestration engine for Claude AI agents. Define multi-step AI chains in YAML, execute them with parallel processing, dependency resolution, and real-time streaming — all accessible via MCP (Model Context Protocol) or REST API.
 
 ```
@@ -357,11 +363,39 @@ When used via Claude Code or Claude Desktop, OCC exposes 25 MCP tools:
 | `CLAUDE_CLI` | `claude` | Path to Claude CLI binary |
 | `NO_COLOR` | — | Disable ANSI colors in Claude output |
 
+## How OCC Compares
+
+| Feature | OCC | LangChain | CrewAI | AutoGen |
+|---------|-----|-----------|--------|---------|
+| **Chain definition** | YAML (declarative) | Python code | Python code | Python code |
+| **Step types** | 11 built-in (router, evaluator, gate, loop, merge, browser...) | Custom chains | Role-based agents | Conversation patterns |
+| **Parallel execution** | Automatic (dependency graph) | Manual | Sequential by default | Round-robin |
+| **Human-in-the-loop** | Native gate steps with API | Callbacks | Limited | Chat-based |
+| **MCP integration** | Native (25 tools) | Via adapter | None | None |
+| **Real-time streaming** | SSE built-in | Callbacks | Logging | Print |
+| **Scheduling** | Built-in cron | External | External | External |
+| **Retry + fallback** | Per-step, with model fallback | Per-chain | None | None |
+| **Output validation** | Guardrails (regex, length, content) | Output parsers | None | None |
+| **Setup complexity** | `npm install && npm start` | pip + API keys + code | pip + API keys + code | pip + API keys + code |
+| **Lines of code to define a workflow** | ~30 (YAML) | ~100+ (Python) | ~80+ (Python) | ~120+ (Python) |
+
+**OCC's sweet spot:** You want Claude to handle complex multi-step tasks autonomously, with zero Python, declarative YAML, and native MCP integration. If you're already in the Claude ecosystem, OCC is the orchestration layer that's missing.
+
 ## Requirements
 
 - **Node.js** >= 18
 - **Claude CLI** installed and authenticated (`npm install -g @anthropic-ai/claude-code`)
 - **npm** >= 9
+
+## Contributing
+
+Contributions are welcome! Please open an issue first to discuss what you'd like to change.
+
+1. Fork the repo
+2. Create your branch (`git checkout -b feature/amazing`)
+3. Run tests (`cd mcp-server && npm test`)
+4. Commit and push
+5. Open a Pull Request
 
 ## License
 
