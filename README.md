@@ -381,6 +381,60 @@ When used via Claude Code or Claude Desktop, OCC exposes 25 MCP tools:
 
 **OCC's sweet spot:** You want Claude to handle complex multi-step tasks autonomously, with zero Python, declarative YAML, and native MCP integration. If you're already in the Claude ecosystem, OCC is the orchestration layer that's missing.
 
+### Token Consumption
+
+One of the biggest costs when orchestrating LLM agents is token waste. OCC is designed to minimize it at every level:
+
+| Strategy | OCC | LangChain | CrewAI | AutoGen |
+|----------|-----|-----------|--------|---------|
+| **Step isolation** | Each step gets only its own prompt + injected variables — no conversation history bloat | Full chain context forwarded | Agents share full conversation | All agents see all messages |
+| **Dependency-scoped context** | Steps only receive outputs from their `depends_on` steps, not all previous steps | Sequential — each step sees everything before it | All agents share memory | Full conversation passed |
+| **Transform steps** | `json_extract`, `truncate`, `regex` — extract only what matters, zero LLM tokens | Must write Python code | Not available | Not available |
+| **Merge before pass** | `pick_best` or `llm_summarize` to compress parallel outputs into one | Manual concatenation | Not available | Not available |
+| **Caching** | Per-step cache with TTL — identical prompts skip the LLM entirely | Per-chain only | None | None |
+| **Conditional execution** | `condition` field skips irrelevant steps — no tokens wasted | Must code if/else | Not available | Not available |
+| **Output guardrails** | Reject and retry only when output fails validation — not on every call | Output parsers retry everything | Not available | Not available |
+| **Model selection per step** | Use `claude-haiku-4-5` for simple steps, `claude-opus-4-6` for critical ones | Global model setting | Global model | Global model |
+
+**Example:** A 6-step research chain in OCC uses ~15K tokens. The equivalent in a single-prompt approach would need ~40K+ tokens because the model must hold all context at once. OCC's step isolation means each step only pays for the tokens it actually needs.
+
+### Context Window Optimization
+
+OCC splits complex tasks across multiple focused prompts instead of cramming everything into one giant context window. This is architecturally superior:
+
+| Technique | How OCC does it | Why it matters |
+|-----------|----------------|----------------|
+| **Parallel decomposition** | Independent steps run simultaneously in separate prompts | 3 parallel research steps use 3 small contexts instead of 1 huge one |
+| **Context strategy per step** | `context_strategy: { research: "summarize", raw_data: "truncate:2000" }` | Control exactly how much of each dependency a step sees |
+| **Variable interpolation** | Steps receive `{variable}` — resolved to the specific output they need | No "here's everything that happened so far" dumps |
+| **Pre-tools injection** | Web search, file reads, API calls happen *before* the prompt — data is ready, not requested mid-conversation | LLM sees clean data, not tool-calling overhead |
+| **Evaluator + retry** | Score output quality, retry the specific step that failed — not the whole chain | Failed step 4 re-runs step 4, not steps 1-4 |
+| **Transform pipeline** | `json_extract` → `truncate` → `template` — shape data between steps without LLM calls | Zero-token data manipulation between LLM steps |
+| **Subchains** | Reuse a chain as a step — its internal context is fully isolated | Complex sub-workflows don't pollute the parent's context |
+| **Early exit** | `early_exit_if` — stop the chain when the answer is found | Don't run steps 5-8 if step 4 already has the answer |
+
+```yaml
+# Example: context-optimized chain
+steps:
+  - id: research
+    prompt: "Research {input.topic}"
+    output_var: raw_research        # Could be 5000 tokens
+
+  - id: extract_key_facts
+    type: transform
+    operation: json_extract          # Zero LLM tokens
+    json_path: "key_findings"
+    input_var: raw_research
+    output_var: facts                # Now only 500 tokens
+
+  - id: write_report
+    depends_on: [extract_key_facts]
+    prompt: "Write a report based on: {facts}"  # Receives 500 tokens, not 5000
+    output_var: report
+```
+
+**Bottom line:** OCC treats the context window as a scarce resource. Every token sent to the LLM earns its place.
+
 ## Requirements
 
 - **Node.js** >= 18
