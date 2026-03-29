@@ -1,0 +1,176 @@
+name: deep-researcher
+description: "Multi-perspective research engine — searches the web from multiple angles, evaluates source reliability, synthesizes a comprehensive report with citations. Demonstrates: parallel steps, pre_tools (web_search), evaluator, merge, and output validation."
+version: "1.0"
+
+inputs:
+  - name: topic
+    description: "Research topic or question"
+  - name: depth
+    description: "Research depth: quick, standard, deep (default: standard)"
+    optional: true
+
+steps:
+  # ── PHASE 1: Parallel web research from 3 angles ──────────────
+
+  - id: search_mainstream
+    type: agent
+    label: "Mainstream perspective"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.topic} comprehensive overview"
+        inject_as: search_results
+      - type: current_datetime
+        inject_as: today
+    prompt: |
+      Date: {today}
+      Research topic: {input.topic}
+
+      Web results:
+      {search_results}
+
+      Analyze these mainstream sources. Extract:
+      1. Key facts and consensus positions
+      2. Statistics and data points (with source attribution)
+      3. Timeline of relevant events
+      4. Expert quotes and opinions
+
+      Cite every claim. Format: [Source Name](URL)
+    output_var: mainstream
+    timeout_ms: 120000
+
+  - id: search_contrarian
+    type: agent
+    label: "Contrarian & critical perspective"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.topic} criticism controversy debate problems"
+        inject_as: search_results
+    prompt: |
+      Research topic: {input.topic}
+
+      Web results (critical/contrarian sources):
+      {search_results}
+
+      Find the OTHER side of the story:
+      1. Criticisms and counterarguments
+      2. Risks, downsides, failures
+      3. Minority expert opinions that challenge the mainstream
+      4. Historical precedents that suggest caution
+
+      Be intellectually honest — don't force contrarianism, but surface legitimate dissent.
+      Cite every claim.
+    output_var: contrarian
+    timeout_ms: 120000
+
+  - id: search_academic
+    type: agent
+    label: "Academic & technical perspective"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.topic} research paper study analysis site:arxiv.org OR site:scholar.google.com OR site:nature.com"
+        inject_as: search_results
+    prompt: |
+      Research topic: {input.topic}
+
+      Academic/technical results:
+      {search_results}
+
+      Extract the academic perspective:
+      1. Key research findings and papers
+      2. Methodologies used
+      3. Areas of scientific consensus vs. active debate
+      4. Technical details that popular sources oversimplify
+
+      Prioritize peer-reviewed sources. Cite everything.
+    output_var: academic
+    timeout_ms: 120000
+
+  # ── PHASE 2: Evaluate source reliability ───────────────────────
+
+  - id: evaluate_sources
+    type: evaluator
+    label: "Source reliability check"
+    depends_on: [search_mainstream, search_contrarian, search_academic]
+    model: claude-sonnet-4-6
+    input_var: mainstream
+    criteria: |
+      Evaluate the research quality on these criteria (score 1-10):
+      - Source diversity: Are multiple independent sources cited?
+      - Recency: Are sources from the last 2 years?
+      - Specificity: Are concrete data points provided (not just vague claims)?
+      - Attribution: Is every claim properly cited?
+
+      PASS if average score >= 6. FAIL if sources are thin or poorly cited.
+    on_fail: retry
+    max_retries: 1
+    retry_target: search_mainstream
+    prompt: "Evaluate research quality"
+    output_var: eval_result
+    timeout_ms: 60000
+
+  # ── PHASE 3: Merge all perspectives ────────────────────────────
+
+  - id: merge_perspectives
+    type: merge
+    label: "Merge all research"
+    depends_on: [evaluate_sources, search_contrarian, search_academic]
+    inputs: [mainstream, contrarian, academic]
+    strategy: llm_summarize
+    prompt: |
+      Combine these three research perspectives into a single structured document:
+
+      ## Mainstream View
+      {mainstream}
+
+      ## Critical View
+      {contrarian}
+
+      ## Academic View
+      {academic}
+
+      Create a unified research brief that:
+      1. Identifies where all three perspectives AGREE (high confidence facts)
+      2. Highlights where they DISAGREE (open questions)
+      3. Notes what's missing (gaps in the research)
+      4. Ranks claims by confidence level (high/medium/low)
+    output_var: merged_research
+    timeout_ms: 120000
+
+  # ── PHASE 4: Final synthesis ───────────────────────────────────
+
+  - id: synthesize
+    type: agent
+    label: "Final report"
+    depends_on: [merge_perspectives]
+    model: claude-sonnet-4-6
+    prompt: |
+      You are a senior research analyst. Write the final research report.
+
+      Merged research:
+      {merged_research}
+
+      ## Report Structure
+
+      ### Executive Summary (3-5 sentences)
+
+      ### Key Findings
+      - Bullet points, each with confidence level [HIGH/MEDIUM/LOW]
+
+      ### Analysis
+      Deep analysis with nuance. Address contradictions between sources.
+
+      ### Open Questions
+      What remains unknown or debated?
+
+      ### Sources
+      Consolidated list of all cited sources.
+
+      Write clearly and concisely. No filler. Every sentence should add information.
+    output_var: final_report
+    output_must_not_contain: ["I don't know", "I cannot"]
+    timeout_ms: 180000
+
+output: final_report

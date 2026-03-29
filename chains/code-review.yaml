@@ -1,0 +1,223 @@
+name: code-review
+description: "Intelligent code review pipeline — classifies the codebase type, runs specialized parallel reviews (security, performance, architecture, testing), then synthesizes a prioritized action plan. Demonstrates: router, parallel agents, tools (Bash/Read/Glob/Grep), evaluator with scoring, gate for human approval."
+version: "1.0"
+
+inputs:
+  - name: path
+    description: "Path to the file or directory to review"
+  - name: focus
+    description: "Review focus: security, performance, architecture, all (default: all)"
+    optional: true
+
+steps:
+  # ── PHASE 1: Classify the codebase ─────────────────────────────
+
+  - id: classify
+    type: router
+    label: "Classify codebase"
+    model: claude-sonnet-4-6
+    tools: [Bash, Read, Glob]
+    prompt: |
+      Examine the code at: {input.path}
+
+      Determine the PRIMARY type:
+      - "frontend" — React, Vue, Angular, HTML/CSS, browser code
+      - "backend" — API servers, databases, server-side logic
+      - "fullstack" — both frontend and backend
+      - "library" — reusable package/module
+      - "script" — standalone scripts, CLI tools, automation
+
+      Also note: language(s), framework(s), size (small/medium/large).
+
+      Return ONLY one of: frontend, backend, fullstack, library, script
+    routes:
+      frontend: [review_security, review_performance, review_frontend]
+      backend: [review_security, review_performance, review_architecture]
+      fullstack: [review_security, review_performance, review_architecture, review_frontend]
+      library: [review_security, review_architecture, review_testing]
+      script: [review_security, review_performance]
+    default_route: fullstack
+    output_var: codebase_type
+    timeout_ms: 60000
+
+  # ── PHASE 2: Specialized parallel reviews ──────────────────────
+
+  - id: review_security
+    type: agent
+    label: "Security review"
+    depends_on: [classify]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob]
+    prompt: |
+      You are a security auditor. Review the code at: {input.path}
+      Codebase type: {codebase_type}
+
+      Check for:
+      1. Injection vulnerabilities (SQL, command, XSS, template)
+      2. Authentication/authorization flaws
+      3. Secrets or credentials in code
+      4. Insecure dependencies or configurations
+      5. Input validation gaps
+      6. OWASP Top 10 issues
+
+      For each finding:
+      - File and line number
+      - Severity: CRITICAL / HIGH / MEDIUM / LOW
+      - Description of the vulnerability
+      - Suggested fix (code snippet)
+
+      If no issues found, say "No security issues detected" with what you checked.
+    output_var: security_review
+    timeout_ms: 180000
+
+  - id: review_performance
+    type: agent
+    label: "Performance review"
+    depends_on: [classify]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob]
+    prompt: |
+      You are a performance engineer. Review the code at: {input.path}
+      Codebase type: {codebase_type}
+
+      Check for:
+      1. N+1 queries or inefficient database access
+      2. Missing caching opportunities
+      3. Memory leaks or excessive allocations
+      4. Blocking operations in async contexts
+      5. Unnecessary re-renders (if frontend)
+      6. Bundle size issues (large imports, tree-shaking failures)
+
+      For each finding:
+      - File and line number
+      - Impact: HIGH / MEDIUM / LOW
+      - Current behavior vs. recommended fix
+    output_var: performance_review
+    timeout_ms: 180000
+
+  - id: review_architecture
+    type: agent
+    label: "Architecture review"
+    depends_on: [classify]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob, Bash]
+    prompt: |
+      You are a software architect. Review the code at: {input.path}
+      Codebase type: {codebase_type}
+
+      Evaluate:
+      1. Separation of concerns — are responsibilities well-divided?
+      2. Dependency management — coupling between modules?
+      3. Error handling patterns — consistent and complete?
+      4. Code duplication — DRY violations?
+      5. Naming conventions — consistent and descriptive?
+      6. Scalability — will this design scale with growth?
+
+      Produce a brief architecture assessment with specific recommendations.
+    output_var: architecture_review
+    timeout_ms: 180000
+    condition: '{codebase_type} != "script"'
+
+  - id: review_frontend
+    type: agent
+    label: "Frontend review"
+    depends_on: [classify]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob]
+    prompt: |
+      You are a frontend specialist. Review the code at: {input.path}
+
+      Check for:
+      1. Accessibility (a11y) issues — missing ARIA, keyboard nav, contrast
+      2. Component design — prop drilling, state management
+      3. Responsive design issues
+      4. SEO basics (if applicable)
+      5. Client-side data handling (forms, validation)
+
+      For each finding, provide file, line, and fix.
+    output_var: frontend_review
+    timeout_ms: 180000
+    condition: '{codebase_type} == "frontend" || {codebase_type} == "fullstack"'
+
+  - id: review_testing
+    type: agent
+    label: "Test coverage review"
+    depends_on: [classify]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob, Bash]
+    prompt: |
+      You are a QA engineer. Review test coverage at: {input.path}
+
+      Analyze:
+      1. Test file existence and organization
+      2. Coverage of critical paths (happy path + error cases)
+      3. Test quality (meaningful assertions, not just "doesn't throw")
+      4. Missing tests for edge cases
+      5. Integration vs unit test balance
+
+      List the top 5 most important missing tests with skeleton code.
+    output_var: testing_review
+    timeout_ms: 180000
+    condition: '{codebase_type} == "library"'
+
+  # ── PHASE 3: Quality gate ──────────────────────────────────────
+
+  - id: evaluate_quality
+    type: evaluator
+    label: "Overall quality score"
+    depends_on: [review_security, review_performance]
+    model: claude-sonnet-4-6
+    eval_scoring: true
+    eval_threshold: 4
+    input_var: security_review
+    criteria: |
+      Score the overall code quality from 1-10 based on the security review.
+      - 9-10: Production-ready, no significant issues
+      - 7-8: Good, minor issues only
+      - 5-6: Acceptable, some issues to address
+      - 3-4: Concerning, significant issues found
+      - 1-2: Critical issues, do not deploy
+    on_fail: skip
+    prompt: "Score the code quality"
+    output_var: quality_score
+    timeout_ms: 60000
+
+  # ── PHASE 4: Synthesis ─────────────────────────────────────────
+
+  - id: synthesize
+    type: agent
+    label: "Final review report"
+    depends_on: [evaluate_quality, review_performance, review_architecture, review_frontend, review_testing]
+    model: claude-sonnet-4-6
+    prompt: |
+      Compile the final code review report.
+
+      Quality Score: {quality_score}
+      Security: {security_review}
+      Performance: {performance_review}
+      Architecture: {architecture_review}
+      Frontend: {frontend_review}
+      Testing: {testing_review}
+
+      ## Code Review Report
+
+      ### Summary
+      One paragraph: overall assessment + quality score.
+
+      ### Critical Issues (fix immediately)
+      Prioritized list of blockers.
+
+      ### Recommendations (fix soon)
+      Important but non-blocking improvements.
+
+      ### Nice-to-Have
+      Low priority improvements.
+
+      ### What's Good
+      Highlight what the code does well (devs need positive feedback too).
+
+      Keep it actionable. No vague advice — every recommendation must have a specific file and fix.
+    output_var: review_report
+    timeout_ms: 180000
+
+output: review_report

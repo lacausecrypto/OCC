@@ -1,0 +1,30 @@
+name: research-to-content
+description: "Full pipeline: researches a topic in depth, then produces a polished article + social media kit. Chains the deep-researcher into the content-engine, passing research output as context."
+version: "1.0"
+
+inputs:
+  - name: topic
+    description: "Topic to research and write about"
+  - name: audience
+    description: "Target audience for the content"
+    optional: true
+
+chains:
+  - id: research
+    chain: deep-researcher
+    label: "Deep research phase"
+    inputs:
+      topic: "{input.topic}"
+      depth: "deep"
+
+  - id: content
+    chain: content-engine
+    label: "Content creation phase"
+    depends_on: [research]
+    inputs:
+      topic: "{input.topic}"
+      audience: "{input.audience}"
+      tone: "professional"
+      word_count: "2000"
+
+output: content

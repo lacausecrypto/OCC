@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Runtime data
+executions.json
+schedules.json
+output/
+
+# Local config (contains absolute paths)
+.mcp.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Temp
+/tmp/
+*.tmp

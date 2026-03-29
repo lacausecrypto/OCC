@@ -1,0 +1,197 @@
+name: content-engine
+description: "End-to-end content creation — researches a topic, generates an outline, writes a full article, optimizes for SEO, and produces social media posts. Demonstrates: sequential dependencies, pre_tools (web_search, current_datetime), transform (json_extract), and guardrails."
+version: "1.0"
+
+inputs:
+  - name: topic
+    description: "Article topic or title"
+  - name: audience
+    description: "Target audience (e.g., developers, marketers, executives)"
+    optional: true
+  - name: tone
+    description: "Writing tone: professional, casual, technical, storytelling (default: professional)"
+    optional: true
+  - name: word_count
+    description: "Target word count (default: 1500)"
+    optional: true
+
+steps:
+  # ── STEP 1: Research ───────────────────────────────────────────
+
+  - id: research
+    type: agent
+    label: "Topic research"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.topic} latest trends insights 2026"
+        inject_as: web_data
+      - type: web_search
+        query: "{input.topic} statistics data points research"
+        inject_as: stats_data
+      - type: current_datetime
+        inject_as: today
+    prompt: |
+      Date: {today}
+      Topic: {input.topic}
+      Audience: {input.audience}
+
+      Research data:
+      {web_data}
+
+      Statistics:
+      {stats_data}
+
+      Create a research brief:
+      1. Key angles to cover (3-5)
+      2. Relevant statistics with sources
+      3. Expert opinions or quotes
+      4. Trending subtopics
+      5. What competitors are writing about this topic
+
+      Output as structured JSON:
+      {
+        "angles": ["..."],
+        "stats": [{"fact": "...", "source": "..."}],
+        "quotes": ["..."],
+        "trending": ["..."],
+        "competitor_gaps": ["..."]
+      }
+    output_var: research_brief
+    output_schema: json
+    timeout_ms: 120000
+
+  # ── STEP 2: Extract angles from research ───────────────────────
+
+  - id: extract_angles
+    type: transform
+    label: "Extract key angles"
+    depends_on: [research]
+    operation: json_extract
+    json_path: "angles"
+    input_var: research_brief
+    prompt: "extract angles"
+    output_var: angles
+    timeout_ms: 10000
+
+  # ── STEP 3: Outline ───────────────────────────────────────────
+
+  - id: outline
+    type: agent
+    label: "Article outline"
+    depends_on: [extract_angles]
+    model: claude-sonnet-4-6
+    prompt: |
+      Topic: {input.topic}
+      Audience: {input.audience}
+      Tone: {input.tone}
+      Target length: {input.word_count} words
+      Key angles: {angles}
+      Full research: {research_brief}
+
+      Create a detailed article outline:
+
+      ## Title Options (3 options, SEO-optimized)
+
+      ## Outline
+      For each section:
+      - H2 heading
+      - 2-3 bullet points of what to cover
+      - Which stats/quotes to include
+      - Estimated word count
+
+      ## SEO Keywords
+      - Primary keyword
+      - 5-8 secondary keywords
+      - 3 long-tail keywords
+
+      ## Hook
+      Write the opening paragraph (compelling hook that draws readers in).
+    output_var: article_outline
+    timeout_ms: 120000
+
+  # ── STEP 4: Write the article ──────────────────────────────────
+
+  - id: write_article
+    type: agent
+    label: "Write full article"
+    depends_on: [outline]
+    model: claude-sonnet-4-6
+    prompt: |
+      Write the full article based on this outline.
+
+      Outline: {article_outline}
+      Research: {research_brief}
+      Tone: {input.tone}
+      Target: {input.word_count} words
+
+      RULES:
+      - Follow the outline structure exactly
+      - Include all planned statistics with source attribution
+      - Use the hook from the outline as the opening
+      - Write for the web: short paragraphs, subheadings every 200-300 words
+      - Include a compelling conclusion with a call-to-action
+      - NO filler phrases ("In today's world...", "It's important to note...")
+      - Every sentence must add value
+
+      Output the article in clean Markdown.
+    output_var: article_draft
+    guardrails:
+      - type: min_length
+        value: 800
+      - type: must_not_contain
+        value: "In today's world"
+    timeout_ms: 300000
+
+  # ── STEP 5: SEO optimization ───────────────────────────────────
+
+  - id: seo_optimize
+    type: agent
+    label: "SEO optimization"
+    depends_on: [write_article]
+    model: claude-sonnet-4-6
+    prompt: |
+      Optimize this article for SEO.
+
+      Article:
+      {article_draft}
+
+      Outline (with keywords):
+      {article_outline}
+
+      Produce:
+      1. **Meta title** (50-60 chars)
+      2. **Meta description** (150-160 chars)
+      3. **URL slug**
+      4. **Keyword density check** — are primary keywords used 3-5 times?
+      5. **Heading optimization** — do H2s contain keywords?
+      6. **Internal linking suggestions** — where to add links
+      7. **Image alt-text suggestions** — for 3-4 images
+      8. **Revised article** with SEO improvements applied (subtle, not keyword-stuffed)
+    output_var: seo_article
+    timeout_ms: 180000
+
+  # ── STEP 6: Social media kit ───────────────────────────────────
+
+  - id: social_media
+    type: agent
+    label: "Social media posts"
+    depends_on: [seo_optimize]
+    model: claude-sonnet-4-6
+    prompt: |
+      Create social media posts to promote this article.
+
+      Article:
+      {seo_article}
+
+      Generate:
+      1. **Twitter/X thread** (5 tweets, each ≤280 chars, first one is the hook)
+      2. **LinkedIn post** (professional tone, 1200-1500 chars)
+      3. **Reddit title + comment** (authentic, not promotional)
+      4. **Hacker News title** (factual, no clickbait)
+
+      Each post should drive curiosity and clicks without being spammy.
+    output_var: social_posts
+    timeout_ms: 120000
+
+output: seo_article

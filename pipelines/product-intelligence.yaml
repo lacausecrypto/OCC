@@ -1,0 +1,31 @@
+name: product-intelligence
+description: "Market intelligence pipeline: performs competitive analysis, then monitors the market for real-time signals, combining strategic insight with tactical alerts."
+version: "1.0"
+
+inputs:
+  - name: company
+    description: "Your company or product name"
+  - name: competitors
+    description: "Comma-separated list of competitors"
+  - name: industry
+    description: "Industry or market segment"
+    optional: true
+
+chains:
+  - id: intel
+    chain: competitive-intel
+    label: "Competitive intelligence"
+    inputs:
+      company: "{input.company}"
+      competitors: "{input.competitors}"
+      industry: "{input.industry}"
+
+  - id: monitor
+    chain: market-monitor
+    label: "Market monitoring"
+    depends_on: [intel]
+    inputs:
+      market: "{input.industry}"
+      alert_threshold: "6"
+
+output: intel

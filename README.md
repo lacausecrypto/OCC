@@ -1,0 +1,368 @@
+# OCC — Claude Chain Orchestrator
+
+A powerful workflow orchestration engine for Claude AI agents. Define multi-step AI chains in YAML, execute them with parallel processing, dependency resolution, and real-time streaming — all accessible via MCP (Model Context Protocol) or REST API.
+
+```
+You:  "Run deep-researcher on quantum computing"
+OCC:  ✓ Step 1/6 — Mainstream research      (parallel)
+      ✓ Step 2/6 — Contrarian research       (parallel)
+      ✓ Step 3/6 — Academic research          (parallel)
+      ✓ Step 4/6 — Source evaluation
+      ✓ Step 5/6 — Merge perspectives
+      ✓ Step 6/6 — Final synthesis
+      Done in 47s — 6 steps, 3 parallel
+```
+
+## Why OCC?
+
+Claude is great at single-turn tasks. But real work requires **multi-step workflows**: research → analyze → decide → create → validate. OCC orchestrates these pipelines so Claude agents can tackle complex tasks autonomously.
+
+- **YAML-defined chains** — version-controlled, human-readable, git-friendly
+- **Dependency-aware execution** — steps run in parallel when possible, sequentially when needed
+- **11 step types** — agent, router, evaluator, gate, transform, loop, merge, browser, subchain, debate, webhook
+- **Pre-tools** — inject web search results, API data, files, or env vars before each step
+- **Retry & fallback** — automatic retries with exponential backoff, fallback to different models
+- **Real-time streaming** — SSE events for every step start, output chunk, and completion
+- **Scheduling** — cron-based chain execution with toggle on/off
+- **Pipelines** — chain multiple chains together with output passing
+
+## Quick Start
+
+### 1. Install
+
+```bash
+cd mcp-server
+npm install
+npm run build
+```
+
+### 2. Configure for Claude Code
+
+Copy the example config and adjust paths:
+
+```bash
+cp .mcp.json.example .mcp.json
+# Edit .mcp.json with your absolute paths
+```
+
+### 3. Run
+
+**MCP mode** (for Claude Code / Claude Desktop):
+```bash
+npm start
+```
+
+**REST API mode** (standalone HTTP server):
+```bash
+npm run rest
+# Server running on http://localhost:4242
+```
+
+### 4. Execute your first chain
+
+Via REST:
+```bash
+curl -X POST http://localhost:4242/execute/deep-researcher \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"topic": "quantum computing breakthroughs 2026"}}'
+```
+
+Via MCP (in Claude Code):
+```
+Use the run_chain tool: chain name "deep-researcher", inputs: topic = "quantum computing"
+```
+
+## Chain Format
+
+Chains are YAML files in the `chains/` directory:
+
+```yaml
+name: my-chain
+description: "What this chain does"
+version: "1.0"
+
+inputs:
+  - name: topic
+    description: "The topic to research"
+  - name: depth
+    description: "How deep to go"
+    optional: true
+
+steps:
+  - id: step_one
+    type: agent
+    label: "First step"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.topic} latest news"
+        inject_as: search_results
+    prompt: |
+      Research this topic: {input.topic}
+      Web results: {search_results}
+    output_var: research
+
+  - id: step_two
+    type: agent
+    label: "Second step"
+    depends_on: [step_one]
+    prompt: |
+      Summarize: {research}
+    output_var: summary
+
+output: summary
+```
+
+### Variable Interpolation
+
+- `{input.topic}` — chain input variables
+- `{research}` — output from a previous step (by `output_var`)
+- `{search_results}` — data injected by pre_tools
+
+### Step Types
+
+| Type | Description |
+|------|-------------|
+| **agent** | LLM execution — the workhorse. Sends prompt to Claude, returns response |
+| **router** | Conditional branching — routes to different steps based on LLM classification |
+| **evaluator** | Quality gate — scores output (1-10) or PASS/FAIL, can trigger retries |
+| **gate** | Human approval checkpoint — pauses execution until approved via API |
+| **transform** | Data manipulation — json_extract, regex, template, split, merge, truncate |
+| **loop** | Iteration — runs a step template for each item, with parallel execution |
+| **merge** | Combine outputs — concatenate, json_array, llm_summarize, or pick_best |
+| **browser** | Web automation — navigate, click, extract, screenshot via Playwright |
+| **subchain** | Reuse — execute another chain as a step, mapping inputs/outputs |
+| **debate** | Multi-agent — multiple agents debate, then vote or reach consensus |
+| **webhook** | HTTP callback — notify external systems on step completion |
+
+### Pre-Tools
+
+Inject data before a step executes:
+
+```yaml
+pre_tools:
+  - type: web_search
+    query: "AI trends 2026"
+    inject_as: trends
+
+  - type: http_fetch
+    url: "https://api.example.com/data"
+    inject_as: api_data
+
+  - type: read_file
+    path: "/path/to/context.md"
+    inject_as: context
+
+  - type: bash
+    command: "git log --oneline -5"
+    inject_as: recent_commits
+
+  - type: env_var
+    var_name: "API_KEY"
+    inject_as: key
+
+  - type: current_datetime
+    inject_as: now
+```
+
+### Advanced Features
+
+**Retry with fallback models:**
+```yaml
+retry:
+  max: 3
+  delay_ms: 2000
+  backoff: 2
+fallback_models: ["claude-opus-4-6", "claude-sonnet-4-6"]
+```
+
+**Output validation (guardrails):**
+```yaml
+guardrails:
+  - type: min_length
+    value: 500
+  - type: must_not_contain
+    value: "I don't know"
+  - type: json_valid
+output_must_contain: ["## Summary"]
+output_max_length: 5000
+```
+
+**Conditional execution:**
+```yaml
+condition: '{codebase_type} == "frontend"'
+```
+
+**Caching:**
+```yaml
+cache:
+  enabled: true
+  ttl_minutes: 60
+```
+
+**Early exit:**
+```yaml
+early_exit_if: '{alert_score} == "no_signal"'
+```
+
+## Pipelines
+
+Pipelines chain multiple chains together:
+
+```yaml
+name: research-to-content
+description: "Research a topic, then write an article about it"
+
+inputs:
+  - name: topic
+
+chains:
+  - id: research
+    chain: deep-researcher
+    inputs:
+      topic: "{input.topic}"
+      depth: "deep"
+
+  - id: content
+    chain: content-engine
+    depends_on: [research]
+    inputs:
+      topic: "{input.topic}"
+      tone: "professional"
+
+output: content
+```
+
+## Included Demo Chains
+
+| Chain | What it demonstrates |
+|-------|---------------------|
+| **deep-researcher** | Parallel web research from 3 angles, source evaluation, merge, synthesis |
+| **code-review** | Router-based classification, parallel specialized reviews, evaluator scoring, conditional steps |
+| **content-engine** | Sequential pipeline, transform (json_extract), guardrails, SEO optimization |
+| **competitive-intel** | Loop over competitors, parallel analysis, merge strategies, SWOT |
+| **full-stack-scaffold** | Tool use (Bash/Write/Read), retry with fallback models, caching, code generation |
+| **market-monitor** | Pre-tools (http_fetch), evaluator with threshold, conditional alerts, scheduling-ready |
+
+## REST API
+
+### Chains
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/chains` | List all chains |
+| GET | `/chains/:name` | Get chain YAML |
+| POST | `/chains/:name` | Create/update chain |
+| DELETE | `/chains/:name` | Delete chain |
+
+### Execution
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/execute/:name` | Execute a chain (async, returns executionId) |
+| GET | `/executions/:id` | Get execution status and results |
+| GET | `/executions/:id/stream` | SSE stream of real-time execution events |
+| GET | `/executions` | List all executions (paginated) |
+| DELETE | `/executions/:id` | Cancel a running execution |
+| POST | `/executions/:id/resume` | Resume from last checkpoint |
+
+### Gates (Human-in-the-loop)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/approvals` | List pending gate approvals |
+| POST | `/executions/:id/approve/:stepId` | Approve or reject a gate |
+
+### Scheduling
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/schedules` | List all schedules |
+| POST | `/schedules` | Create a cron schedule |
+| PUT | `/schedules/:id` | Update a schedule |
+| PATCH | `/schedules/:id/toggle` | Enable/disable a schedule |
+| DELETE | `/schedules/:id` | Delete a schedule |
+
+### Pipelines
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/pipelines` | List all pipelines |
+| GET | `/pipelines/:name` | Get pipeline YAML |
+| POST | `/pipelines/:name/execute` | Execute a pipeline |
+| GET | `/pipeline-executions` | List pipeline executions |
+
+### AI Chain Generation
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/generate-chain` | Generate a chain from natural language description |
+| POST | `/generate-chain/stream` | Generate with SSE streaming |
+
+### Utilities
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/download?path=...` | Download a file from /tmp |
+
+## MCP Tools
+
+When used via Claude Code or Claude Desktop, OCC exposes 25 MCP tools:
+
+**Chain Management:** `list_chains`, `get_chain`, `create_chain`, `update_chain`, `delete_chain`
+
+**Step Editing:** `add_step`, `update_step`, `remove_step`, `add_pre_tool`, `remove_pre_tool`
+
+**Execution:** `run_chain`, `chain_status`, `chain_result`, `list_executions`, `cancel_execution`
+
+**Scheduling:** `list_schedules`, `create_schedule`, `delete_schedule`, `toggle_schedule`
+
+**Gates:** `list_pending_approvals`, `approve_gate`
+
+**Pipelines:** `list_pipelines`, `get_pipeline`, `run_pipeline`, `pipeline_status`
+
+## Architecture
+
+```
+┌──────────────┐     ┌───────────────┐     ┌──────────┐
+│  Claude Code  │────▶│   MCP Server   │────▶│          │
+│  / Desktop   │ MCP │   (stdio)      │     │ Executor │──▶ Claude CLI
+└──────────────┘     └───────────────┘     │          │
+                                            │  ┌──────┐│
+┌──────────────┐     ┌───────────────┐     │  │Cache ││
+│  REST Client  │────▶│  REST + SSE    │────▶│  └──────┘│
+│  / curl      │HTTP │  (:4242)       │     │          │
+└──────────────┘     └───────────────┘     └──────────┘
+                                                  │
+                          ┌───────────────────────┤
+                          ▼                       ▼
+                    ┌──────────┐          ┌────────────┐
+                    │  chains/  │          │ executions  │
+                    │  (YAML)   │          │   (.json)   │
+                    └──────────┘          └────────────┘
+```
+
+- **MCP Server** — stdio transport, exposes tools for Claude Code
+- **REST Server** — Express on port 4242, CORS-enabled, SSE streaming
+- **Executor** — topological sort, parallel execution, process management, timeout handling
+- **Loader** — YAML parsing with Zod validation, dependency graph construction
+- **Scheduler** — cron-based execution with node-cron
+- **Pipeline Executor** — multi-chain orchestration with output passing
+
+## Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `CHAINS_DIR` | `../chains` | Directory containing chain YAML files |
+| `PIPELINES_DIR` | `../pipelines` | Directory containing pipeline YAML files |
+| `REST_PORT` | `4242` | HTTP server port |
+| `REST_HOST` | `0.0.0.0` | HTTP server bind address |
+| `EXECUTIONS_FILE` | `./executions.json` | Execution history persistence |
+| `EXECUTION_MAX_AGE_DAYS` | `7` | Auto-purge executions older than N days |
+| `CLAUDE_TIMEOUT_MS` | `300000` | Default per-step timeout (5 min) |
+| `CLAUDE_CLI` | `claude` | Path to Claude CLI binary |
+| `NO_COLOR` | — | Disable ANSI colors in Claude output |
+
+## Requirements
+
+- **Node.js** >= 18
+- **Claude CLI** installed and authenticated (`npm install -g @anthropic-ai/claude-code`)
+- **npm** >= 9
+
+## License
+
+MIT — see [LICENSE](LICENSE)

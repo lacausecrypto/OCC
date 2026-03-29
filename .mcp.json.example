@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "chain-orchestrator": {
+      "command": "node",
+      "args": ["./mcp-server/dist/index.js"],
+      "env": {
+        "CHAINS_DIR": "./chains",
+        "PIPELINES_DIR": "./pipelines",
+        "REST_PORT": "4242"
+      }
+    }
+  }
+}

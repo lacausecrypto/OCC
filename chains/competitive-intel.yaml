@@ -1,0 +1,142 @@
+name: competitive-intel
+description: "Competitive intelligence analysis — profiles competitors, analyzes their strengths/weaknesses, maps market positioning, and produces a strategic SWOT. Demonstrates: loop (iterate over competitors), parallel agents, pre_tools (web_search, http_fetch), merge with llm_summarize, and subchain-ready outputs."
+version: "1.0"
+
+inputs:
+  - name: company
+    description: "Your company or product name"
+  - name: competitors
+    description: "Comma-separated list of competitors to analyze"
+  - name: industry
+    description: "Industry or market segment"
+    optional: true
+
+steps:
+  # ── STEP 1: Market context ────────────────────────────────────
+
+  - id: market_scan
+    type: agent
+    label: "Market landscape scan"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.industry} market size trends forecast 2026"
+        inject_as: market_data
+      - type: web_search
+        query: "{input.company} vs {input.competitors} comparison"
+        inject_as: comparison
+      - type: current_datetime
+        inject_as: today
+    prompt: |
+      Date: {today}
+      Company: {input.company}
+      Industry: {input.industry}
+      Competitors: {input.competitors}
+
+      Market data: {market_data}
+      Comparisons: {comparison}
+
+      Produce a market landscape overview:
+      1. Market size and growth rate
+      2. Key trends shaping the industry
+      3. Regulatory or macro factors
+      4. Where {input.company} sits in the market
+    output_var: market_context
+    timeout_ms: 120000
+
+  # ── STEP 2: Loop over each competitor ─────────────────────────
+
+  - id: analyze_competitors
+    type: loop
+    label: "Analyze each competitor"
+    depends_on: [market_scan]
+    items_var: input.competitors
+    max_parallel: 3
+    step_template:
+      type: agent
+      label: "Profile: {item}"
+      model: claude-sonnet-4-6
+      pre_tools:
+        - type: web_search
+          query: "{item} product features pricing review 2026"
+          inject_as: competitor_info
+        - type: web_search
+          query: "{item} funding revenue employees glassdoor"
+          inject_as: competitor_biz
+      prompt: |
+        Deep-dive analysis of competitor: {item}
+        Industry: {input.industry}
+        Our company: {input.company}
+
+        Product info: {competitor_info}
+        Business info: {competitor_biz}
+
+        Produce a competitor profile:
+        ## {item}
+        - **What they do**: 2-3 sentences
+        - **Key products/features**: bullet list
+        - **Pricing model**: free/freemium/paid, price points
+        - **Strengths**: what they do better than us
+        - **Weaknesses**: where they fall short
+        - **Recent moves**: launches, pivots, funding rounds
+        - **Threat level**: LOW / MEDIUM / HIGH with explanation
+      tools: []
+    prompt: "Analyze each competitor"
+    output_var: competitor_profiles
+    timeout_ms: 300000
+
+  # ── STEP 3: Merge competitor profiles ─────────────────────────
+
+  - id: merge_profiles
+    type: merge
+    label: "Consolidate competitor intel"
+    depends_on: [analyze_competitors]
+    inputs: [competitor_profiles, market_context]
+    strategy: concatenate
+    prompt: "Merge all competitor profiles with market context"
+    output_var: all_intel
+    timeout_ms: 10000
+
+  # ── STEP 4: Strategic SWOT ────────────────────────────────────
+
+  - id: swot_analysis
+    type: agent
+    label: "SWOT analysis"
+    depends_on: [merge_profiles]
+    model: claude-sonnet-4-6
+    prompt: |
+      Based on the competitive intelligence gathered:
+
+      {all_intel}
+
+      Produce a strategic SWOT analysis for {input.company}:
+
+      ## SWOT Analysis — {input.company}
+
+      ### Strengths (internal advantages)
+      - What does {input.company} do better than every competitor?
+
+      ### Weaknesses (internal gaps)
+      - Where are competitors ahead?
+
+      ### Opportunities (external, actionable)
+      - Underserved market segments
+      - Competitor weaknesses to exploit
+      - Emerging trends to ride
+
+      ### Threats (external risks)
+      - Competitive moves that could hurt us
+      - Market shifts to watch
+
+      ## Competitive Positioning Map
+      Place each competitor on two axes:
+      - X: Price (low → high)
+      - Y: Feature breadth (narrow → broad)
+      Describe positioning in text.
+
+      ## Strategic Recommendations
+      Top 5 actions {input.company} should take, prioritized by impact and urgency.
+    output_var: swot_report
+    timeout_ms: 180000
+
+output: swot_report

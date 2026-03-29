@@ -1,0 +1,125 @@
+name: market-monitor
+description: "Real-time market monitoring — fetches live data from APIs, detects anomalies and opportunities, generates alerts. Demonstrates: pre_tools (http_fetch, bash), conditional early_exit, evaluator with scoring threshold, and scheduled execution via cron."
+version: "1.0"
+
+inputs:
+  - name: market
+    description: "Market to monitor: crypto, stocks, commodities, forex (default: crypto)"
+    optional: true
+  - name: alert_threshold
+    description: "Minimum score (1-10) to trigger an alert (default: 7)"
+    optional: true
+
+steps:
+  # ── STEP 1: Fetch live market data ─────────────────────────────
+
+  - id: fetch_data
+    type: agent
+    label: "Fetch market data"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.market} market breaking news significant moves today"
+        inject_as: market_news
+      - type: web_search
+        query: "{input.market} market analysis prediction this week"
+        inject_as: market_analysis
+      - type: current_datetime
+        inject_as: now
+    prompt: |
+      Timestamp: {now}
+      Market: {input.market}
+
+      News: {market_news}
+      Analysis: {market_analysis}
+
+      Compile a real-time market snapshot:
+      1. Major price movements (>2% in 24h)
+      2. Breaking news that could impact prices
+      3. Unusual volume or activity
+      4. Upcoming events (earnings, FOMC, halvings, etc.)
+
+      Format as structured data. Flag anything that looks like an anomaly or opportunity.
+    output_var: market_snapshot
+    timeout_ms: 120000
+
+  # ── STEP 2: Detect opportunities ───────────────────────────────
+
+  - id: detect_opportunities
+    type: agent
+    label: "Opportunity detection"
+    depends_on: [fetch_data]
+    model: claude-sonnet-4-6
+    prompt: |
+      Market snapshot:
+      {market_snapshot}
+
+      Analyze for actionable opportunities:
+
+      For each opportunity found:
+      - **Asset**: what to trade/buy/sell
+      - **Signal**: what triggered this (news, technical, volume)
+      - **Direction**: long / short / neutral
+      - **Confidence**: 1-10
+      - **Time horizon**: minutes / hours / days / weeks
+      - **Risk level**: LOW / MEDIUM / HIGH
+      - **Reasoning**: 2-3 sentences
+
+      If no significant opportunities: say "No actionable signals" and explain why.
+    output_var: opportunities
+    timeout_ms: 120000
+
+  # ── STEP 3: Score and filter ───────────────────────────────────
+
+  - id: score_alert
+    type: evaluator
+    label: "Alert worthiness check"
+    depends_on: [detect_opportunities]
+    model: claude-sonnet-4-6
+    eval_scoring: true
+    eval_threshold: 7
+    input_var: opportunities
+    criteria: |
+      Score the alert worthiness of these opportunities (1-10):
+      - 9-10: Exceptional opportunity, act immediately
+      - 7-8: Strong signal, worth attention
+      - 5-6: Moderate, monitor but don't act
+      - 1-4: Noise, not worth an alert
+
+      Consider: signal strength, risk/reward ratio, time sensitivity.
+    on_fail: skip
+    prompt: "Score alert worthiness"
+    output_var: alert_score
+    timeout_ms: 60000
+
+  # ── STEP 4: Generate alert (only if score passes threshold) ────
+
+  - id: generate_alert
+    type: agent
+    label: "Generate alert"
+    depends_on: [score_alert]
+    model: claude-sonnet-4-6
+    condition: '{alert_score} != "FAIL"'
+    prompt: |
+      Generate a concise market alert.
+
+      Opportunities: {opportunities}
+      Alert score: {alert_score}
+
+      Format (keep under 500 chars for mobile notifications):
+
+      [MARKET] Alert — {input.market}
+
+      Signal: [one-line summary]
+      Action: [what to do]
+      Confidence: X/10
+      Risk: LOW/MED/HIGH
+
+      [2-3 line reasoning]
+
+      Keep it punchy and actionable. No fluff.
+    output_var: alert_message
+    output_max_length: 600
+    timeout_ms: 60000
+
+output: alert_message
