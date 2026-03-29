@@ -17,7 +17,8 @@ import {
 } from "./loader.js";
 import { executeChain, getExecution, getAllExecutions, cancelExecution, loadPersistedExecutions, resumeExecution, approveGate, getPendingApprovals, validateClaudeBinary, canStartExecution, getRunningExecutionCount, getExecutionTimeline } from "./executor.js";
 import { getChainStats } from "./storage.js";
-import { loadMcpServers, discoverTools, getConfiguredServers } from "./mcp-client.js";
+import { loadMcpServers, discoverTools, getConfiguredServers, closeMcpClients } from "./mcp-client.js";
+import { closeStorage } from "./storage.js";
 import {
   initScheduler, setSSEEmitter,
   getSchedules, getSchedule,
@@ -931,5 +932,17 @@ app.listen(PORT, HOST, () => {
   setSSEEmitter(emitSSE);
   initScheduler();
 });
+
+// ─── Graceful shutdown ───────────────────────────────────────────────────────
+
+async function shutdown() {
+  process.stderr.write(`[occ-rest] Shutting down...\n`);
+  try { await closeMcpClients(); } catch { /* ignore */ }
+  try { closeStorage(); } catch { /* ignore */ }
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 export { app };

@@ -86,36 +86,36 @@ export function initStorage(): void {
   process.stderr.write(`[occ-db] SQLite initialized: ${dbPath} (${count.cnt} executions${purged.changes ? `, purged ${purged.changes}` : ""})\n`);
 }
 
-// ─── Execution CRUD ─────────────────────────────────────────────────────────
+// ─── Prepared statements (cached after first use) ───────────────────────────
 
-const stmts = {
-  get insertExecution() {
-    return db.prepare(`
+let _stmts: {
+  insertExecution: Database.Statement;
+  updateExecution: Database.Statement;
+  getExecution: Database.Statement;
+  getAllExecutions: Database.Statement;
+  getExecutionsByChain: Database.Statement;
+  deleteExecution: Database.Statement;
+  upsertStep: Database.Statement;
+  getSteps: Database.Statement;
+  getStepHistory: Database.Statement;
+} | null = null;
+
+function getStmts() {
+  if (_stmts) return _stmts;
+  _stmts = {
+    insertExecution: db.prepare(`
       INSERT INTO executions (id, chain_name, status, input, started_at)
       VALUES (?, ?, ?, ?, ?)
-    `);
-  },
-  get updateExecution() {
-    return db.prepare(`
+    `),
+    updateExecution: db.prepare(`
       UPDATE executions SET status = ?, result = ?, error = ?, finished_at = ?, duration_ms = ?
       WHERE id = ?
-    `);
-  },
-  get getExecution() {
-    return db.prepare(`SELECT * FROM executions WHERE id = ?`);
-  },
-  get getAllExecutions() {
-    return db.prepare(`SELECT * FROM executions ORDER BY started_at DESC LIMIT ? OFFSET ?`);
-  },
-  get getExecutionsByChain() {
-    return db.prepare(`SELECT * FROM executions WHERE chain_name = ? ORDER BY started_at DESC LIMIT ?`);
-  },
-  get deleteExecution() {
-    return db.prepare(`DELETE FROM executions WHERE id = ?`);
-  },
-  // Step checkpoints
-  get upsertStep() {
-    return db.prepare(`
+    `),
+    getExecution: db.prepare(`SELECT * FROM executions WHERE id = ?`),
+    getAllExecutions: db.prepare(`SELECT * FROM executions ORDER BY started_at DESC LIMIT ? OFFSET ?`),
+    getExecutionsByChain: db.prepare(`SELECT * FROM executions WHERE chain_name = ? ORDER BY started_at DESC LIMIT ?`),
+    deleteExecution: db.prepare(`DELETE FROM executions WHERE id = ?`),
+    upsertStep: db.prepare(`
       INSERT INTO step_checkpoints (execution_id, step_id, status, output, error, started_at, finished_at, duration_ms, input_tokens, output_tokens, checkpoint_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(execution_id, step_id) DO UPDATE SET
@@ -128,32 +128,29 @@ const stmts = {
         input_tokens = excluded.input_tokens,
         output_tokens = excluded.output_tokens,
         checkpoint_at = datetime('now')
-    `);
-  },
-  get getSteps() {
-    return db.prepare(`SELECT * FROM step_checkpoints WHERE execution_id = ? ORDER BY started_at`);
-  },
-  get getStepHistory() {
-    return db.prepare(`
+    `),
+    getSteps: db.prepare(`SELECT * FROM step_checkpoints WHERE execution_id = ? ORDER BY started_at`),
+    getStepHistory: db.prepare(`
       SELECT sc.*, e.chain_name FROM step_checkpoints sc
       JOIN executions e ON e.id = sc.execution_id
       WHERE sc.execution_id = ? ORDER BY sc.checkpoint_at
-    `);
-  },
-};
+    `),
+  };
+  return _stmts;
+}
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export function saveExecution(exec: ChainExecution): void {
-  const existing = stmts.getExecution.get(exec.id);
+  const existing = getStmts().getExecution.get(exec.id);
   if (!existing) {
-    stmts.insertExecution.run(exec.id, exec.chainName, exec.status, JSON.stringify(exec.input), exec.startedAt);
+    getStmts().insertExecution.run(exec.id, exec.chainName, exec.status, JSON.stringify(exec.input), exec.startedAt);
   }
-  stmts.updateExecution.run(exec.status, exec.result ?? null, exec.error ?? null, exec.finishedAt ?? null, exec.durationMs ?? null, exec.id);
+  getStmts().updateExecution.run(exec.status, exec.result ?? null, exec.error ?? null, exec.finishedAt ?? null, exec.durationMs ?? null, exec.id);
 }
 
 export function checkpointStep(executionId: string, step: StepResult): void {
-  stmts.upsertStep.run(
+  getStmts().upsertStep.run(
     executionId,
     step.stepId,
     step.status,
@@ -168,11 +165,11 @@ export function checkpointStep(executionId: string, step: StepResult): void {
 }
 
 export function loadExecution(id: string): ChainExecution | null {
-  const row = stmts.getExecution.get(id) as any;
+  const row = getStmts().getExecution.get(id) as any;
   if (!row) return null;
 
   const steps: Record<string, StepResult> = {};
-  const stepRows = stmts.getSteps.all(id) as any[];
+  const stepRows = getStmts().getSteps.all(id) as any[];
   for (const s of stepRows) {
     steps[s.step_id] = {
       stepId: s.step_id,
@@ -202,10 +199,10 @@ export function loadExecution(id: string): ChainExecution | null {
 }
 
 export function listExecutions(limit = 50, offset = 0): ChainExecution[] {
-  const rows = stmts.getAllExecutions.all(limit, offset) as any[];
+  const rows = getStmts().getAllExecutions.all(limit, offset) as any[];
   return rows.map((row) => {
     const steps: Record<string, StepResult> = {};
-    const stepRows = stmts.getSteps.all(row.id) as any[];
+    const stepRows = getStmts().getSteps.all(row.id) as any[];
     for (const s of stepRows) {
       steps[s.step_id] = {
         stepId: s.step_id,
@@ -243,7 +240,7 @@ export function getExecutionTimeline(executionId: string): Array<{
   inputTokens?: number;
   outputTokens?: number;
 }> {
-  const rows = stmts.getStepHistory.all(executionId) as any[];
+  const rows = getStmts().getStepHistory.all(executionId) as any[];
   return rows.map((r) => ({
     stepId: r.step_id,
     status: r.status,
@@ -290,5 +287,6 @@ export function getChainStats(chainName: string): {
 }
 
 export function closeStorage(): void {
+  _stmts = null;
   if (db) db.close();
 }

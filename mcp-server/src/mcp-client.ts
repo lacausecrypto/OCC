@@ -61,70 +61,100 @@ export function registerMcpServer(name: string, config: McpServerConfig): void {
   serverConfigs.set(name, config);
 }
 
-/** Connect to a server and return the client (cached). */
+// In-flight connection promises to prevent race conditions
+const connectingClients = new Map<string, Promise<Client>>();
+
+/** Connect to a server and return the client (cached, race-safe). */
 async function getClient(serverName: string): Promise<Client> {
+  // Fast path: already connected
   const existing = activeClients.get(serverName);
   if (existing) return existing;
+
+  // Deduplicate: if a connection is already in-flight, reuse its promise
+  const inFlight = connectingClients.get(serverName);
+  if (inFlight) return inFlight;
 
   const config = serverConfigs.get(serverName);
   if (!config) {
     throw new Error(`MCP server "${serverName}" not configured. Add it to occ-mcp-servers.json or register it in the chain.`);
   }
 
-  const transport = new StdioClientTransport({
-    command: config.command,
-    args: config.args ?? [],
-    env: { ...process.env, ...(config.env ?? {}) } as Record<string, string>,
-  });
+  // Create connection promise and cache it to prevent duplicates
+  const connectionPromise = (async (): Promise<Client> => {
+    const transport = new StdioClientTransport({
+      command: config.command,
+      args: config.args ?? [],
+      env: { ...process.env, ...(config.env ?? {}) } as Record<string, string>,
+    });
 
-  const client = new Client(
-    { name: `occ-${serverName}`, version: "1.0.0" },
-    { capabilities: {} },
-  );
+    const client = new Client(
+      { name: `occ-${serverName}`, version: "1.0.0" },
+      { capabilities: {} },
+    );
 
-  await client.connect(transport);
-  activeClients.set(serverName, client);
+    await client.connect(transport);
+    activeClients.set(serverName, client);
+    connectingClients.delete(serverName);
 
-  // Discover tools
-  try {
-    const toolsResult = await client.listTools();
-    const toolNames = toolsResult.tools.map((t) => t.name);
-    serverTools.set(serverName, toolNames);
-    process.stderr.write(`[occ-mcp] Connected to "${serverName}" — ${toolNames.length} tools available\n`);
-  } catch {
-    process.stderr.write(`[occ-mcp] Connected to "${serverName}" — tool discovery failed\n`);
-  }
+    // Discover tools
+    try {
+      const toolsResult = await client.listTools();
+      const toolNames = toolsResult.tools.map((t) => t.name);
+      serverTools.set(serverName, toolNames);
+      process.stderr.write(`[occ-mcp] Connected to "${serverName}" — ${toolNames.length} tools available\n`);
+    } catch {
+      process.stderr.write(`[occ-mcp] Connected to "${serverName}" — tool discovery failed\n`);
+    }
 
-  return client;
+    return client;
+  })();
+
+  connectingClients.set(serverName, connectionPromise);
+  return connectionPromise;
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
-/** Call a tool on an external MCP server. */
+/** Call a tool on an external MCP server. Auto-recovers from stale connections. */
 export async function mcpCall(
   serverName: string,
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<string> {
-  const client = await getClient(serverName);
-
-  const result = await client.callTool({
-    name: toolName,
-    arguments: args,
-  });
-
-  // Extract text content from MCP result
-  if (result.content && Array.isArray(result.content)) {
-    return result.content
-      .map((c: any) => {
-        if (c.type === "text") return c.text;
-        if (c.type === "image") return `[image: ${c.mimeType}]`;
-        return JSON.stringify(c);
-      })
-      .join("\n");
+  let client: Client;
+  try {
+    client = await getClient(serverName);
+  } catch (err) {
+    // Connection failed — clean up and re-throw
+    activeClients.delete(serverName);
+    connectingClients.delete(serverName);
+    throw err;
   }
 
-  return JSON.stringify(result);
+  try {
+    const result = await client.callTool({
+      name: toolName,
+      arguments: args,
+    });
+
+    // Extract text content from MCP result
+    if (result.content && Array.isArray(result.content)) {
+      return result.content
+        .map((c: any) => {
+          if (c.type === "text") return c.text;
+          if (c.type === "image") return `[image: ${c.mimeType}]`;
+          return JSON.stringify(c);
+        })
+        .join("\n");
+    }
+
+    return JSON.stringify(result);
+  } catch (err) {
+    // Tool call failed — likely stale/crashed client. Remove from cache so next call reconnects.
+    activeClients.delete(serverName);
+    process.stderr.write(`[occ-mcp] Call to "${serverName}.${toolName}" failed, removing stale client: ${err instanceof Error ? err.message : String(err)}\n`);
+    throw err;
+  }
 }
 
 /** List all available tools across all configured servers. */
