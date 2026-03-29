@@ -373,3 +373,136 @@ output: result
     expect(stdout).toContain("test123");
   });
 });
+
+// ─── New commands ───────────────────────────────────────────────────────────
+
+describe("occ cancel", () => {
+  it("exits 1 without execution id", () => {
+    const { exitCode, stderr } = occ(["cancel"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage");
+  });
+
+  it("exits with error when server not running", () => {
+    const { exitCode, stderr } = occ(["cancel", "abc123"], { OCC_URL: "http://localhost:19999" });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Cannot connect");
+  });
+});
+
+describe("occ queue", () => {
+  it("exits with error when server not running", () => {
+    const { exitCode, stderr } = occ(["queue"], { OCC_URL: "http://localhost:19999" });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Cannot connect");
+  });
+});
+
+describe("occ timeline", () => {
+  it("exits 1 without execution id", () => {
+    const { exitCode, stderr } = occ(["timeline"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage");
+  });
+
+  it("exits with error when server not running", () => {
+    const { exitCode, stderr } = occ(["timeline", "abc123"], { OCC_URL: "http://localhost:19999" });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Cannot connect");
+  });
+});
+
+describe("occ stats", () => {
+  it("exits 1 without chain name", () => {
+    const { exitCode, stderr } = occ(["stats"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage");
+  });
+
+  it("exits with error when server not running", () => {
+    const { exitCode, stderr } = occ(["stats", "my-chain"], { OCC_URL: "http://localhost:19999" });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Cannot connect");
+  });
+});
+
+describe("occ approve/reject", () => {
+  it("exits 1 without args", () => {
+    const { exitCode: a, stderr: sa } = occ(["approve"]);
+    expect(a).toBe(1);
+    expect(sa).toContain("Usage");
+
+    const { exitCode: b, stderr: sb } = occ(["reject"]);
+    expect(b).toBe(1);
+    expect(sb).toContain("Usage");
+  });
+
+  it("exits 1 with only execution id (missing stepId)", () => {
+    const { exitCode, stderr } = occ(["approve", "exec123"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage");
+  });
+
+  it("exits with error when server not running", () => {
+    const { exitCode, stderr } = occ(["approve", "exec123", "step1"], { OCC_URL: "http://localhost:19999" });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Cannot connect");
+  });
+});
+
+describe("occ run-pipeline", () => {
+  it("exits 1 without pipeline name", () => {
+    const { exitCode, stderr } = occ(["run-pipeline"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage");
+  });
+
+  it("exits with error when server not running", () => {
+    const { exitCode, stderr } = occ(["run-pipeline", "my-pipe", "--input", "x=1"], { OCC_URL: "http://localhost:19999" });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Cannot connect");
+  });
+});
+
+describe("--json flag", () => {
+  it("help still works with --json (no crash)", () => {
+    const { exitCode } = occ(["help", "--json"]);
+    expect(exitCode).toBe(0);
+  });
+
+  it("validate works with --json (no crash)", () => {
+    const chainsDir = path.resolve(__dirname, "..", "..", "chains");
+    if (!fs.existsSync(chainsDir)) return;
+
+    const { exitCode } = occ(["validate", "--json"], { CHAINS_DIR: chainsDir });
+    expect(exitCode).toBe(0);
+  });
+});
+
+describe("--priority flag", () => {
+  it("dry-run works with --priority (no crash)", () => {
+    const chainsDir = path.resolve(__dirname, "..", "..", "chains");
+    if (!fs.existsSync(chainsDir)) return;
+
+    const { exitCode } = occ(
+      ["dry-run", "deep-researcher", "--input", "topic=test", "--priority", "10"],
+      { CHAINS_DIR: chainsDir }
+    );
+    expect(exitCode).toBe(0);
+  });
+});
+
+describe("Help includes new commands", () => {
+  it("help mentions all commands", () => {
+    const { stdout } = occ(["help"]);
+    expect(stdout).toContain("cancel");
+    expect(stdout).toContain("queue");
+    expect(stdout).toContain("timeline");
+    expect(stdout).toContain("stats");
+    expect(stdout).toContain("approve");
+    expect(stdout).toContain("reject");
+    expect(stdout).toContain("run-pipeline");
+    expect(stdout).toContain("--json");
+    expect(stdout).toContain("--priority");
+  });
+});

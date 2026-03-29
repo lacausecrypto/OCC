@@ -77,11 +77,17 @@ const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   "claude-haiku-4-5": { input: 0.25, output: 1.25 },
 };
 
+// ─── Global flags ───────────────────────────────────────────────────────────
+
+const JSON_OUTPUT = process.argv.includes("--json");
+
 // ─── Commands ───────────────────────────────────────────────────────────────
 
 async function cmdList() {
   const { data: chains } = await fetchJSON("/chains");
   const { data: pipelines } = await fetchJSON("/pipelines");
+
+  if (JSON_OUTPUT) { console.log(JSON.stringify({ chains, pipelines })); return; }
 
   console.log("\x1b[1mChains:\x1b[0m");
   if (Array.isArray(chains) && chains.length > 0) {
@@ -106,22 +112,31 @@ async function cmdList() {
 
 async function cmdRun(chainName: string, args: string[]) {
   const input = parseInputArgs(args);
-  console.log(`\x1b[1mExecuting:\x1b[0m ${chainName}`);
-  if (Object.keys(input).length > 0) {
-    console.log(`\x1b[1mInputs:\x1b[0m ${JSON.stringify(input)}`);
+  const priority = parsePriority(args);
+
+  if (!JSON_OUTPUT) {
+    console.log(`\x1b[1mExecuting:\x1b[0m ${chainName}`);
+    if (Object.keys(input).length > 0) console.log(`\x1b[1mInputs:\x1b[0m ${JSON.stringify(input)}`);
   }
 
-  const { status, data } = await fetchJSON(`/execute/${chainName}`, "POST", { input });
+  const { status, data } = await fetchJSON(`/execute/${chainName}`, "POST", { input, priority });
   if (status >= 400) {
     console.error(`\x1b[31mError:\x1b[0m ${data.error || JSON.stringify(data)}`);
     process.exit(1);
   }
 
+  if (data.queued) {
+    if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+    console.log(`\x1b[33mQueued:\x1b[0m ${data.jobId} (position ${data.position})`);
+    console.log(`  ${data.message}`);
+    return;
+  }
+
   const executionId = data.executionId;
+  if (JSON_OUTPUT) { console.log(JSON.stringify({ executionId })); return; }
   console.log(`\x1b[1mExecution:\x1b[0m ${executionId}`);
   console.log(`\x1b[2mStreaming logs...\x1b[0m\n`);
 
-  // Stream SSE
   await streamLogs(executionId);
 }
 
@@ -349,6 +364,8 @@ async function cmdStatus(executionId: string) {
     process.exit(1);
   }
 
+  if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+
   const statusColor = data.status === "done" ? "32" : data.status === "error" ? "31" : data.status === "running" ? "36" : "33";
   console.log(`\x1b[1mExecution:\x1b[0m ${data.id}`);
   console.log(`\x1b[1mChain:\x1b[0m ${data.chainName}`);
@@ -379,14 +396,144 @@ async function cmdLogs(executionId: string) {
 async function cmdHealth() {
   const { status, data } = await fetchJSON("/health");
   if (status === 200) {
+    if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
     console.log(`\x1b[32mOCC server is running\x1b[0m`);
     console.log(`  Version: ${data.version}`);
     console.log(`  Running executions: ${data.runningExecutions}`);
+    if (data.queue) {
+      console.log(`  Queue: ${data.queue.queued} queued, ${data.queue.running} running, ${data.queue.done} done`);
+    }
+    if (data.mcpServers?.length > 0) {
+      console.log(`  MCP servers: ${data.mcpServers.join(", ")}`);
+    }
     console.log(`  URL: ${BASE_URL}`);
   } else {
     console.error(`\x1b[31mServer returned ${status}\x1b[0m`);
     process.exit(1);
   }
+}
+
+async function cmdCancel(executionId: string) {
+  const { status, data } = await fetchJSON(`/executions/${executionId}`, "DELETE");
+  if (status === 404) {
+    console.error(`\x1b[31mExecution not found or already finished:\x1b[0m ${executionId}`);
+    process.exit(1);
+  }
+  if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+  console.log(`\x1b[32mCancelled:\x1b[0m ${executionId}`);
+}
+
+async function cmdQueue() {
+  const { data: stats } = await fetchJSON("/queue");
+  const { data: jobs } = await fetchJSON("/queue/jobs?limit=20");
+
+  if (JSON_OUTPUT) { console.log(JSON.stringify({ stats, jobs })); return; }
+
+  console.log(`\x1b[1mQueue Stats:\x1b[0m`);
+  console.log(`  Queued:   ${stats.queued}`);
+  console.log(`  Running:  ${stats.running}`);
+  console.log(`  Done:     ${stats.done}`);
+  console.log(`  Errors:   ${stats.errored}`);
+  console.log(`  Workers:  ${stats.activeWorkers}/${stats.maxWorkers}`);
+  if (stats.avgWaitSeconds > 0) {
+    console.log(`  Avg wait: ${stats.avgWaitSeconds}s`);
+  }
+
+  if (Array.isArray(jobs) && jobs.length > 0) {
+    console.log(`\n\x1b[1mRecent Jobs:\x1b[0m`);
+    for (const job of jobs) {
+      const sc = job.status === "done" ? "32" : job.status === "error" ? "31" : job.status === "running" ? "36" : "33";
+      const exec = job.executionId ? ` → ${job.executionId}` : "";
+      console.log(`  \x1b[${sc}m${job.status.padEnd(7)}\x1b[0m ${job.name} (p${job.priority})${exec}`);
+    }
+  }
+}
+
+async function cmdTimeline(executionId: string) {
+  const { status, data } = await fetchJSON(`/executions/${executionId}/timeline`);
+  if (status === 404) {
+    console.error(`\x1b[31mExecution not found:\x1b[0m ${executionId}`);
+    process.exit(1);
+  }
+
+  if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+
+  console.log(`\x1b[1mTimeline for ${executionId}:\x1b[0m\n`);
+  if (!Array.isArray(data) || data.length === 0) {
+    console.log("  (no checkpoints)");
+    return;
+  }
+  for (const entry of data) {
+    const sc = entry.status === "done" ? "32" : entry.status === "error" ? "31" : "36";
+    const dur = entry.durationMs ? ` (${formatDuration(entry.durationMs)})` : "";
+    const tokens = entry.inputTokens ? ` [${entry.inputTokens}+${entry.outputTokens} tok]` : "";
+    console.log(`  \x1b[${sc}m${entry.status.padEnd(7)}\x1b[0m ${entry.stepId}${dur}${tokens}  \x1b[2m${entry.checkpointAt}\x1b[0m`);
+  }
+}
+
+async function cmdStats(chainName: string) {
+  const { status, data } = await fetchJSON(`/chains/${chainName}/stats`);
+  if (status >= 400) {
+    console.error(`\x1b[31mError:\x1b[0m ${data.error || "Stats unavailable"}`);
+    process.exit(1);
+  }
+
+  if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+
+  console.log(`\x1b[1mStats for ${chainName}:\x1b[0m`);
+  console.log(`  Total runs:     ${data.totalRuns}`);
+  console.log(`  Success rate:   ${data.successRate.toFixed(1)}%`);
+  console.log(`  Avg duration:   ${formatDuration(data.avgDurationMs)}`);
+  console.log(`  Total tokens:   ${data.totalTokens.input} input, ${data.totalTokens.output} output`);
+
+  const costs = MODEL_COSTS["claude-sonnet-4-6"];
+  const estCost = (data.totalTokens.input * costs.input + data.totalTokens.output * costs.output) / 1_000_000;
+  if (estCost > 0) {
+    console.log(`  Est. total cost: ~$${estCost.toFixed(3)} (Sonnet rates)`);
+  }
+}
+
+async function cmdApprove(executionId: string, stepId: string, approved: boolean) {
+  const { status, data } = await fetchJSON(
+    `/executions/${executionId}/approve/${stepId}`,
+    "POST",
+    { approved }
+  );
+  if (status === 404) {
+    console.error(`\x1b[31mNo pending approval found\x1b[0m`);
+    process.exit(1);
+  }
+  if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+  console.log(`\x1b[32m${approved ? "Approved" : "Rejected"}:\x1b[0m ${executionId} / ${stepId}`);
+}
+
+async function cmdRunPipeline(pipelineName: string, args: string[]) {
+  const input = parseInputArgs(args);
+  const priority = parsePriority(args);
+
+  console.log(`\x1b[1mExecuting pipeline:\x1b[0m ${pipelineName}`);
+  if (Object.keys(input).length > 0) {
+    console.log(`\x1b[1mInputs:\x1b[0m ${JSON.stringify(input)}`);
+  }
+
+  const { status, data } = await fetchJSON(`/pipelines/${pipelineName}/execute`, "POST", { input });
+  if (status >= 400) {
+    console.error(`\x1b[31mError:\x1b[0m ${data.error || JSON.stringify(data)}`);
+    process.exit(1);
+  }
+
+  if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+  console.log(`\x1b[1mExecution:\x1b[0m ${data.executionId}`);
+}
+
+function parsePriority(args: string[]): number {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--priority" || args[i] === "-p") {
+      const val = Number(args[i + 1]);
+      if (!isNaN(val)) return val;
+    }
+  }
+  return 5;
 }
 
 function printHelp() {
@@ -397,21 +544,40 @@ function printHelp() {
   occ <command> [options]
 
 \x1b[1mCommands:\x1b[0m
-  list                             List all chains and pipelines
-  run <chain> [--input k=v ...]    Execute a chain
-  validate [path]                  Lint and validate all chains
-  dry-run <chain> [--input k=v]    Preview execution plan (no LLM calls)
-  status <executionId>             Check execution status
-  logs <executionId>               Stream execution logs (SSE)
-  health                           Check server health
+  list                              List all chains and pipelines
+  run <chain> [--input k=v]         Execute a chain (queues if busy)
+  run-pipeline <name> [--input k=v] Execute a pipeline
+  validate [path]                   Lint and validate all chains
+  dry-run <chain> [--input k=v]     Preview execution plan (no LLM calls)
+  status <executionId>              Check execution status
+  logs <executionId>                Stream execution logs (SSE)
+  cancel <executionId>              Cancel a running execution
+  queue                             Show queue stats and recent jobs
+  timeline <executionId>            Time-travel: step checkpoint history
+  stats <chainName>                 Execution stats for a chain
+  approve <execId> <stepId>         Approve a gate step
+  reject <execId> <stepId>          Reject a gate step
+  health                            Check server health
+
+\x1b[1mFlags:\x1b[0m
+  --input k=v, -i k=v              Chain input (repeatable)
+  --priority N, -p N                Execution priority 1-10 (default: 5)
+  --json                            Output raw JSON (for scripting)
 
 \x1b[1mExamples:\x1b[0m
   occ list
   occ run deep-researcher --input topic="quantum computing"
+  occ run deep-researcher -i topic="AI" --priority 10
+  occ run-pipeline research-to-content --input topic="AI"
   occ validate ./chains
   occ dry-run code-review --input path="./src"
   occ status 1a2b3c4d
-  occ logs 1a2b3c4d
+  occ cancel 1a2b3c4d
+  occ queue
+  occ timeline 1a2b3c4d
+  occ stats deep-researcher
+  occ approve 1a2b3c4d gate_step
+  occ health --json
 
 \x1b[1mEnvironment:\x1b[0m
   OCC_URL          Server URL (default: http://localhost:4242)
@@ -422,7 +588,8 @@ function printHelp() {
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
-const args = process.argv.slice(2);
+// Strip --json from args for command parsing
+const args = process.argv.slice(2).filter((a) => a !== "--json");
 const command = args[0];
 
 switch (command) {
@@ -434,6 +601,11 @@ switch (command) {
   case "exec":
     if (!args[1]) { console.error("Usage: occ run <chain> [--input k=v]"); process.exit(1); }
     cmdRun(args[1], args.slice(2));
+    break;
+  case "run-pipeline":
+  case "run-pipe":
+    if (!args[1]) { console.error("Usage: occ run-pipeline <name> [--input k=v]"); process.exit(1); }
+    cmdRunPipeline(args[1], args.slice(2));
     break;
   case "validate":
   case "lint":
@@ -453,6 +625,29 @@ switch (command) {
   case "stream":
     if (!args[1]) { console.error("Usage: occ logs <executionId>"); process.exit(1); }
     cmdLogs(args[1]);
+    break;
+  case "cancel":
+    if (!args[1]) { console.error("Usage: occ cancel <executionId>"); process.exit(1); }
+    cmdCancel(args[1]);
+    break;
+  case "queue":
+    cmdQueue();
+    break;
+  case "timeline":
+    if (!args[1]) { console.error("Usage: occ timeline <executionId>"); process.exit(1); }
+    cmdTimeline(args[1]);
+    break;
+  case "stats":
+    if (!args[1]) { console.error("Usage: occ stats <chainName>"); process.exit(1); }
+    cmdStats(args[1]);
+    break;
+  case "approve":
+    if (!args[1] || !args[2]) { console.error("Usage: occ approve <executionId> <stepId>"); process.exit(1); }
+    cmdApprove(args[1], args[2], true);
+    break;
+  case "reject":
+    if (!args[1] || !args[2]) { console.error("Usage: occ reject <executionId> <stepId>"); process.exit(1); }
+    cmdApprove(args[1], args[2], false);
     break;
   case "health":
   case "ping":

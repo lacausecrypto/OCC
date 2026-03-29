@@ -427,30 +427,37 @@ When used via Claude Code or Claude Desktop, OCC exposes 25 MCP tools:
 
 ## CLI
 
-OCC includes a command-line interface for local development and CI/CD:
+OCC includes a full command-line interface (15 commands):
 
 ```bash
-# List all chains and pipelines
-occ list
+# ── Offline (no server needed) ──────────────────
+occ validate ./chains                          # Lint all chains
+occ dry-run deep-researcher --input topic="AI" # Execution plan + cost (0 tokens)
 
-# Validate all chains (lint + dependency check)
-occ validate ./chains
+# ── Execution ───────────────────────────────────
+occ run deep-researcher --input topic="AI"     # Run chain + stream logs
+occ run deep-researcher -i topic="AI" -p 10    # With priority
+occ run-pipeline research-to-content -i topic="AI"  # Run pipeline
 
-# Preview execution plan without LLM calls (dry-run)
-occ dry-run deep-researcher --input topic="AI"
+# ── Monitoring ──────────────────────────────────
+occ list                     # List chains + pipelines
+occ status <executionId>     # Execution status + step details
+occ logs <executionId>       # Stream SSE logs in real-time
+occ timeline <executionId>   # Time-travel: checkpoint history
+occ stats deep-researcher    # Success rate, avg duration, tokens, cost
+occ queue                    # Queue stats + recent jobs
 
-# Execute a chain and stream logs
-occ run deep-researcher --input topic="quantum computing"
+# ── Control ─────────────────────────────────────
+occ cancel <executionId>              # Cancel running execution
+occ approve <executionId> <stepId>    # Approve gate step
+occ reject <executionId> <stepId>     # Reject gate step
 
-# Check execution status
-occ status <executionId>
-
-# Stream real-time logs
-occ logs <executionId>
-
-# Server health check
-occ health
+# ── Utilities ───────────────────────────────────
+occ health                   # Server health + queue + MCP servers
+occ health --json            # Machine-readable JSON output
 ```
+
+All commands support `--json` for scripting and `--priority N` / `-p N` for execution priority.
 
 Dry-run shows the full execution plan with cost estimates:
 ```
