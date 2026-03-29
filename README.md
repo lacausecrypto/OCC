@@ -34,37 +34,38 @@ Claude is great at single-turn tasks. But real work requires **multi-step workfl
 
 ## Quick Start
 
-### 1. Install
+### Option A: npm (recommended)
 
 ```bash
-cd mcp-server
-npm install
-npm run build
+git clone https://github.com/lacausecrypto/OCC.git
+cd OCC/mcp-server
+npm install && npm run build
+
+# Validate your chains
+npm run occ -- validate ../chains
+
+# Start the server
+npm run rest
 ```
 
-### 2. Configure for Claude Code
+### Option B: Docker
 
-Copy the example config and adjust paths:
+```bash
+git clone https://github.com/lacausecrypto/OCC.git
+cd OCC
+docker compose up
+# Server running on http://localhost:4242
+```
+
+### Option C: MCP (for Claude Code / Claude Desktop)
 
 ```bash
 cp .mcp.json.example .mcp.json
 # Edit .mcp.json with your absolute paths
+cd mcp-server && npm start
 ```
 
-### 3. Run
-
-**MCP mode** (for Claude Code / Claude Desktop):
-```bash
-npm start
-```
-
-**REST API mode** (standalone HTTP server):
-```bash
-npm run rest
-# Server running on http://localhost:4242
-```
-
-### 4. Execute your first chain
+### Execute your first chain
 
 Via REST:
 ```bash
@@ -348,6 +349,65 @@ When used via Claude Code or Claude Desktop, OCC exposes 25 MCP tools:
 - **Loader** — YAML parsing with Zod validation, dependency graph construction
 - **Scheduler** — cron-based execution with node-cron
 - **Pipeline Executor** — multi-chain orchestration with output passing
+
+## CLI
+
+OCC includes a command-line interface for local development and CI/CD:
+
+```bash
+# List all chains and pipelines
+occ list
+
+# Validate all chains (lint + dependency check)
+occ validate ./chains
+
+# Preview execution plan without LLM calls (dry-run)
+occ dry-run deep-researcher --input topic="AI"
+
+# Execute a chain and stream logs
+occ run deep-researcher --input topic="quantum computing"
+
+# Check execution status
+occ status <executionId>
+
+# Stream real-time logs
+occ logs <executionId>
+
+# Server health check
+occ health
+```
+
+Dry-run shows the full execution plan with cost estimates:
+```
+Execution Plan: deep-researcher
+
+  Wave 1 (3 parallel)
+    search_mainstream [claude-sonnet-4-6]
+    search_contrarian [claude-sonnet-4-6]
+    search_academic   [claude-sonnet-4-6]
+  Wave 2
+    evaluate_sources  [claude-sonnet-4-6] ← search_mainstream, search_contrarian, search_academic
+  Wave 3
+    merge_perspectives [claude-sonnet-4-6]
+  Wave 4
+    synthesize        [claude-sonnet-4-6]
+
+Estimated Cost:
+  Steps: 6 (4 waves)
+  Models: claude-sonnet-4-6: 6 steps (~$0.126-$0.360)
+  Total: ~$0.126-$0.360
+```
+
+## Docker
+
+```bash
+# Quick start
+docker compose up
+
+# Or build manually
+docker build -t occ .
+docker run -p 4242:4242 -v ./chains:/app/chains occ
+```
 
 ## Configuration
 

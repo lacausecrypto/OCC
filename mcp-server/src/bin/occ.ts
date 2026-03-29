@@ -1,0 +1,471 @@
+#!/usr/bin/env node
+/**
+ * OCC CLI — Command-line interface for the Claude Chain Orchestrator.
+ *
+ * Usage:
+ *   occ list                          List all chains and pipelines
+ *   occ run <chain> [--input k=v]     Execute a chain
+ *   occ validate [path]               Lint and validate chains
+ *   occ dry-run <chain> [--input k=v] Preview execution without LLM calls
+ *   occ status <executionId>          Check execution status
+ *   occ logs <executionId>            Stream execution logs (SSE)
+ *   occ health                        Check server health
+ */
+
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ─── Config ─────────────────────────────────────────────────────────────────
+
+const BASE_URL = process.env.OCC_URL || `http://localhost:${process.env.REST_PORT || 4242}`;
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function parseInputArgs(args: string[]): Record<string, string> {
+  const input: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--input" || args[i] === "-i") {
+      const kv = args[++i];
+      if (kv) {
+        const eq = kv.indexOf("=");
+        if (eq > 0) {
+          input[kv.slice(0, eq)] = kv.slice(eq + 1);
+        }
+      }
+    }
+  }
+  return input;
+}
+
+async function fetchJSON(path: string, method = "GET", body?: unknown): Promise<any> {
+  const url = `${BASE_URL}${path}`;
+  const options: RequestInit = {
+    method,
+    headers: { "Content-Type": "application/json" },
+  };
+  if (body) options.body = JSON.stringify(body);
+
+  try {
+    const res = await fetch(url, options);
+    const text = await res.text();
+    try {
+      return { status: res.status, data: JSON.parse(text) };
+    } catch {
+      return { status: res.status, data: text };
+    }
+  } catch (err) {
+    console.error(`\x1b[31mError: Cannot connect to OCC server at ${BASE_URL}\x1b[0m`);
+    console.error(`Start the server: cd mcp-server && npm run rest`);
+    process.exit(1);
+  }
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60000).toFixed(1)}min`;
+}
+
+// Token costs per million tokens (March 2026)
+const MODEL_COSTS: Record<string, { input: number; output: number }> = {
+  "claude-opus-4-6": { input: 15, output: 75 },
+  "claude-sonnet-4-6": { input: 3, output: 15 },
+  "claude-haiku-4-5": { input: 0.25, output: 1.25 },
+};
+
+// ─── Commands ───────────────────────────────────────────────────────────────
+
+async function cmdList() {
+  const { data: chains } = await fetchJSON("/chains");
+  const { data: pipelines } = await fetchJSON("/pipelines");
+
+  console.log("\x1b[1mChains:\x1b[0m");
+  if (Array.isArray(chains) && chains.length > 0) {
+    for (const c of chains) {
+      const steps = c.stepCount ? ` (${c.stepCount} steps)` : "";
+      console.log(`  \x1b[36m${c.name}\x1b[0m${steps}${c.description ? ` — ${c.description}` : ""}`);
+    }
+  } else {
+    console.log("  (none)");
+  }
+
+  console.log(`\n\x1b[1mPipelines:\x1b[0m`);
+  if (Array.isArray(pipelines) && pipelines.length > 0) {
+    for (const p of pipelines) {
+      const chains = p.chainCount ? ` (${p.chainCount} chains)` : "";
+      console.log(`  \x1b[35m${p.name}\x1b[0m${chains}${p.description ? ` — ${p.description}` : ""}`);
+    }
+  } else {
+    console.log("  (none)");
+  }
+}
+
+async function cmdRun(chainName: string, args: string[]) {
+  const input = parseInputArgs(args);
+  console.log(`\x1b[1mExecuting:\x1b[0m ${chainName}`);
+  if (Object.keys(input).length > 0) {
+    console.log(`\x1b[1mInputs:\x1b[0m ${JSON.stringify(input)}`);
+  }
+
+  const { status, data } = await fetchJSON(`/execute/${chainName}`, "POST", { input });
+  if (status >= 400) {
+    console.error(`\x1b[31mError:\x1b[0m ${data.error || JSON.stringify(data)}`);
+    process.exit(1);
+  }
+
+  const executionId = data.executionId;
+  console.log(`\x1b[1mExecution:\x1b[0m ${executionId}`);
+  console.log(`\x1b[2mStreaming logs...\x1b[0m\n`);
+
+  // Stream SSE
+  await streamLogs(executionId);
+}
+
+async function streamLogs(executionId: string) {
+  const url = `${BASE_URL}/executions/${executionId}/stream`;
+  try {
+    const res = await fetch(url);
+    if (!res.body) {
+      console.error("No stream body");
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+          formatEvent(event);
+
+          if (event.type === "execution_done") {
+            console.log(`\n\x1b[32m--- Result ---\x1b[0m`);
+            const result = event.result || "";
+            console.log(result.length > 2000 ? result.slice(0, 2000) + "\n...(truncated)" : result);
+            return;
+          }
+          if (event.type === "execution_error") {
+            console.error(`\n\x1b[31mExecution failed:\x1b[0m ${event.error}`);
+            process.exit(1);
+          }
+        } catch {
+          // Non-JSON line (heartbeat, etc.)
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`Stream error: ${err}`);
+  }
+}
+
+function formatEvent(event: any) {
+  switch (event.type) {
+    case "execution_started":
+      console.log(`\x1b[1m[START]\x1b[0m Chain: ${event.chainName}`);
+      break;
+    case "step_started":
+      console.log(`  \x1b[36m[STEP]\x1b[0m ${event.label || event.stepId} ...`);
+      break;
+    case "step_done":
+      console.log(`  \x1b[32m[DONE]\x1b[0m ${event.stepId} (${formatDuration(event.durationMs)}${event.inputTokens ? `, ${event.inputTokens}+${event.outputTokens} tokens` : ""})`);
+      break;
+    case "step_error":
+      console.log(`  \x1b[31m[FAIL]\x1b[0m ${event.stepId}: ${event.error}`);
+      break;
+    case "step_cache_hit":
+      console.log(`  \x1b[33m[CACHE]\x1b[0m ${event.stepId}`);
+      break;
+    case "step_waiting_approval":
+      console.log(`  \x1b[33m[GATE]\x1b[0m ${event.stepId} — waiting for approval`);
+      break;
+    case "step_log":
+      console.log(`  \x1b[2m[LOG]\x1b[0m ${event.message}`);
+      break;
+  }
+}
+
+async function cmdValidate(targetPath: string) {
+  // Load linter dynamically (works both compiled and in dev)
+  const linterPath = path.resolve(__dirname, "..", "linter.js");
+  const loaderPath = path.resolve(__dirname, "..", "loader.js");
+
+  let lintChain: typeof import("../linter.js").lintChain;
+  let loadChain: typeof import("../loader.js").loadChain;
+  let listChains: typeof import("../loader.js").listChains;
+
+  try {
+    const linter = await import(linterPath);
+    const loader = await import(loaderPath);
+    lintChain = linter.lintChain;
+    loadChain = loader.loadChain;
+    listChains = loader.listChains;
+  } catch {
+    console.error("\x1b[31mError: Build first — run `npm run build` in mcp-server/\x1b[0m");
+    process.exit(1);
+  }
+
+  // Set CHAINS_DIR if path provided
+  if (targetPath && fs.existsSync(targetPath)) {
+    if (fs.statSync(targetPath).isDirectory()) {
+      process.env.CHAINS_DIR = targetPath;
+    } else {
+      // Single file — set dir to parent
+      process.env.CHAINS_DIR = path.dirname(targetPath);
+    }
+  }
+
+  const names = listChains();
+  if (names.length === 0) {
+    console.log("\x1b[33mNo chains found.\x1b[0m");
+    return;
+  }
+
+  let totalErrors = 0;
+  let totalWarnings = 0;
+
+  for (const name of names) {
+    try {
+      const chain = loadChain(name);
+      const issues = lintChain(chain);
+
+      const errors = issues.filter((i: { level: string }) => i.level === "error");
+      const warnings = issues.filter((i: { level: string }) => i.level === "warning");
+      const infos = issues.filter((i: { level: string }) => i.level === "info");
+      totalErrors += errors.length;
+      totalWarnings += warnings.length;
+
+      if (issues.length === 0) {
+        console.log(`  \x1b[32m✓\x1b[0m ${name} (${chain.steps.length} steps)`);
+      } else {
+        const symbol = errors.length > 0 ? "\x1b[31m✗\x1b[0m" : "\x1b[33m⚠\x1b[0m";
+        console.log(`  ${symbol} ${name} (${chain.steps.length} steps)`);
+        for (const issue of issues) {
+          const color = issue.level === "error" ? "31" : issue.level === "warning" ? "33" : "2";
+          const prefix = issue.stepId ? `${issue.stepId}: ` : "";
+          console.log(`    \x1b[${color}m${issue.level}\x1b[0m ${prefix}${issue.message}`);
+        }
+      }
+    } catch (err) {
+      totalErrors++;
+      console.log(`  \x1b[31m✗\x1b[0m ${name}: ${(err as Error).message}`);
+    }
+  }
+
+  console.log(`\n\x1b[1m${names.length} chains\x1b[0m validated: \x1b[31m${totalErrors} errors\x1b[0m, \x1b[33m${totalWarnings} warnings\x1b[0m`);
+  if (totalErrors > 0) process.exit(1);
+}
+
+async function cmdDryRun(chainName: string, args: string[]) {
+  const input = parseInputArgs(args);
+
+  const linterPath = path.resolve(__dirname, "..", "linter.js");
+  const loaderPath = path.resolve(__dirname, "..", "loader.js");
+
+  let dryRunChain: typeof import("../linter.js").dryRunChain;
+  let loadChain: typeof import("../loader.js").loadChain;
+
+  try {
+    const linter = await import(linterPath);
+    const loader = await import(loaderPath);
+    dryRunChain = linter.dryRunChain;
+    loadChain = loader.loadChain;
+  } catch {
+    console.error("\x1b[31mError: Build first — run `npm run build` in mcp-server/\x1b[0m");
+    process.exit(1);
+  }
+
+  let chain;
+  try {
+    chain = loadChain(chainName);
+  } catch (err) {
+    console.error(`\x1b[31mError:\x1b[0m ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  const result = dryRunChain(chain, input);
+
+  // Display issues
+  if (result.issues.length > 0) {
+    console.log(`\x1b[1mIssues:\x1b[0m`);
+    for (const issue of result.issues) {
+      const color = issue.level === "error" ? "31" : issue.level === "warning" ? "33" : "2";
+      const prefix = issue.stepId ? `${issue.stepId}: ` : "";
+      console.log(`  \x1b[${color}m${issue.level}\x1b[0m ${prefix}${issue.message}`);
+    }
+    console.log();
+  }
+
+  // Display execution plan
+  console.log(`\x1b[1mExecution Plan:\x1b[0m ${chain.name} (${chain.description || ""})\n`);
+
+  let currentWave = 0;
+  for (const step of result.plan) {
+    if (step.wave !== currentWave) {
+      currentWave = step.wave;
+      const parallel = result.plan.filter((s: { wave: number }) => s.wave === currentWave).length;
+      console.log(`\x1b[1m  Wave ${currentWave}\x1b[0m${parallel > 1 ? ` (${parallel} parallel)` : ""}`);
+    }
+    console.log(`    \x1b[36m${step.stepId}\x1b[0m [${step.model}]${step.dependsOn.length ? ` ← ${step.dependsOn.join(", ")}` : ""}`);
+    console.log(`    \x1b[2m${step.promptPreview}\x1b[0m\n`);
+  }
+
+  // Display cost estimate
+  console.log(`\x1b[1mEstimated Cost:\x1b[0m`);
+  console.log(`  Steps: ${result.estimatedCost.totalSteps} (${result.estimatedCost.parallelWaves} waves)`);
+  console.log(`  Models:`);
+
+  let totalMinCost = 0;
+  let totalMaxCost = 0;
+  for (const [model, countRaw] of Object.entries(result.estimatedCost.models)) {
+    const count = countRaw as number;
+    const costs = MODEL_COSTS[model] || MODEL_COSTS["claude-sonnet-4-6"];
+    // Estimate: ~2K input + ~1K output tokens per step average
+    const minCost = count * (2000 * costs.input + 1000 * costs.output) / 1_000_000;
+    const maxCost = count * (5000 * costs.input + 3000 * costs.output) / 1_000_000;
+    totalMinCost += minCost;
+    totalMaxCost += maxCost;
+    console.log(`    ${model}: ${count} step${count > 1 ? "s" : ""} (~$${minCost.toFixed(3)}-$${maxCost.toFixed(3)})`);
+  }
+  console.log(`  \x1b[1mTotal: ~$${totalMinCost.toFixed(3)}-$${totalMaxCost.toFixed(3)}\x1b[0m`);
+}
+
+async function cmdStatus(executionId: string) {
+  const { status, data } = await fetchJSON(`/executions/${executionId}`);
+  if (status === 404) {
+    console.error(`\x1b[31mExecution not found:\x1b[0m ${executionId}`);
+    process.exit(1);
+  }
+
+  const statusColor = data.status === "done" ? "32" : data.status === "error" ? "31" : data.status === "running" ? "36" : "33";
+  console.log(`\x1b[1mExecution:\x1b[0m ${data.id}`);
+  console.log(`\x1b[1mChain:\x1b[0m ${data.chainName}`);
+  console.log(`\x1b[1mStatus:\x1b[0m \x1b[${statusColor}m${data.status}\x1b[0m`);
+  if (data.durationMs) console.log(`\x1b[1mDuration:\x1b[0m ${formatDuration(data.durationMs)}`);
+  if (data.error) console.log(`\x1b[31mError:\x1b[0m ${data.error}`);
+
+  console.log(`\n\x1b[1mSteps:\x1b[0m`);
+  for (const [stepId, step] of Object.entries(data.steps) as [string, any][]) {
+    const sc = step.status === "done" ? "32" : step.status === "error" ? "31" : step.status === "running" ? "36" : "2";
+    const dur = step.durationMs ? ` (${formatDuration(step.durationMs)})` : "";
+    const tokens = step.inputTokens ? ` [${step.inputTokens}+${step.outputTokens} tokens]` : "";
+    console.log(`  \x1b[${sc}m${step.status.padEnd(7)}\x1b[0m ${stepId}${dur}${tokens}`);
+    if (step.error) console.log(`          \x1b[31m${step.error}\x1b[0m`);
+  }
+
+  if (data.result && data.status === "done") {
+    console.log(`\n\x1b[32m--- Result ---\x1b[0m`);
+    console.log(data.result.length > 2000 ? data.result.slice(0, 2000) + "\n...(truncated)" : data.result);
+  }
+}
+
+async function cmdLogs(executionId: string) {
+  console.log(`\x1b[2mStreaming logs for ${executionId}...\x1b[0m\n`);
+  await streamLogs(executionId);
+}
+
+async function cmdHealth() {
+  const { status, data } = await fetchJSON("/health");
+  if (status === 200) {
+    console.log(`\x1b[32mOCC server is running\x1b[0m`);
+    console.log(`  Version: ${data.version}`);
+    console.log(`  Running executions: ${data.runningExecutions}`);
+    console.log(`  URL: ${BASE_URL}`);
+  } else {
+    console.error(`\x1b[31mServer returned ${status}\x1b[0m`);
+    process.exit(1);
+  }
+}
+
+function printHelp() {
+  console.log(`
+\x1b[1mOCC — Claude Chain Orchestrator CLI\x1b[0m
+
+\x1b[1mUsage:\x1b[0m
+  occ <command> [options]
+
+\x1b[1mCommands:\x1b[0m
+  list                             List all chains and pipelines
+  run <chain> [--input k=v ...]    Execute a chain
+  validate [path]                  Lint and validate all chains
+  dry-run <chain> [--input k=v]    Preview execution plan (no LLM calls)
+  status <executionId>             Check execution status
+  logs <executionId>               Stream execution logs (SSE)
+  health                           Check server health
+
+\x1b[1mExamples:\x1b[0m
+  occ list
+  occ run deep-researcher --input topic="quantum computing"
+  occ validate ./chains
+  occ dry-run code-review --input path="./src"
+  occ status 1a2b3c4d
+  occ logs 1a2b3c4d
+
+\x1b[1mEnvironment:\x1b[0m
+  OCC_URL          Server URL (default: http://localhost:4242)
+  CHAINS_DIR       Chains directory (for validate/dry-run)
+  REST_PORT        Server port (default: 4242)
+`);
+}
+
+// ─── Main ───────────────────────────────────────────────────────────────────
+
+const args = process.argv.slice(2);
+const command = args[0];
+
+switch (command) {
+  case "list":
+  case "ls":
+    cmdList();
+    break;
+  case "run":
+  case "exec":
+    if (!args[1]) { console.error("Usage: occ run <chain> [--input k=v]"); process.exit(1); }
+    cmdRun(args[1], args.slice(2));
+    break;
+  case "validate":
+  case "lint":
+    cmdValidate(args[1] || process.env.CHAINS_DIR || "");
+    break;
+  case "dry-run":
+  case "dryrun":
+  case "preview":
+    if (!args[1]) { console.error("Usage: occ dry-run <chain> [--input k=v]"); process.exit(1); }
+    cmdDryRun(args[1], args.slice(2));
+    break;
+  case "status":
+    if (!args[1]) { console.error("Usage: occ status <executionId>"); process.exit(1); }
+    cmdStatus(args[1]);
+    break;
+  case "logs":
+  case "stream":
+    if (!args[1]) { console.error("Usage: occ logs <executionId>"); process.exit(1); }
+    cmdLogs(args[1]);
+    break;
+  case "health":
+  case "ping":
+    cmdHealth();
+    break;
+  case "help":
+  case "--help":
+  case "-h":
+  case undefined:
+    printHelp();
+    break;
+  default:
+    console.error(`Unknown command: ${command}`);
+    printHelp();
+    process.exit(1);
+}
