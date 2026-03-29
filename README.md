@@ -278,22 +278,31 @@ output: content
 ### Chains
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/chains` | List all chains |
+| GET | `/chains` | List all chains with metadata |
 | GET | `/chains/:name` | Get chain YAML |
-| POST | `/chains/:name` | Create/update chain |
+| GET | `/chains/:name/stats` | Execution stats (success rate, avg duration, tokens) |
+| POST | `/chains/:name` | Create/update chain (JSON or YAML body) |
 | DELETE | `/chains/:name` | Delete chain |
 
 ### Execution
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/execute/:name` | Execute a chain (async, returns executionId) |
-| GET | `/executions/:id` | Get execution status and results |
-| GET | `/executions/:id/stream` | SSE stream of real-time execution events |
-| GET | `/executions` | List all executions (paginated) |
-| DELETE | `/executions/:id` | Cancel a running execution |
-| POST | `/executions/:id/resume` | Resume from last checkpoint |
-| GET | `/executions/:id/timeline` | Time-travel: step checkpoint history |
-| GET | `/chains/:name/stats` | Execution stats (success rate, avg duration, tokens) |
+| POST | `/execute/:name` | Execute a chain — runs immediately or queues if busy (returns executionId or jobId) |
+| GET | `/executions/:id` | Get execution status and full step results |
+| GET | `/executions/:id/stream` | SSE stream of real-time execution events (30s heartbeat) |
+| GET | `/executions/:id/timeline` | Time-travel: full step checkpoint history from SQLite |
+| GET | `/executions` | List all executions (paginated: `?limit=50&offset=0`) |
+| DELETE | `/executions/:id` | Cancel a running execution (kills processes) |
+| POST | `/executions/:id/resume` | Resume a failed execution from last completed step |
+
+### Queue
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/queue` | Queue statistics (queued, running, done, avg wait time) |
+| GET | `/queue/jobs` | List all jobs (`?status=queued&limit=50`) |
+| GET | `/queue/jobs/:id` | Get single job status |
+| DELETE | `/queue/jobs/:id` | Cancel a queued job |
+| DELETE | `/queue/purge` | Remove old completed/failed jobs (`?days=7`) |
 
 ### Gates (Human-in-the-loop)
 | Method | Endpoint | Description |
@@ -305,9 +314,11 @@ output: content
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/schedules` | List all schedules |
+| GET | `/schedules/:id` | Get single schedule |
 | POST | `/schedules` | Create a cron schedule |
 | PUT | `/schedules/:id` | Update a schedule |
 | PATCH | `/schedules/:id/toggle` | Enable/disable a schedule |
+| POST | `/schedules/:id/run` | Trigger a schedule immediately |
 | DELETE | `/schedules/:id` | Delete a schedule |
 
 ### Pipelines
@@ -315,20 +326,26 @@ output: content
 |--------|----------|-------------|
 | GET | `/pipelines` | List all pipelines |
 | GET | `/pipelines/:name` | Get pipeline YAML |
+| GET | `/pipelines/:name/json` | Get pipeline as parsed JSON |
+| POST | `/pipelines/:name` | Create/update pipeline |
+| DELETE | `/pipelines/:name` | Delete pipeline |
 | POST | `/pipelines/:name/execute` | Execute a pipeline |
 | GET | `/pipeline-executions` | List pipeline executions |
+| GET | `/pipeline-executions/:id` | Get single pipeline execution |
 
 ### AI Chain Generation
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/generate-chain` | Generate a chain from natural language description |
+| POST | `/generate-chain` | Generate a chain from natural language (conversational, multi-turn) |
 | POST | `/generate-chain/stream` | Generate with SSE streaming |
+| GET | `/generate-chain/stream/:sessionId` | Resume SSE stream for a session |
 
-### Utilities
+### MCP & Utilities
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Health check |
-| GET | `/download?path=...` | Download a file from /tmp |
+| GET | `/health` | Health check (version, running executions, queue stats, MCP servers) |
+| GET | `/mcp-servers` | List external MCP servers and their available tools |
+| GET | `/download?path=...` | Download a file (restricted to tmpdir + WORKSPACE_DIR) |
 
 ## MCP Tools
 

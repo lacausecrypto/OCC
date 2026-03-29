@@ -19,6 +19,7 @@ import { executeChain, getExecution, getAllExecutions, cancelExecution, loadPers
 import { getChainStats } from "./storage.js";
 import { loadMcpServers, discoverTools, getConfiguredServers, closeMcpClients } from "./mcp-client.js";
 import { closeStorage } from "./storage.js";
+import { initQueue, enqueue, getQueueJob, listQueueJobs, listQueueByStatus, cancelQueueJob, getQueueStats, purgeOldJobs, closeQueue } from "./queue.js";
 import {
   initScheduler, setSSEEmitter,
   getSchedules, getSchedule,
@@ -122,18 +123,12 @@ app.delete("/chains/:name", (req, res) => {
   }
 });
 
-// POST /execute/:name → start execution, returns executionId immediately
+// POST /execute/:name → start execution (queued if busy), returns executionId immediately
 app.post("/execute/:name", async (req: Request, res: Response) => {
   try {
-    // Rate limit: reject if too many concurrent executions
-    if (!canStartExecution()) {
-      return res.status(429).json({
-        error: `Too many concurrent executions (${getRunningExecutionCount()} running). Try again later.`,
-      });
-    }
-
     const chain = loadChain(req.params.name);
     const input = (req.body?.input ?? {}) as Record<string, string>;
+    const priority = typeof req.body?.priority === "number" ? req.body.priority : 5;
 
     // Validate required inputs against chain definition
     for (const inputDef of chain.inputs ?? []) {
@@ -144,26 +139,34 @@ app.post("/execute/:name", async (req: Request, res: Response) => {
       }
     }
 
-    // Generate executionId upfront so we can return immediately
-    const executionId = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
+    if (canStartExecution()) {
+      // Fast path: execute immediately
+      const executionId = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
 
-    const emitter = (event: ExecutionEvent) => {
-      // Override the executionId in the event
-      if (event.type === "execution_started") {
-        (event as any).executionId = executionId;
-      }
-      emitSSE(executionId, event);
-    };
+      const emitter = (event: ExecutionEvent) => {
+        if (event.type === "execution_started") {
+          (event as any).executionId = executionId;
+        }
+        emitSSE(executionId, event);
+      };
 
-    // Return executionId IMMEDIATELY, before any work starts
-    res.json({ executionId });
+      res.json({ executionId, queued: false });
 
-    // Kick off async in next tick (doesn't block the response)
-    setImmediate(() => {
-      executeChain(chain, input, emitter).catch(() => {
-        // errors are captured in execution record
+      setImmediate(() => {
+        executeChain(chain, input, emitter).catch(() => {
+          // errors are captured in execution record
+        });
       });
-    });
+    } else {
+      // Queue path: add to queue, process when a worker is free
+      const job = enqueue("chain", req.params.name, input, { priority });
+      res.status(202).json({
+        jobId: job.id,
+        queued: true,
+        position: getQueueStats().queued,
+        message: `Queued (${getRunningExecutionCount()} running, ${getQueueStats().queued} in queue)`,
+      });
+    }
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }
@@ -525,12 +528,51 @@ app.get("/pipeline-executions/:id", (req, res) => {
   return res.json(ex);
 });
 
+// ─── Queue routes ────────────────────────────────────────────────────────────
+
+// GET /queue → queue statistics
+app.get("/queue", (_req, res) => res.json(getQueueStats()));
+
+// GET /queue/jobs → list all jobs
+app.get("/queue/jobs", (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+  const offset = parseInt(req.query.offset as string) || 0;
+  const status = req.query.status as string;
+  if (status) {
+    res.json(listQueueByStatus(status, limit));
+  } else {
+    res.json(listQueueJobs(limit, offset));
+  }
+});
+
+// GET /queue/jobs/:id → single job status
+app.get("/queue/jobs/:id", (req, res) => {
+  const job = getQueueJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  return res.json(job);
+});
+
+// DELETE /queue/jobs/:id → cancel a queued job
+app.delete("/queue/jobs/:id", (req, res) => {
+  const ok = cancelQueueJob(req.params.id);
+  if (!ok) return res.status(404).json({ error: "Job not found or already running" });
+  return res.json({ ok: true });
+});
+
+// DELETE /queue/purge → remove old completed/failed jobs
+app.delete("/queue/purge", (req, res) => {
+  const days = parseInt(req.query.days as string) || 7;
+  const purged = purgeOldJobs(days);
+  res.json({ purged });
+});
+
 // GET /health
 app.get("/health", (_req, res) => res.json({
   ok: true,
   version: "2.0.0",
   runningExecutions: getRunningExecutionCount(),
   mcpServers: getConfiguredServers(),
+  queue: getQueueStats(),
 }));
 
 // GET /mcp-servers → list configured external MCP servers and their tools
@@ -928,6 +970,17 @@ app.listen(PORT, HOST, () => {
   validateClaudeBinary();
   loadMcpServers();
   loadPersistedExecutions();
+  // Initialize queue with a runner that executes chains
+  initQueue(async (job) => {
+    const chain = loadChain(job.name);
+    const executionId = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
+    const emitter = (event: ExecutionEvent) => {
+      if (event.type === "execution_started") (event as any).executionId = executionId;
+      emitSSE(executionId, event);
+    };
+    await executeChain(chain, job.input, emitter);
+    return executionId;
+  });
   loadPersistedPipelineExecutions();
   setSSEEmitter(emitSSE);
   initScheduler();
@@ -939,6 +992,7 @@ async function shutdown() {
   if (!process.env.VITEST) {
     process.stderr.write(`[occ-rest] Shutting down...\n`);
   }
+  try { closeQueue(); } catch { /* ignore */ }
   try { await closeMcpClients(); } catch { /* ignore */ }
   try { closeStorage(); } catch { /* ignore */ }
   if (!process.env.VITEST) process.exit(0);
