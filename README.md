@@ -26,11 +26,17 @@ Claude is great at single-turn tasks. But real work requires **multi-step workfl
 - **YAML-defined chains** — version-controlled, human-readable, git-friendly
 - **Dependency-aware execution** — steps run in parallel when possible, sequentially when needed
 - **11 step types** — agent, router, evaluator, gate, transform, loop, merge, browser, subchain, debate, webhook
-- **Pre-tools** — inject web search results, API data, files, or env vars before each step
+- **Pre-tools** — inject web search, API data, files, bash, env vars, or external MCP server calls before each step
 - **Retry & fallback** — automatic retries with exponential backoff, fallback to different models
 - **Real-time streaming** — SSE events for every step start, output chunk, and completion
+- **Job queue** — persistent priority queue with configurable worker pool (no more 429 rejections)
+- **SQLite persistence** — per-step checkpointing, time-travel debug, crash recovery, chain stats
+- **MCP bidirectional** — exposes 25 MCP tools AND consumes 10,000+ external MCP servers
+- **Chain linter** — static analysis: undefined variables, unreachable steps, invalid routes
+- **CLI** — `occ validate`, `occ dry-run` (cost estimate, 0 tokens), `occ run`, `occ status`
 - **Scheduling** — cron-based chain execution with toggle on/off
 - **Pipelines** — chain multiple chains together with output passing
+- **437 tests** across 12 test files (including concurrency and CLI end-to-end)
 
 ## Quick Start
 
@@ -193,6 +199,24 @@ OCC can consume any MCP server as a pre-tool. Configure servers in `occ-mcp-serv
 ```
 
 Then use `mcp_call` in any chain to access 10,000+ MCP tools (GitHub, Slack, PostgreSQL, Brave Search, etc.).
+
+### Pre-Tool Error Handling
+
+Control what happens when a pre-tool fails with the `on_error` field:
+
+```yaml
+pre_tools:
+  - type: bash
+    command: "risky_command"
+    inject_as: data
+    on_error: skip       # "inject" (default) | "skip" | "fail"
+```
+
+| Mode | Behavior |
+|------|----------|
+| `inject` | Injects `[PRE-TOOL ERROR: ...]` into the prompt (default, backwards-compatible) |
+| `skip` | Injects empty string — step continues cleanly |
+| `fail` | Aborts the step entirely with an error |
 
 ### Advanced Features
 
@@ -384,15 +408,22 @@ When used via Claude Code or Claude Desktop, OCC exposes 25 MCP tools:
                     └──────────┘          └────────────┘
 ```
 
-- **MCP Server** — stdio transport, exposes 25 tools for Claude Code
-- **REST Server** — Express on port 4242, CORS-enabled, SSE streaming
-- **Executor** — topological sort, parallel execution, process management, timeout handling
-- **Loader** — YAML parsing with Zod validation, dependency graph construction
-- **Scheduler** — cron-based execution with node-cron
-- **Pipeline Executor** — multi-chain orchestration with output passing
-- **Storage** — SQLite (WAL mode) with per-step checkpointing and time-travel queries
-- **MCP Client** — consume external MCP servers (GitHub, Slack, PostgreSQL, etc.) via `mcp_call` pre-tool
-- **Linter** — static analysis: undefined variables, unreachable steps, invalid routes, unused outputs
+14 TypeScript modules, 437 tests:
+
+- **MCP Server** (`index.ts`) — stdio transport, exposes 25 MCP tools for Claude Code
+- **REST Server** (`rest.ts`) — Express on port 4242, 40+ endpoints, SSE streaming
+- **Executor** (`executor.ts`) — topological sort, parallel execution, process management, timeouts
+- **Loader** (`loader.ts`) — YAML parsing with Zod validation, dependency graph (Kahn's algorithm)
+- **Queue** (`queue.ts`) — persistent job queue with priority, worker pool, auto-retry
+- **Storage** (`storage.ts`) — SQLite WAL with per-step checkpointing and time-travel queries
+- **Scheduler** (`scheduler.ts`) — cron-based execution with node-cron
+- **Pipeline Executor** (`pipeline-executor.ts`) — multi-chain orchestration with output passing
+- **Pipeline Loader** (`pipeline-loader.ts`) — pipeline YAML validation
+- **MCP Client** (`mcp-client.ts`) — consume external MCP servers via `mcp_call` pre-tool
+- **Linter** (`linter.ts`) — static analysis: undefined vars, unreachable steps, invalid routes
+- **Utils** (`utils.ts`) — shared `evaluateCondition()` and `resolveVariables()`
+- **Types** (`types.ts`) — TypeScript interfaces + Zod schemas for all chain/execution types
+- **CLI** (`bin/occ.ts`) — command-line interface: run, validate, dry-run, status, logs
 
 ## CLI
 
@@ -457,14 +488,20 @@ docker run -p 4242:4242 -v ./chains:/app/chains occ
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `CHAINS_DIR` | `../chains` | Directory containing chain YAML files |
-| `PIPELINES_DIR` | `../pipelines` | Directory containing pipeline YAML files |
 | `REST_PORT` | `4242` | HTTP server port |
 | `REST_HOST` | `0.0.0.0` | HTTP server bind address |
-| `EXECUTIONS_FILE` | `./executions.json` | Execution history persistence |
-| `EXECUTION_MAX_AGE_DAYS` | `7` | Auto-purge executions older than N days |
-| `CLAUDE_TIMEOUT_MS` | `300000` | Default per-step timeout (5 min) |
+| `CHAINS_DIR` | `../chains` | Directory containing chain YAML files |
+| `PIPELINES_DIR` | `../pipelines` | Directory containing pipeline YAML files |
+| `WORKSPACE_DIR` | — | Additional allowed directory for `/download` endpoint |
 | `CLAUDE_CLI` | `claude` | Path to Claude CLI binary |
+| `CLAUDE_BIN` | `claude` | Alternative Claude binary path |
+| `CLAUDE_TIMEOUT_MS` | `300000` | Default per-step timeout (5 min) |
+| `MAX_CONCURRENT_EXECUTIONS` | `5` | Max simultaneous chain executions (queue limit) |
+| `EXECUTION_MAX_AGE_DAYS` | `7` | Auto-purge executions older than N days |
+| `OCC_DB` | `<auto>` | SQLite database path for executions + checkpoints |
+| `OCC_QUEUE_DB` | `<auto>` | SQLite database path for job queue |
+| `MCP_SERVERS_CONFIG` | `<auto>` | Path to external MCP server config (occ-mcp-servers.json) |
+| `SCHEDULES_FILE` | `<auto>` | Schedule persistence file path |
 | `NO_COLOR` | — | Disable ANSI colors in Claude output |
 
 ## How OCC Compares
