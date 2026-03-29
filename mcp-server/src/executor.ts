@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import type {
@@ -27,9 +28,9 @@ const activeProcesses = new Map<string, Set<ChildProcess>>();
 function getExecutionsFile(): string {
   const chainsDir = process.env.CHAINS_DIR ?? "";
   if (chainsDir) {
-    return chainsDir.replace(/\/chains\/?$/, "") + "/executions.json";
+    return path.join(chainsDir.replace(/[/\\]chains[/\\]?$/, ""), "executions.json");
   }
-  return process.env.EXECUTIONS_FILE ?? "/tmp/occ-executions.json";
+  return process.env.EXECUTIONS_FILE ?? path.join(os.tmpdir(), "occ-executions.json");
 }
 
 function persistExecutions(): void {
@@ -111,7 +112,7 @@ function getCacheDir(): string {
   if (chainsDir) {
     return path.resolve(chainsDir, "..", "cache");
   }
-  return "/tmp/occ-cache";
+  return path.join(os.tmpdir(), "occ-cache");
 }
 
 function createCacheKey(stepId: string, resolvedPrompt: string, model?: string): string {
@@ -353,6 +354,38 @@ interface ClaudeResult {
 
 const CLAUDE_TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS) || 30 * 60 * 1000; // 30 min default
 const MAX_OUTPUT = 5_000_000; // 5MB max output size to prevent unbounded memory growth
+const MAX_CONCURRENT_EXECUTIONS = Number(process.env.MAX_CONCURRENT_EXECUTIONS) || 5;
+
+// ─── Claude binary validation (once at startup, not per step) ────────────────
+
+let claudeBinValidated = false;
+let claudeBinPath = "";
+
+export function validateClaudeBinary(): void {
+  const claudeBin = process.env.CLAUDE_BIN ?? "claude";
+  const whichCmd = process.platform === "win32" ? "where" : "which";
+  try {
+    execSync(`${whichCmd} "${claudeBin}"`, { encoding: "utf-8", timeout: 5000 });
+    claudeBinPath = claudeBin;
+    claudeBinValidated = true;
+    process.stderr.write(`[occ] Claude binary verified: ${claudeBin}\n`);
+  } catch {
+    process.stderr.write(`[occ] WARNING: Claude binary "${claudeBin}" not found in PATH. Set CLAUDE_BIN env var.\n`);
+    claudeBinPath = claudeBin; // still set so error is clear if used
+  }
+}
+
+// ─── Concurrent execution tracking ──────────────────────────────────────────
+
+let runningExecutionCount = 0;
+
+export function getRunningExecutionCount(): number {
+  return runningExecutionCount;
+}
+
+export function canStartExecution(): boolean {
+  return runningExecutionCount < MAX_CONCURRENT_EXECUTIONS;
+}
 
 function runClaude(
   prompt: string,
@@ -383,13 +416,18 @@ function runClaude(
     const USE_STDIN = prompt.length > 65536 || (step.tools && step.tools.length > 0);
     if (!USE_STDIN) args.push(prompt);
 
-    const claudeBin = process.env.CLAUDE_BIN ?? "claude";
-    // Validate claude binary exists
-    try {
-      execSync(`which "${claudeBin}"`, { encoding: "utf-8", timeout: 5000 });
-    } catch {
-      reject(new Error(`Claude binary "${claudeBin}" not found in PATH. Set CLAUDE_BIN env var to the full path.`));
-      return;
+    const claudeBin = claudeBinPath || process.env.CLAUDE_BIN || "claude";
+    if (!claudeBinValidated) {
+      // Fallback: validate once if startup check was skipped
+      const whichCmd = process.platform === "win32" ? "where" : "which";
+      try {
+        execSync(`${whichCmd} "${claudeBin}"`, { encoding: "utf-8", timeout: 5000 });
+        claudeBinValidated = true;
+        claudeBinPath = claudeBin;
+      } catch {
+        reject(new Error(`Claude binary "${claudeBin}" not found in PATH. Set CLAUDE_BIN env var to the full path.`));
+        return;
+      }
     }
     const cwd = step.cwd ?? process.env.WORKSPACE_DIR ?? process.cwd();
 
@@ -1813,6 +1851,8 @@ export async function executeChain(
 
   emit({ type: "execution_started", executionId, chainName: chain.name });
 
+  runningExecutionCount++;
+
   const graph = buildDependencyGraph(chain);
 
   const vars: Record<string, string> = {};
@@ -1889,6 +1929,8 @@ export async function executeChain(
     emit({ type: "execution_error", executionId, error });
     persistExecutions();
     throw err;
+  } finally {
+    runningExecutionCount--;
   }
 }
 

@@ -36,7 +36,7 @@ const PipelineSchema = z.object({
 function getPipelinesDir(): string {
   if (process.env.PIPELINES_DIR) return process.env.PIPELINES_DIR;
   const chainsDir = process.env.CHAINS_DIR ?? "";
-  if (chainsDir) return chainsDir.replace(/\/chains\/?$/, "/pipelines");
+  if (chainsDir) return path.join(chainsDir.replace(/[/\\]chains[/\\]?$/, ""), "pipelines");
   return path.join(process.cwd(), "..", "pipelines");
 }
 

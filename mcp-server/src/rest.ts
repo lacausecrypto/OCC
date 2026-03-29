@@ -3,6 +3,7 @@
  * Runs on port 4242 alongside the MCP stdio server.
  */
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import express from "express";
 import type { Request, Response } from "express";
@@ -14,7 +15,7 @@ import {
   deleteChain,
   loadChain,
 } from "./loader.js";
-import { executeChain, getExecution, getAllExecutions, cancelExecution, loadPersistedExecutions, resumeExecution, approveGate, getPendingApprovals } from "./executor.js";
+import { executeChain, getExecution, getAllExecutions, cancelExecution, loadPersistedExecutions, resumeExecution, approveGate, getPendingApprovals, validateClaudeBinary, canStartExecution, getRunningExecutionCount } from "./executor.js";
 import {
   initScheduler, setSSEEmitter,
   getSchedules, getSchedule,
@@ -121,8 +122,24 @@ app.delete("/chains/:name", (req, res) => {
 // POST /execute/:name → start execution, returns executionId immediately
 app.post("/execute/:name", async (req: Request, res: Response) => {
   try {
+    // Rate limit: reject if too many concurrent executions
+    if (!canStartExecution()) {
+      return res.status(429).json({
+        error: `Too many concurrent executions (${getRunningExecutionCount()} running). Try again later.`,
+      });
+    }
+
     const chain = loadChain(req.params.name);
     const input = (req.body?.input ?? {}) as Record<string, string>;
+
+    // Validate required inputs against chain definition
+    for (const inputDef of chain.inputs ?? []) {
+      if (!inputDef.optional && (input[inputDef.name] === undefined || input[inputDef.name] === "")) {
+        return res.status(400).json({
+          error: `Missing required input: "${inputDef.name}"${inputDef.description ? ` (${inputDef.description})` : ""}`,
+        });
+      }
+    }
 
     // Generate executionId upfront so we can return immediately
     const executionId = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
@@ -188,7 +205,17 @@ app.get("/executions/:id/stream", (req, res) => {
   clients.push(res);
   sseClients.set(id, clients);
 
+  // SSE heartbeat: prevent browser/proxy timeouts on idle connections
+  const heartbeatTimer = setInterval(() => {
+    try {
+      res.write(`: heartbeat\n\n`);
+    } catch {
+      clearInterval(heartbeatTimer);
+    }
+  }, 30000);
+
   req.on("close", () => {
+    clearInterval(heartbeatTimer);
     const list = sseClients.get(id) ?? [];
     sseClients.set(
       id,
@@ -279,8 +306,11 @@ app.get("/download", (req, res) => {
 
   // Security: resolve to absolute path first to prevent path traversal attacks
   const resolved = path.resolve(filePath);
-  const allowed = ["/tmp", process.env.WORKSPACE_DIR ?? ""].filter(Boolean);
-  const safe = allowed.some((dir) => resolved.startsWith(path.resolve(dir) + path.sep) || resolved === path.resolve(dir));
+  const allowed = [os.tmpdir(), "/tmp", process.env.WORKSPACE_DIR ?? ""].filter(Boolean);
+  const safe = allowed.some((dir) => {
+    const resolvedDir = path.resolve(dir);
+    return resolved.startsWith(resolvedDir + path.sep) || resolved === resolvedDir;
+  });
   if (!safe) return res.status(403).json({ error: "Path not allowed" });
 
   if (!fs.existsSync(resolved)) return res.status(404).json({ error: "File not found" });
@@ -396,7 +426,7 @@ app.post("/pipelines/:name", (req, res) => {
   try {
     if (typeof req.body === "string") {
       const dir = process.env.PIPELINES_DIR ??
-        (process.env.CHAINS_DIR ?? "").replace(/\/chains\/?$/, "/pipelines") ??
+        path.join((process.env.CHAINS_DIR ?? "").replace(/[/\\]chains[/\\]?$/, ""), "pipelines") ??
         path.join(process.cwd(), "..", "pipelines");
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, `${req.params.name}.yaml`), req.body, "utf-8");
@@ -422,8 +452,23 @@ app.delete("/pipelines/:name", (req, res) => {
 // POST /pipelines/:name/execute — run pipeline
 app.post("/pipelines/:name/execute", async (req: Request, res: Response) => {
   try {
+    if (!canStartExecution()) {
+      return res.status(429).json({
+        error: `Too many concurrent executions (${getRunningExecutionCount()} running). Try again later.`,
+      });
+    }
+
     const pipeline = loadPipeline(req.params.name);
     const input = (req.body?.input ?? {}) as Record<string, string>;
+
+    // Validate required pipeline inputs
+    for (const inputDef of pipeline.inputs ?? []) {
+      if (!inputDef.optional && (input[inputDef.name] === undefined || input[inputDef.name] === "")) {
+        return res.status(400).json({
+          error: `Missing required input: "${inputDef.name}"${inputDef.description ? ` (${inputDef.description})` : ""}`,
+        });
+      }
+    }
 
     let executionId = "";
     const emitter = (event: ExecutionEvent) => {
@@ -431,7 +476,13 @@ app.post("/pipelines/:name/execute", async (req: Request, res: Response) => {
       if (executionId) emitSSE(executionId, event);
     };
 
-    executePipeline(pipeline, input, emitter).catch(() => {});
+    executePipeline(pipeline, input, emitter).catch((err) => {
+      const error = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[occ] Pipeline "${pipeline.name}" execution failed: ${error}\n`);
+      if (executionId) {
+        emitSSE(executionId, { type: "execution_error", executionId, error });
+      }
+    });
     await new Promise((r) => setTimeout(r, 50));
     res.json({ executionId });
   } catch (err) {
@@ -452,7 +503,7 @@ app.get("/pipeline-executions/:id", (req, res) => {
 });
 
 // GET /health
-app.get("/health", (_req, res) => res.json({ ok: true, version: "2.0.0" }));
+app.get("/health", (_req, res) => res.json({ ok: true, version: "2.0.0", runningExecutions: getRunningExecutionCount() }));
 
 // ─── Generate Chain via Claude Code CLI + MCP (conversational + SSE stream) ──
 import { execFile, spawn, type ChildProcess } from "node:child_process";
@@ -836,6 +887,7 @@ const PORT = parseInt(process.env.REST_PORT ?? "4242", 10);
 const HOST = process.env.REST_HOST ?? "0.0.0.0";  // Listen on all interfaces for iPhone access
 app.listen(PORT, HOST, () => {
   process.stderr.write(`[occ-rest] Listening on http://${HOST}:${PORT}\n`);
+  validateClaudeBinary();
   loadPersistedExecutions();
   loadPersistedPipelineExecutions();
   setSSEEmitter(emitSSE);

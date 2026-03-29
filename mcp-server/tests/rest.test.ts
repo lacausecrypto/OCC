@@ -363,6 +363,10 @@ output: result
         loadPersistedExecutions: vi.fn(),
         resumeExecution: vi.fn(async () => "resumed result"),
         approveGate: vi.fn(() => true),
+        getPendingApprovals: vi.fn(() => []),
+        validateClaudeBinary: vi.fn(),
+        canStartExecution: vi.fn(() => true),
+        getRunningExecutionCount: vi.fn(() => 0),
       };
     });
 
@@ -427,7 +431,7 @@ output: result
     it("returns ok and version", async () => {
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: true, version: "2.0.0" });
+      expect(res.body).toMatchObject({ ok: true, version: "2.0.0" });
     });
   });
 
@@ -545,13 +549,38 @@ output: result
       expect(res.body.executionId.length).toBeGreaterThan(0);
     });
 
-    it("POST /execute/:name with empty input", async () => {
+    it("POST /execute/:name with empty input (no required inputs)", async () => {
       fs.writeFileSync(path.join(tmpDir, "exec-empty.yaml"), validChainYaml);
       const res = await request(app)
         .post("/execute/exec-empty")
         .send({});
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty("executionId");
+    });
+
+    it("POST /execute/:name rejects missing required inputs", async () => {
+      const chainWithRequired = `
+name: required-test
+description: Chain with required input
+version: "1.0"
+inputs:
+  - name: topic
+    description: The topic
+steps:
+  - id: step1
+    prompt: "Write about {topic}"
+    output_var: result
+    tools: []
+    depends_on: []
+output: result
+`;
+      fs.writeFileSync(path.join(tmpDir, "required-test.yaml"), chainWithRequired);
+      const res = await request(app)
+        .post("/execute/required-test")
+        .send({ input: {} });
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty("error");
+      expect(res.body.error).toContain("Missing required input");
     });
 
     it("POST /execute/:name returns 400 for missing chain", async () => {
@@ -757,10 +786,10 @@ output: result
 
     it("POST /execute/:name expects { input: Record<string,string> }", async () => {
       fs.writeFileSync(path.join(tmpDir, "input-test.yaml"), validChainYaml);
-      // Send proper input shape
+      // Send proper input shape with required 'topic' field
       const res = await request(app)
         .post("/execute/input-test")
-        .send({ input: { key1: "val1", key2: "val2" } });
+        .send({ input: { topic: "test topic" } });
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty("executionId");
     });
@@ -785,7 +814,7 @@ output: result
 
     it("GET /health response shape", async () => {
       const res = await request(app).get("/health");
-      expect(res.body).toEqual({ ok: true, version: "2.0.0" });
+      expect(res.body).toMatchObject({ ok: true, version: "2.0.0" });
     });
 
     it("GET /executions history items have expected fields", async () => {

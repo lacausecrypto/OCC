@@ -4,6 +4,8 @@
  */
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type {
   PipelineDefinition,
   PipelineExecution,
@@ -20,8 +22,8 @@ const pipelineExecutions = new Map<string, PipelineExecution>();
 
 function getPersistFile(): string {
   const chainsDir = process.env.CHAINS_DIR ?? "";
-  if (chainsDir) return chainsDir.replace(/\/chains\/?$/, "") + "/pipeline-executions.json";
-  return "/tmp/occ-pipeline-executions.json";
+  if (chainsDir) return path.join(chainsDir.replace(/[/\\]chains[/\\]?$/, ""), "pipeline-executions.json");
+  return path.join(os.tmpdir(), "occ-pipeline-executions.json");
 }
 
 function persist(): void {
