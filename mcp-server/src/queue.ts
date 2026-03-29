@@ -139,7 +139,7 @@ function prepareStatements() {
       WHERE id = ?
     `),
     failJob: db.prepare(`
-      UPDATE queue SET status = CASE WHEN retries < max_retries THEN 'queued' ELSE 'error' END,
+      UPDATE queue SET status = CASE WHEN retries + 1 < max_retries THEN 'queued' ELSE 'error' END,
         error = ?, retries = retries + 1, finished_at = datetime('now')
       WHERE id = ?
     `),
