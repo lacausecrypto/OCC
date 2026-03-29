@@ -936,10 +936,12 @@ app.listen(PORT, HOST, () => {
 // ─── Graceful shutdown ───────────────────────────────────────────────────────
 
 async function shutdown() {
-  process.stderr.write(`[occ-rest] Shutting down...\n`);
+  if (!process.env.VITEST) {
+    process.stderr.write(`[occ-rest] Shutting down...\n`);
+  }
   try { await closeMcpClients(); } catch { /* ignore */ }
   try { closeStorage(); } catch { /* ignore */ }
-  process.exit(0);
+  if (!process.env.VITEST) process.exit(0);
 }
 
 process.on("SIGINT", shutdown);
