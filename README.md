@@ -497,6 +497,7 @@ docker run -p 4242:4242 -v ./chains:/app/chains occ
 |---------------------|---------|-------------|
 | `REST_PORT` | `4242` | HTTP server port |
 | `REST_HOST` | `0.0.0.0` | HTTP server bind address |
+| `CORS_ORIGIN` | `*` | Allowed CORS origin (`*` for dev, `https://yourdomain.com` for prod) |
 | `CHAINS_DIR` | `../chains` | Directory containing chain YAML files |
 | `PIPELINES_DIR` | `../pipelines` | Directory containing pipeline YAML files |
 | `WORKSPACE_DIR` | — | Additional allowed directory for `/download` endpoint |

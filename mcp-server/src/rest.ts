@@ -36,9 +36,10 @@ if (fs.existsSync(canvasDistDir)) {
   app.use(express.static(canvasDistDir));
 }
 
-// CORS for canvas dev server
+// CORS — configurable via CORS_ORIGIN env var (default: * for local dev)
+const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "*";
 app.use((_req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Origin", CORS_ORIGIN);
   res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
   next();
