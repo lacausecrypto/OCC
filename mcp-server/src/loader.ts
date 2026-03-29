@@ -20,6 +20,8 @@ const PreToolSchema = z.object({
   server: z.string().optional(),
   tool: z.string().optional(),
   args: z.record(z.string(), z.unknown()).optional(),
+  // Error handling
+  on_error: z.enum(["inject", "skip", "fail"]).optional(),
 });
 
 const StepSchema = z.object({

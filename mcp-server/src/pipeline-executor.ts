@@ -15,6 +15,7 @@ import type {
 import { loadChain } from "./loader.js";
 import { executeChain } from "./executor.js";
 import { buildPipelineGraph } from "./pipeline-loader.js";
+import { evaluateCondition, resolveVariables } from "./utils.js";
 
 // ─── In-memory store ─────────────────────────────────────────────────────────
 
@@ -102,26 +103,7 @@ function resolveInputMapping(
   return resolved;
 }
 
-// ─── Condition evaluator ─────────────────────────────────────────────────────
-
-function evaluateCondition(expr: string, vars: Record<string, string>): boolean {
-  let resolved = expr;
-  for (const [k, v] of Object.entries(vars)) {
-    resolved = resolved.replaceAll(`{${k}}`, v);
-  }
-
-  const trimmed = resolved.trim();
-  const containsMatch = trimmed.match(/^(.+?)\s+contains\s+"([^"]*)"$/);
-  if (containsMatch) return containsMatch[1].trim().includes(containsMatch[2]);
-
-  const eqMatch = trimmed.match(/^(.+?)\s*==\s*"([^"]*)"$/);
-  if (eqMatch) return eqMatch[1].trim() === eqMatch[2];
-
-  const neqMatch = trimmed.match(/^(.+?)\s*!=\s*"([^"]*)"$/);
-  if (neqMatch) return neqMatch[1].trim() !== neqMatch[2];
-
-  return trimmed !== "" && trimmed !== "false" && trimmed !== "0";
-}
+// evaluateCondition and resolveVariables imported from ./utils.ts
 
 // ─── Pipeline executor ───────────────────────────────────────────────────────
 
@@ -184,7 +166,7 @@ export async function executePipeline(
 
           // Check condition
           if (chainRef.condition) {
-            if (!evaluateCondition(chainRef.condition, chainResults)) {
+            if (!evaluateCondition(resolveVariables(chainRef.condition, chainResults))) {
               chainStatus.status = "skipped";
               chainResults[chainRefId] = "";
               emit({

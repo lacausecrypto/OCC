@@ -23,6 +23,8 @@ export interface PreTool {
   server?: string;        // MCP server name (from occ-mcp-servers.json)
   tool?: string;          // Tool name on the MCP server
   args?: Record<string, unknown>; // Arguments to pass to the tool
+  // Error handling
+  on_error?: "inject" | "skip" | "fail"; // What to do when pre-tool fails (default: inject)
 }
 
 export type StepType = "agent" | "router" | "gate" | "evaluator" | "transform" | "loop" | "merge" | "browser" | "subchain" | "debate" | "webhook";

@@ -15,6 +15,7 @@ import type {
   StepResult,
 } from "./types.js";
 import { buildDependencyGraph } from "./loader.js";
+import { evaluateCondition, resolveVariables } from "./utils.js";
 import { saveExecution, checkpointStep, loadExecution as loadExecutionFromDb, listExecutions as listExecutionsFromDb, initStorage, getExecutionTimeline } from "./storage.js";
 
 // ─── In-memory execution store ────────────────────────────────────────────────
@@ -290,28 +291,6 @@ export function cancelExecution(id: string): boolean {
   return true;
 }
 
-// ─── Variable resolution ──────────────────────────────────────────────────────
-
-function resolveVariables(
-  template: string,
-  vars: Record<string, string>
-): string {
-  // Supports: {key}, {key|"fallback"}, {key|fallback}, {input.key}
-  return template.replace(
-    /\{(\w+)(?:\.(\w+))?(?:\|"?([^"}\s]*)"?)?\}/g,
-    (_match, key: string, subkey: string | undefined, fallback: string | undefined) => {
-      // Try {key.subkey} first (e.g. {input.topic})
-      if (subkey) {
-        const compound = `${key}.${subkey}`;
-        if (vars[compound] !== undefined) return vars[compound];
-      }
-      if (vars[key] !== undefined) return vars[key];
-      if (fallback !== undefined && fallback !== "") return fallback;
-      return _match; // keep original if no match
-    }
-  );
-}
-
 // ─── Pre-tool executor ────────────────────────────────────────────────────────
 
 async function executePreTools(
@@ -389,8 +368,20 @@ async function executePreTools(
       onLog(`pre-tool ${tool.type} → {${tool.inject_as}} (${result.length} chars)`, "info");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      results[tool.inject_as] = `[PRE-TOOL ERROR: ${message}]`;
-      onLog(`pre-tool ${tool.type} failed: ${message}`, "error");
+      const errorMode = tool.on_error ?? "inject";
+
+      if (errorMode === "fail") {
+        // Abort the entire step
+        throw new Error(`Pre-tool ${tool.type} (${tool.inject_as}) failed: ${message}`);
+      } else if (errorMode === "skip") {
+        // Skip this pre-tool — inject empty string, step continues cleanly
+        results[tool.inject_as] = "";
+        onLog(`pre-tool ${tool.type} failed (skipped): ${message}`, "warn");
+      } else {
+        // "inject" (default, backwards-compatible): inject error string into prompt
+        results[tool.inject_as] = `[PRE-TOOL ERROR: ${message}]`;
+        onLog(`pre-tool ${tool.type} failed: ${message}`, "error");
+      }
     }
   }
   return results;
@@ -674,32 +665,7 @@ function runClaude(
 
 // ─── Condition evaluator ──────────────────────────────────────────────────────
 
-function evaluateCondition(expr: string): boolean {
-  // Supported: 'a == "b"', 'a != "b"', 'a contains "b"', 'a != ""', boolean-like
-  const trimmed = expr.trim();
-
-  // equality: left == "right"
-  const eqMatch = trimmed.match(/^(.+?)\s*==\s*"([^"]*)"$/);
-  if (eqMatch) return eqMatch[1].trim() === eqMatch[2];
-
-  // inequality: left != "right"
-  const neqMatch = trimmed.match(/^(.+?)\s*!=\s*"([^"]*)"$/);
-  if (neqMatch) return neqMatch[1].trim() !== neqMatch[2];
-
-  // contains: left contains "right"
-  const containsMatch = trimmed.match(/^(.+?)\s+contains\s+"([^"]*)"$/);
-  if (containsMatch) return containsMatch[1].trim().includes(containsMatch[2]);
-
-  // numeric: left > N, left < N
-  const gtMatch = trimmed.match(/^(.+?)\s*>\s*(\d+)$/);
-  if (gtMatch) return Number(gtMatch[1].trim()) > Number(gtMatch[2]);
-
-  const ltMatch = trimmed.match(/^(.+?)\s*<\s*(\d+)$/);
-  if (ltMatch) return Number(ltMatch[1].trim()) < Number(ltMatch[2]);
-
-  // truthy: non-empty string = true
-  return trimmed !== "" && trimmed !== "false" && trimmed !== "0";
-}
+// evaluateCondition and resolveVariables imported from ./utils.ts
 
 // ─── Retry with exponential backoff + model fallback ─────────────────────────
 
