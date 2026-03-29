@@ -7,7 +7,7 @@ import type { ChainDefinition } from "./types.js";
 // ─── Validation schema ────────────────────────────────────────────────────────
 
 const PreToolSchema = z.object({
-  type: z.enum(["current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var"]),
+  type: z.enum(["current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var", "mcp_call"]),
   inject_as: z.string().min(1),
   label: z.string().optional(),
   url: z.string().optional(),
@@ -16,6 +16,10 @@ const PreToolSchema = z.object({
   content: z.string().optional(),
   command: z.string().optional(),
   var_name: z.string().optional(),
+  // mcp_call
+  server: z.string().optional(),
+  tool: z.string().optional(),
+  args: z.record(z.string(), z.unknown()).optional(),
 });
 
 const StepSchema = z.object({

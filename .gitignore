@@ -7,10 +7,14 @@ dist/
 # Runtime data
 executions.json
 schedules.json
+*.db
+*.db-wal
+*.db-shm
 output/
 
 # Local config (contains absolute paths)
 .mcp.json
+occ-mcp-servers.json
 
 # OS files
 .DS_Store

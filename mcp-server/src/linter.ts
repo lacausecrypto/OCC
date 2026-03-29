@@ -154,6 +154,12 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
       if (pt.type === "write_file" && (!pt.path || !pt.content)) {
         issues.push({ level: "error", stepId: step.id, message: `Pre-tool write_file missing "path" or "content"` });
       }
+      if (pt.type === "mcp_call" && !pt.server) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool mcp_call missing "server"` });
+      }
+      if (pt.type === "mcp_call" && !pt.tool) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool mcp_call missing "tool"` });
+      }
     }
   }
 
@@ -193,9 +199,23 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
         if (field) for (const ref of extractVarRefs(field)) referencedVars.add(ref);
       }
     }
-    // Condition
+    // Condition and loop
     if (step.condition) for (const ref of extractVarRefs(step.condition)) referencedVars.add(ref);
     if (step.early_exit_if) for (const ref of extractVarRefs(step.early_exit_if)) referencedVars.add(ref);
+    if (step.loop_until) for (const ref of extractVarRefs(step.loop_until)) referencedVars.add(ref);
+    if (step.items_var) referencedVars.add(step.items_var);
+    // Evaluator criteria
+    if (step.criteria) for (const ref of extractVarRefs(step.criteria)) referencedVars.add(ref);
+    // Subchain input map
+    if (step.subchain_input_map) {
+      for (const val of Object.values(step.subchain_input_map)) {
+        for (const ref of extractVarRefs(val)) referencedVars.add(ref);
+      }
+    }
+    // Gate auto-approve condition
+    if (step.gate_auto_approve_if) for (const ref of extractVarRefs(step.gate_auto_approve_if)) referencedVars.add(ref);
+    // Transform fields
+    if (step.template_str) for (const ref of extractVarRefs(step.template_str)) referencedVars.add(ref);
   }
 
   for (const step of chain.steps) {

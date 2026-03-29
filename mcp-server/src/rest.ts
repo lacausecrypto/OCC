@@ -15,7 +15,9 @@ import {
   deleteChain,
   loadChain,
 } from "./loader.js";
-import { executeChain, getExecution, getAllExecutions, cancelExecution, loadPersistedExecutions, resumeExecution, approveGate, getPendingApprovals, validateClaudeBinary, canStartExecution, getRunningExecutionCount } from "./executor.js";
+import { executeChain, getExecution, getAllExecutions, cancelExecution, loadPersistedExecutions, resumeExecution, approveGate, getPendingApprovals, validateClaudeBinary, canStartExecution, getRunningExecutionCount, getExecutionTimeline } from "./executor.js";
+import { getChainStats } from "./storage.js";
+import { loadMcpServers, discoverTools, getConfiguredServers } from "./mcp-client.js";
 import {
   initScheduler, setSSEEmitter,
   getSchedules, getSchedule,
@@ -229,6 +231,26 @@ app.get("/executions/:id", (req, res) => {
   const execution = getExecution(req.params.id);
   if (!execution) return res.status(404).json({ error: "Not found" });
   return res.json(execution);
+});
+
+// GET /executions/:id/timeline → time-travel checkpoint history
+app.get("/executions/:id/timeline", (req, res) => {
+  try {
+    const timeline = getExecutionTimeline(req.params.id);
+    return res.json(timeline);
+  } catch {
+    return res.status(404).json({ error: "Not found" });
+  }
+});
+
+// GET /chains/:name/stats → execution statistics for a chain
+app.get("/chains/:name/stats", (req, res) => {
+  try {
+    const stats = getChainStats(req.params.name);
+    return res.json(stats);
+  } catch {
+    return res.status(500).json({ error: "Stats unavailable" });
+  }
 });
 
 // DELETE /executions/:id → cancel a running execution
@@ -503,7 +525,22 @@ app.get("/pipeline-executions/:id", (req, res) => {
 });
 
 // GET /health
-app.get("/health", (_req, res) => res.json({ ok: true, version: "2.0.0", runningExecutions: getRunningExecutionCount() }));
+app.get("/health", (_req, res) => res.json({
+  ok: true,
+  version: "2.0.0",
+  runningExecutions: getRunningExecutionCount(),
+  mcpServers: getConfiguredServers(),
+}));
+
+// GET /mcp-servers → list configured external MCP servers and their tools
+app.get("/mcp-servers", async (_req, res) => {
+  try {
+    const tools = await discoverTools();
+    res.json(tools);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
 
 // ─── Generate Chain via Claude Code CLI + MCP (conversational + SSE stream) ──
 import { execFile, spawn, type ChildProcess } from "node:child_process";
@@ -888,6 +925,7 @@ const HOST = process.env.REST_HOST ?? "0.0.0.0";  // Listen on all interfaces fo
 app.listen(PORT, HOST, () => {
   process.stderr.write(`[occ-rest] Listening on http://${HOST}:${PORT}\n`);
   validateClaudeBinary();
+  loadMcpServers();
   loadPersistedExecutions();
   loadPersistedPipelineExecutions();
   setSSEEmitter(emitSSE);

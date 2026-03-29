@@ -6,7 +6,7 @@ export interface ChainInput {
   optional?: boolean;
 }
 
-export type PreToolType = "current_datetime" | "http_fetch" | "web_search" | "read_file" | "write_file" | "bash" | "env_var";
+export type PreToolType = "current_datetime" | "http_fetch" | "web_search" | "read_file" | "write_file" | "bash" | "env_var" | "mcp_call";
 
 export interface PreTool {
   type: PreToolType;
@@ -19,6 +19,10 @@ export interface PreTool {
   content?: string;       // write_file (supports {variables} — content to write)
   command?: string;       // bash (supports {variables})
   var_name?: string;      // env_var
+  // mcp_call
+  server?: string;        // MCP server name (from occ-mcp-servers.json)
+  tool?: string;          // Tool name on the MCP server
+  args?: Record<string, unknown>; // Arguments to pass to the tool
 }
 
 export type StepType = "agent" | "router" | "gate" | "evaluator" | "transform" | "loop" | "merge" | "browser" | "subchain" | "debate" | "webhook";

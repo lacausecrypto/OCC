@@ -4,12 +4,15 @@ WORKDIR /app
 
 # Copy package files and install dependencies
 COPY mcp-server/package*.json ./mcp-server/
-RUN cd mcp-server && npm ci --production
+RUN cd mcp-server && npm ci
 
-# Copy built source and chain definitions
+# Copy source and build
 COPY mcp-server/src ./mcp-server/src
 COPY mcp-server/tsconfig.json ./mcp-server/
 RUN cd mcp-server && npx tsc
+
+# Remove dev dependencies after build
+RUN cd mcp-server && npm prune --production
 
 COPY chains ./chains
 COPY pipelines ./pipelines

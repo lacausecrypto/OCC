@@ -1,0 +1,160 @@
+/**
+ * MCP Client — connect to external MCP servers and call their tools.
+ *
+ * Used by the `mcp_call` pre-tool type to consume external MCP servers
+ * (GitHub, Slack, PostgreSQL, Brave Search, etc.) inside chain steps.
+ *
+ * Supports both:
+ * - Global server config (via env or occ-mcp-servers.json)
+ * - Per-chain server config (inline in pre-tool definition)
+ */
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+
+interface McpServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+// ─── Server registry ────────────────────────────────────────────────────────
+
+const serverConfigs = new Map<string, McpServerConfig>();
+const activeClients = new Map<string, Client>();
+const serverTools = new Map<string, string[]>(); // server → tool names
+
+/** Load global MCP server configs from occ-mcp-servers.json or env. */
+export function loadMcpServers(): void {
+  // Try loading from config file
+  const configPaths = [
+    process.env.MCP_SERVERS_CONFIG,
+    path.join(process.env.CHAINS_DIR ?? "", "..", "occ-mcp-servers.json"),
+    path.join(os.homedir(), ".occ", "mcp-servers.json"),
+  ].filter(Boolean) as string[];
+
+  for (const configPath of configPaths) {
+    if (fs.existsSync(configPath)) {
+      try {
+        const raw = fs.readFileSync(configPath, "utf-8");
+        const config = JSON.parse(raw) as Record<string, McpServerConfig>;
+        for (const [name, serverConfig] of Object.entries(config)) {
+          serverConfigs.set(name, serverConfig);
+        }
+        process.stderr.write(`[occ-mcp] Loaded ${serverConfigs.size} MCP server(s) from ${configPath}\n`);
+        return;
+      } catch (err) {
+        process.stderr.write(`[occ-mcp] WARNING: Failed to parse ${configPath}: ${err}\n`);
+      }
+    }
+  }
+
+  if (serverConfigs.size === 0) {
+    process.stderr.write(`[occ-mcp] No external MCP servers configured. Create occ-mcp-servers.json to enable mcp_call pre-tool.\n`);
+  }
+}
+
+/** Register a server config (can be called from chain-level config). */
+export function registerMcpServer(name: string, config: McpServerConfig): void {
+  serverConfigs.set(name, config);
+}
+
+/** Connect to a server and return the client (cached). */
+async function getClient(serverName: string): Promise<Client> {
+  const existing = activeClients.get(serverName);
+  if (existing) return existing;
+
+  const config = serverConfigs.get(serverName);
+  if (!config) {
+    throw new Error(`MCP server "${serverName}" not configured. Add it to occ-mcp-servers.json or register it in the chain.`);
+  }
+
+  const transport = new StdioClientTransport({
+    command: config.command,
+    args: config.args ?? [],
+    env: { ...process.env, ...(config.env ?? {}) } as Record<string, string>,
+  });
+
+  const client = new Client(
+    { name: `occ-${serverName}`, version: "1.0.0" },
+    { capabilities: {} },
+  );
+
+  await client.connect(transport);
+  activeClients.set(serverName, client);
+
+  // Discover tools
+  try {
+    const toolsResult = await client.listTools();
+    const toolNames = toolsResult.tools.map((t) => t.name);
+    serverTools.set(serverName, toolNames);
+    process.stderr.write(`[occ-mcp] Connected to "${serverName}" — ${toolNames.length} tools available\n`);
+  } catch {
+    process.stderr.write(`[occ-mcp] Connected to "${serverName}" — tool discovery failed\n`);
+  }
+
+  return client;
+}
+
+// ─── Public API ─────────────────────────────────────────────────────────────
+
+/** Call a tool on an external MCP server. */
+export async function mcpCall(
+  serverName: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const client = await getClient(serverName);
+
+  const result = await client.callTool({
+    name: toolName,
+    arguments: args,
+  });
+
+  // Extract text content from MCP result
+  if (result.content && Array.isArray(result.content)) {
+    return result.content
+      .map((c: any) => {
+        if (c.type === "text") return c.text;
+        if (c.type === "image") return `[image: ${c.mimeType}]`;
+        return JSON.stringify(c);
+      })
+      .join("\n");
+  }
+
+  return JSON.stringify(result);
+}
+
+/** List all available tools across all configured servers. */
+export async function discoverTools(): Promise<Record<string, string[]>> {
+  const result: Record<string, string[]> = {};
+
+  for (const [name] of serverConfigs) {
+    try {
+      const client = await getClient(name);
+      const toolsResult = await client.listTools();
+      result[name] = toolsResult.tools.map((t) => `${t.name}: ${t.description ?? ""}`);
+    } catch (err) {
+      result[name] = [`(error: ${err instanceof Error ? err.message : String(err)})`];
+    }
+  }
+
+  return result;
+}
+
+/** Get list of configured server names. */
+export function getConfiguredServers(): string[] {
+  return [...serverConfigs.keys()];
+}
+
+/** Shutdown all active MCP clients. */
+export async function closeMcpClients(): Promise<void> {
+  for (const [name, client] of activeClients) {
+    try {
+      await client.close();
+    } catch { /* ignore */ }
+  }
+  activeClients.clear();
+}

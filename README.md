@@ -170,7 +170,29 @@ pre_tools:
 
   - type: current_datetime
     inject_as: now
+
+  - type: mcp_call
+    server: "github"
+    tool: "search_repositories"
+    args: { query: "{input.topic}" }
+    inject_as: repos
 ```
+
+### External MCP Servers
+
+OCC can consume any MCP server as a pre-tool. Configure servers in `occ-mcp-servers.json`:
+
+```json
+{
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..." }
+  }
+}
+```
+
+Then use `mcp_call` in any chain to access 10,000+ MCP tools (GitHub, Slack, PostgreSQL, Brave Search, etc.).
 
 ### Advanced Features
 
@@ -270,6 +292,8 @@ output: content
 | GET | `/executions` | List all executions (paginated) |
 | DELETE | `/executions/:id` | Cancel a running execution |
 | POST | `/executions/:id/resume` | Resume from last checkpoint |
+| GET | `/executions/:id/timeline` | Time-travel: step checkpoint history |
+| GET | `/chains/:name/stats` | Execution stats (success rate, avg duration, tokens) |
 
 ### Gates (Human-in-the-loop)
 | Method | Endpoint | Description |
@@ -343,12 +367,15 @@ When used via Claude Code or Claude Desktop, OCC exposes 25 MCP tools:
                     └──────────┘          └────────────┘
 ```
 
-- **MCP Server** — stdio transport, exposes tools for Claude Code
+- **MCP Server** — stdio transport, exposes 25 tools for Claude Code
 - **REST Server** — Express on port 4242, CORS-enabled, SSE streaming
 - **Executor** — topological sort, parallel execution, process management, timeout handling
 - **Loader** — YAML parsing with Zod validation, dependency graph construction
 - **Scheduler** — cron-based execution with node-cron
 - **Pipeline Executor** — multi-chain orchestration with output passing
+- **Storage** — SQLite (WAL mode) with per-step checkpointing and time-travel queries
+- **MCP Client** — consume external MCP servers (GitHub, Slack, PostgreSQL, etc.) via `mcp_call` pre-tool
+- **Linter** — static analysis: undefined variables, unreachable steps, invalid routes, unused outputs
 
 ## CLI
 

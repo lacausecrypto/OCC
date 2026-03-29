@@ -15,6 +15,7 @@ import type {
   StepResult,
 } from "./types.js";
 import { buildDependencyGraph } from "./loader.js";
+import { saveExecution, checkpointStep, loadExecution as loadExecutionFromDb, listExecutions as listExecutionsFromDb, initStorage, getExecutionTimeline } from "./storage.js";
 
 // ─── In-memory execution store ────────────────────────────────────────────────
 
@@ -34,6 +35,14 @@ function getExecutionsFile(): string {
 }
 
 function persistExecutions(): void {
+  // Write to SQLite (primary)
+  try {
+    for (const exec of executions.values()) {
+      saveExecution(exec);
+    }
+  } catch { /* SQLite not initialized yet — fallback to JSON */ }
+
+  // JSON fallback for backwards compatibility
   try {
     const file = getExecutionsFile();
     const data = JSON.stringify([...executions.values()].slice(-200), null, 2);
@@ -41,7 +50,36 @@ function persistExecutions(): void {
   } catch { /* ignore */ }
 }
 
+/** Checkpoint a single execution to SQLite (called after each step). */
+function persistStepCheckpoint(executionId: string, step: StepResult): void {
+  try {
+    checkpointStep(executionId, step);
+    const exec = executions.get(executionId);
+    if (exec) saveExecution(exec);
+  } catch { /* best-effort */ }
+}
+
 export function loadPersistedExecutions(): void {
+  // Initialize SQLite storage
+  try {
+    initStorage();
+  } catch (err) {
+    process.stderr.write(`[occ] WARNING: SQLite init failed, falling back to JSON: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
+
+  // Load from SQLite (primary)
+  try {
+    const dbExecutions = listExecutionsFromDb(200, 0);
+    if (dbExecutions.length > 0) {
+      for (const ex of dbExecutions) {
+        executions.set(ex.id, ex);
+      }
+      process.stderr.write(`[occ] Loaded ${executions.size} executions from SQLite\n`);
+      return;
+    }
+  } catch { /* SQLite not available, try JSON */ }
+
+  // Fallback: load from JSON
   try {
     const file = getExecutionsFile();
     if (!fs.existsSync(file)) return;
@@ -55,7 +93,6 @@ export function loadPersistedExecutions(): void {
       fs.writeFileSync(file, "[]", "utf-8");
       return;
     }
-    // Fix orphaned running executions from previous crash
     for (const ex of data) {
       if (ex.status === "running") {
         ex.status = "error";
@@ -63,24 +100,30 @@ export function loadPersistedExecutions(): void {
         ex.finishedAt = new Date().toISOString();
       }
     }
-
-    // Purge executions older than 7 days to prevent unbounded growth
     const maxAge = Number(process.env.EXECUTION_MAX_AGE_DAYS) || 7;
     const cutoff = Date.now() - maxAge * 86400000;
-    let purged = 0;
     for (const ex of data) {
-      const ts = new Date(ex.startedAt).getTime();
-      if (ts >= cutoff) {
+      if (new Date(ex.startedAt).getTime() >= cutoff) {
         executions.set(ex.id, ex);
-      } else {
-        purged++;
       }
     }
-    process.stderr.write(`[occ] Loaded ${executions.size} persisted executions${purged ? ` (purged ${purged} older than ${maxAge}d)` : ""}\n`);
+    // Migrate JSON → SQLite
+    try {
+      for (const ex of executions.values()) {
+        saveExecution(ex);
+        for (const step of Object.values(ex.steps)) {
+          checkpointStep(ex.id, step);
+        }
+      }
+      process.stderr.write(`[occ] Migrated ${executions.size} executions from JSON to SQLite\n`);
+    } catch { /* migration best-effort */ }
   } catch (err) {
     process.stderr.write(`[occ] WARNING: Failed to load executions: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 }
+
+/** Get execution timeline (time-travel). */
+export { getExecutionTimeline };
 
 export function getExecution(id: string): ChainExecution | undefined {
   return executions.get(id);
@@ -331,6 +374,16 @@ async function executePreTools(
         case "env_var":
           result = process.env[tool.var_name ?? ""] ?? "";
           break;
+        case "mcp_call": {
+          const { mcpCall } = await import("./mcp-client.js");
+          // Resolve variables in args
+          const resolvedArgs: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(tool.args ?? {})) {
+            resolvedArgs[k] = typeof v === "string" ? resolveVariables(v, vars) : v;
+          }
+          result = await mcpCall(tool.server ?? "", tool.tool ?? "", resolvedArgs);
+          break;
+        }
       }
       results[tool.inject_as] = result;
       onLog(`pre-tool ${tool.type} → {${tool.inject_as}} (${result.length} chars)`, "info");
@@ -1812,6 +1865,7 @@ async function executeStep(
   }
 
   emit({ type: "step_done", executionId, stepId, durationMs, inputTokens, outputTokens });
+  persistStepCheckpoint(executionId, stepResult);
   persistExecutions();
 }
 
@@ -1886,6 +1940,7 @@ export async function executeChain(
             stepResult.finishedAt = new Date().toISOString();
 
             emit({ type: "step_error", executionId, stepId, error });
+            persistStepCheckpoint(executionId, stepResult);
             persistExecutions();
             throw err;
           }
