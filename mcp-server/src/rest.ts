@@ -973,10 +973,12 @@ app.listen(PORT, HOST, () => {
   // Initialize queue with a runner that executes chains
   initQueue(async (job) => {
     const chain = loadChain(job.name);
-    const executionId = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
+    let executionId = "";
     const emitter = (event: ExecutionEvent) => {
-      if (event.type === "execution_started") (event as any).executionId = executionId;
-      emitSSE(executionId, event);
+      if (event.type === "execution_started") {
+        executionId = event.executionId; // Capture ACTUAL executionId from executor
+      }
+      if (executionId) emitSSE(executionId, event);
     };
     await executeChain(chain, job.input, emitter);
     return executionId;

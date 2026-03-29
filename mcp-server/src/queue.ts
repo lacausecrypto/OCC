@@ -40,7 +40,9 @@ let _runner: JobRunner | null = null;
 let _processing = false;
 let _interval: ReturnType<typeof setInterval> | null = null;
 
-const MAX_WORKERS = Number(process.env.MAX_CONCURRENT_EXECUTIONS) || 5;
+const MAX_WORKERS = process.env.MAX_CONCURRENT_EXECUTIONS !== undefined
+  ? Math.max(1, Number(process.env.MAX_CONCURRENT_EXECUTIONS))
+  : 5;
 let activeWorkers = 0;
 
 // ─── Init ───────────────────────────────────────────────────────────────────
@@ -54,7 +56,20 @@ function getQueueDbPath(): string {
 }
 
 export function initQueue(runner: JobRunner): void {
+  // Guard against double initialization (leaks interval + db connection)
+  if (_interval) {
+    clearInterval(_interval);
+    _interval = null;
+  }
+  if (db?.open) {
+    _stmts = null;
+    db.close();
+  }
+
   _runner = runner;
+  _processing = false;
+  activeWorkers = 0;
+
   const dbPath = getQueueDbPath();
   const dir = path.dirname(dbPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -308,5 +323,8 @@ export function closeQueue(): void {
   if (_interval) clearInterval(_interval);
   _interval = null;
   _stmts = null;
-  if (db) db.close();
+  _runner = null;
+  _processing = false;
+  activeWorkers = 0;
+  if (db?.open) db.close();
 }
