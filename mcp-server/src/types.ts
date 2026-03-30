@@ -6,7 +6,7 @@ export interface ChainInput {
   optional?: boolean;
 }
 
-export type PreToolType = "current_datetime" | "http_fetch" | "web_search" | "read_file" | "write_file" | "bash" | "env_var" | "mcp_call";
+export type PreToolType = "current_datetime" | "http_fetch" | "web_search" | "read_file" | "write_file" | "bash" | "env_var" | "mcp_call" | "db_query" | "email" | "pdf_generate" | "ocr";
 
 export interface PreTool {
   type: PreToolType;
@@ -28,6 +28,32 @@ export interface PreTool {
   headers?: Record<string, string>;  // custom headers (supports {variables})
   body?: string;          // request body (supports {variables})
   json_path?: string;     // extract JSON path from response (e.g. "data.items[0]")
+  // current_datetime
+  timezone?: string;          // IANA timezone (default: UTC) e.g. "Europe/Paris", "America/New_York"
+  format?: string;            // "iso" (default) | "locale" | "unix"
+  // read_file / write_file
+  encoding?: string;          // default: "utf-8". Supports any Node.js encoding
+  append?: boolean;           // write_file: append instead of overwrite (default: false)
+  // bash
+  stderr?: boolean;           // capture stderr too (default: false — stdout only)
+  // env_var
+  default_value?: string;     // fallback if env var not set (default: "")
+  // db_query
+  connection?: string;        // connection string (supports {variables})
+  sql?: string;               // SQL query (supports {variables})
+  // email
+  to?: string;                // recipient email (supports {variables})
+  subject?: string;           // email subject (supports {variables})
+  from?: string;              // sender email
+  provider?: string;          // "smtp" | "sendgrid" (default: smtp)
+  smtp_host?: string;         // SMTP server host
+  smtp_port?: number;         // SMTP server port
+  // pdf_generate
+  html?: string;              // HTML content to convert (supports {variables})
+  output_path?: string;       // where to save PDF (supports {variables})
+  // ocr
+  image_path?: string;        // path to image file (supports {variables})
+  language?: string;          // OCR language (default: "eng")
   // Error handling
   on_error?: "inject" | "skip" | "fail"; // What to do when pre-tool fails (default: inject)
   // Timeout & retry (per pre-tool)

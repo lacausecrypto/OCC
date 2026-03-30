@@ -16,6 +16,9 @@ import { getSchedules, createSchedule, toggleSchedule, deleteSchedule } from "./
 import { listPipelines, loadPipeline } from "./pipeline-loader.js";
 import { executePipeline, getPipelineExecution, getAllPipelineExecutions } from "./pipeline-executor.js";
 import type { ChainDefinition, ChainStep, PreTool, ExecutionEvent } from "./types.js";
+import { lintChain, dryRunChain } from "./linter.js";
+import { getChainStats } from "./storage.js";
+import { getQueueStats, listQueueJobs } from "./queue.js";
 
 // Also start REST server alongside MCP server
 import "./rest.js";
@@ -578,6 +581,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
       },
+    },
+    {
+      name: "dry_run_chain",
+      description:
+        "Preview the execution plan and cost estimate for a chain WITHOUT making any LLM calls. " +
+        "Shows execution waves, parallel steps, model assignments, prompt previews, and estimated cost.",
+      inputSchema: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          name: { type: "string", description: "Chain name" },
+          input: {
+            type: "object",
+            description: "Input variables for the chain",
+            additionalProperties: { type: "string" },
+          },
+        },
+      },
+    },
+    {
+      name: "chain_stats",
+      description:
+        "Get execution statistics for a chain from the SQLite database. " +
+        "Returns total runs, success rate, average duration, and total token usage.",
+      inputSchema: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          name: { type: "string", description: "Chain name" },
+        },
+      },
+    },
+    {
+      name: "queue_status",
+      description:
+        "Get the current queue status: queued jobs, running workers, completed count, " +
+        "average wait time, and recent jobs.",
+      inputSchema: { type: "object", properties: {} },
     },
   ],
 }));
@@ -1270,6 +1311,84 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         if (pEx.error) lines.push(`\nError: ${pEx.error}`);
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      // ── dry_run_chain ─────────────────────────────────────────────
+      case "dry_run_chain": {
+        const chainName = args?.name as string;
+        if (!chainName) throw new Error("Missing required argument: name");
+        const chain = loadChain(chainName);
+        const input = (args?.input ?? {}) as Record<string, string>;
+        const result = dryRunChain(chain, input);
+
+        const lines: string[] = [];
+
+        // Issues
+        if (result.issues.length > 0) {
+          lines.push("Issues:");
+          for (const issue of result.issues) {
+            lines.push(`  ${issue.level}: ${issue.stepId ? `${issue.stepId}: ` : ""}${issue.message}`);
+          }
+          lines.push("");
+        }
+
+        // Plan
+        lines.push(`Execution Plan: ${chain.name}\n`);
+        let currentWave = 0;
+        for (const step of result.plan) {
+          if (step.wave !== currentWave) {
+            currentWave = step.wave;
+            const parallel = result.plan.filter((s) => s.wave === currentWave).length;
+            lines.push(`  Wave ${currentWave}${parallel > 1 ? ` (${parallel} parallel)` : ""}`);
+          }
+          lines.push(`    ${step.stepId} [${step.model}]${step.dependsOn.length ? ` ← ${step.dependsOn.join(", ")}` : ""}`);
+        }
+
+        // Cost
+        lines.push(`\nEstimated Cost:`);
+        lines.push(`  Steps: ${result.estimatedCost.totalSteps} (${result.estimatedCost.parallelWaves} waves)`);
+        for (const [model, count] of Object.entries(result.estimatedCost.models)) {
+          lines.push(`  ${model}: ${count} step(s)`);
+        }
+
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      // ── chain_stats ─────────────────────────────────────────────────
+      case "chain_stats": {
+        const statsChainName = args?.name as string;
+        if (!statsChainName) throw new Error("Missing required argument: name");
+        const stats = getChainStats(statsChainName);
+        const lines = [
+          `Stats for ${statsChainName}:`,
+          `  Total runs: ${stats.totalRuns}`,
+          `  Success rate: ${stats.successRate.toFixed(1)}%`,
+          `  Avg duration: ${stats.avgDurationMs > 0 ? `${(stats.avgDurationMs / 1000).toFixed(1)}s` : "n/a"}`,
+          `  Total tokens: ${stats.totalTokens.input} input, ${stats.totalTokens.output} output`,
+        ];
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      // ── queue_status ────────────────────────────────────────────────
+      case "queue_status": {
+        const qStats = getQueueStats();
+        const recentJobs = listQueueJobs(10, 0);
+        const lines = [
+          `Queue Status:`,
+          `  Queued: ${qStats.queued}`,
+          `  Running: ${qStats.running}`,
+          `  Done: ${qStats.done}`,
+          `  Errors: ${qStats.errored}`,
+          `  Workers: ${qStats.activeWorkers}/${qStats.maxWorkers}`,
+          `  Avg wait: ${qStats.avgWaitSeconds}s`,
+        ];
+        if (recentJobs.length > 0) {
+          lines.push("\nRecent jobs:");
+          for (const job of recentJobs.slice(0, 5)) {
+            lines.push(`  ${job.status} ${job.name} (p${job.priority})${job.executionId ? ` → ${job.executionId}` : ""}`);
+          }
+        }
         return { content: [{ type: "text", text: lines.join("\n") }] };
       }
 

@@ -165,6 +165,28 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
       if (pt.type === "mcp_call" && !pt.tool) {
         issues.push({ level: "error", stepId: step.id, message: `Pre-tool mcp_call missing "tool"` });
       }
+      // db_query validation
+      if (pt.type === "db_query" && !pt.connection) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool db_query missing "connection"` });
+      }
+      if (pt.type === "db_query" && !pt.sql) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool db_query missing "sql"` });
+      }
+      // email validation
+      if (pt.type === "email" && !pt.to) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool email missing "to"` });
+      }
+      if (pt.type === "email" && !pt.subject) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool email missing "subject"` });
+      }
+      // pdf_generate validation
+      if (pt.type === "pdf_generate" && !pt.html && !pt.content) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool pdf_generate missing "html" or "content"` });
+      }
+      // ocr validation
+      if (pt.type === "ocr" && !pt.image_path && !pt.path) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool ocr missing "image_path"` });
+      }
       // Validate http_fetch URL format
       if (pt.type === "http_fetch" && pt.url && !pt.url.includes("{")) {
         try { new URL(pt.url); }
@@ -209,7 +231,7 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
     }
     // Check pre_tool queries
     for (const pt of step.pre_tools ?? []) {
-      for (const field of [pt.query, pt.url, pt.path, pt.content, pt.command, pt.body]) {
+      for (const field of [pt.query, pt.url, pt.path, pt.content, pt.command, pt.body, pt.connection, pt.sql, pt.to, pt.subject, pt.html, pt.output_path, pt.image_path]) {
         if (field) for (const ref of extractVarRefs(field)) referencedVars.add(ref);
       }
       if (pt.headers) {

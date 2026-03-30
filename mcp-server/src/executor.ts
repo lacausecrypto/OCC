@@ -325,9 +325,18 @@ async function executeSinglePreTool(
   let result = "";
 
   switch (tool.type) {
-    case "current_datetime":
-      result = new Date().toISOString();
+    case "current_datetime": {
+      const tz = tool.timezone ?? "UTC";
+      const fmt = tool.format ?? "iso";
+      if (fmt === "unix") {
+        result = String(Math.floor(Date.now() / 1000));
+      } else if (fmt === "locale") {
+        result = new Date().toLocaleString("en-US", { timeZone: tz, dateStyle: "full", timeStyle: "medium" });
+      } else {
+        result = new Date().toISOString();
+      }
       break;
+    }
 
     case "http_fetch": {
       const url = resolveVariables(tool.url ?? "", vars);
@@ -389,7 +398,8 @@ async function executeSinglePreTool(
 
     case "read_file": {
       const filePath = resolveVariables(tool.path ?? "", vars);
-      result = fs.readFileSync(filePath, "utf-8");
+      const encoding = (tool.encoding ?? "utf-8") as BufferEncoding;
+      result = fs.readFileSync(filePath, encoding);
       if (result.length > 50000) {
         result = result.slice(0, 50000) + "\n[truncated]";
         onLog(`read_file truncated to 50KB for ${filePath}`, "warn");
@@ -400,22 +410,39 @@ async function executeSinglePreTool(
     case "write_file": {
       const filePath = resolveVariables(tool.path ?? "", vars);
       const fileContent = resolveVariables(tool.content ?? "", vars);
+      const encoding = (tool.encoding ?? "utf-8") as BufferEncoding;
       const dir = path.dirname(filePath);
       if (dir) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(filePath, fileContent, "utf-8");
+      if (tool.append) {
+        fs.appendFileSync(filePath, fileContent, encoding);
+      } else {
+        fs.writeFileSync(filePath, fileContent, encoding);
+      }
       result = filePath;
-      onLog(`write_file → ${filePath} (${fileContent.length} chars)`, "info");
+      onLog(`write_file${tool.append ? " (append)" : ""} → ${filePath} (${fileContent.length} chars)`, "info");
       break;
     }
 
     case "bash": {
       const command = resolveVariables(tool.command ?? "", vars);
-      result = execSync(command, { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+      if (tool.stderr) {
+        // Capture both stdout + stderr
+        try {
+          const proc = require("node:child_process").spawnSync("sh", ["-c", command], {
+            timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024,
+          });
+          result = (proc.stdout || "") + (proc.stderr ? "\n[stderr]\n" + proc.stderr : "");
+        } catch (e) {
+          result = String(e);
+        }
+      } else {
+        result = execSync(command, { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+      }
       break;
     }
 
     case "env_var":
-      result = process.env[tool.var_name ?? ""] ?? "";
+      result = process.env[tool.var_name ?? ""] ?? tool.default_value ?? "";
       break;
 
     case "mcp_call": {
@@ -425,6 +452,118 @@ async function executeSinglePreTool(
         resolvedArgs[k] = typeof v === "string" ? resolveVariables(v, vars) : v;
       }
       result = await mcpCall(tool.server ?? "", tool.tool ?? "", resolvedArgs);
+      break;
+    }
+
+    case "db_query": {
+      // Database query via shell — supports PostgreSQL, MySQL, SQLite
+      // Requires the DB client CLI to be installed (psql, mysql, sqlite3)
+      const connStr = resolveVariables(tool.connection ?? "", vars);
+      const sqlQuery = resolveVariables(tool.sql ?? "", vars);
+
+      if (!connStr || !sqlQuery) throw new Error("db_query requires connection and sql");
+
+      let cmd: string;
+      if (connStr.startsWith("postgres")) {
+        cmd = `psql "${connStr}" -t -A -c "${sqlQuery.replace(/"/g, '\\"')}"`;
+      } else if (connStr.startsWith("mysql")) {
+        // mysql://user:pass@host:port/db
+        cmd = `mysql --batch --raw -e "${sqlQuery.replace(/"/g, '\\"')}" "${connStr}"`;
+      } else if (connStr.endsWith(".db") || connStr.endsWith(".sqlite") || connStr.startsWith("sqlite:")) {
+        const dbPath = connStr.replace("sqlite:", "");
+        cmd = `sqlite3 "${dbPath}" "${sqlQuery.replace(/"/g, '\\"')}"`;
+      } else {
+        throw new Error(`db_query: unsupported connection string format. Use postgres://, mysql://, or path.db`);
+      }
+
+      result = execSync(cmd, { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+      break;
+    }
+
+    case "email": {
+      // Send email via shell — uses built-in mail/sendmail or curl for SendGrid
+      const to = resolveVariables(tool.to ?? "", vars);
+      const subject = resolveVariables(tool.subject ?? "", vars);
+      const emailBody = resolveVariables(tool.content ?? tool.body ?? "", vars);
+      const provider = tool.provider ?? "smtp";
+
+      if (!to || !subject) throw new Error("email requires to and subject");
+
+      if (provider === "sendgrid") {
+        const apiKey = process.env.SENDGRID_API_KEY ?? "";
+        if (!apiKey) throw new Error("email (sendgrid): SENDGRID_API_KEY env var required");
+        const from = tool.from ?? process.env.SENDGRID_FROM ?? "noreply@example.com";
+        const payload = JSON.stringify({
+          personalizations: [{ to: [{ email: to }] }],
+          from: { email: from },
+          subject,
+          content: [{ type: "text/plain", value: emailBody }],
+        });
+        const resp = await fetch("https://api.sendgrid.com/v3/mail/send", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: payload,
+        });
+        result = resp.ok ? `Email sent to ${to} (${resp.status})` : `Email failed: ${resp.status} ${await resp.text()}`;
+      } else {
+        // SMTP via sendmail/mail CLI
+        const host = tool.smtp_host ? `--smtp-server=${tool.smtp_host}` : "";
+        const cmd = `echo "${emailBody.replace(/"/g, '\\"')}" | mail -s "${subject.replace(/"/g, '\\"')}" ${host} "${to}"`;
+        try {
+          execSync(cmd, { timeout: timeoutMs, encoding: "utf-8" });
+          result = `Email sent to ${to}`;
+        } catch (e) {
+          throw new Error(`email (smtp) failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      break;
+    }
+
+    case "pdf_generate": {
+      // Generate PDF from HTML using wkhtmltopdf (must be installed)
+      const htmlContent = resolveVariables(tool.html ?? tool.content ?? "", vars);
+      const outputPath = resolveVariables(tool.output_path ?? tool.path ?? "/tmp/occ-output.pdf", vars);
+
+      if (!htmlContent) throw new Error("pdf_generate requires html content");
+
+      const htmlTmpPath = outputPath.replace(/\.pdf$/, ".html");
+      const dir = path.dirname(outputPath);
+      if (dir) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(htmlTmpPath, htmlContent, "utf-8");
+
+      try {
+        execSync(`wkhtmltopdf --quiet "${htmlTmpPath}" "${outputPath}"`, { timeout: timeoutMs });
+        result = outputPath;
+        onLog(`pdf_generate → ${outputPath}`, "info");
+      } catch {
+        // Fallback: try Puppeteer/Chrome headless
+        try {
+          execSync(`google-chrome --headless --disable-gpu --print-to-pdf="${outputPath}" "${htmlTmpPath}"`, { timeout: timeoutMs });
+          result = outputPath;
+        } catch {
+          throw new Error("pdf_generate requires wkhtmltopdf or Chrome. Install: apt install wkhtmltopdf");
+        }
+      } finally {
+        try { fs.unlinkSync(htmlTmpPath); } catch { /* cleanup */ }
+      }
+      break;
+    }
+
+    case "ocr": {
+      // OCR via Tesseract (must be installed)
+      const imagePath = resolveVariables(tool.image_path ?? tool.path ?? "", vars);
+      const lang = tool.language ?? "eng";
+
+      if (!imagePath) throw new Error("ocr requires image_path");
+      if (!fs.existsSync(imagePath)) throw new Error(`ocr: file not found: ${imagePath}`);
+
+      try {
+        result = execSync(`tesseract "${imagePath}" stdout -l ${lang}`, {
+          timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024,
+        });
+      } catch {
+        throw new Error("ocr requires Tesseract. Install: apt install tesseract-ocr");
+      }
       break;
     }
   }

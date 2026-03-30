@@ -7,7 +7,7 @@ import type { ChainDefinition } from "./types.js";
 // ─── Validation schema ────────────────────────────────────────────────────────
 
 const PreToolSchema = z.object({
-  type: z.enum(["current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var", "mcp_call"]),
+  type: z.enum(["current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var", "mcp_call", "db_query", "email", "pdf_generate", "ocr"]),
   inject_as: z.string().min(1),
   label: z.string().optional(),
   url: z.string().optional(),
@@ -25,6 +25,32 @@ const PreToolSchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
   body: z.string().optional(),
   json_path: z.string().optional(),
+  // current_datetime
+  timezone: z.string().optional(),
+  format: z.enum(["iso", "locale", "unix"]).optional(),
+  // read_file / write_file
+  encoding: z.string().optional(),
+  append: z.boolean().optional(),
+  // bash
+  stderr: z.boolean().optional(),
+  // env_var
+  default_value: z.string().optional(),
+  // db_query
+  connection: z.string().optional(),
+  sql: z.string().optional(),
+  // email
+  to: z.string().optional(),
+  subject: z.string().optional(),
+  from: z.string().optional(),
+  provider: z.enum(["smtp", "sendgrid"]).optional(),
+  smtp_host: z.string().optional(),
+  smtp_port: z.number().optional(),
+  // pdf_generate
+  html: z.string().optional(),
+  output_path: z.string().optional(),
+  // ocr
+  image_path: z.string().optional(),
+  language: z.string().optional(),
   // Error handling
   on_error: z.enum(["inject", "skip", "fail"]).optional(),
   // Timeout & retry
