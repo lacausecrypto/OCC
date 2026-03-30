@@ -1,17 +1,22 @@
 /**
  * Advanced pre-tool implementations.
  * Separated from executor.ts to keep file sizes manageable.
- *
- * Tier 1: state_load/save, vector_query/index, json_parse, diff_inject, notify
- * Tier 2: semantic_cache, screenshot, sandbox_exec, cost_gate, ast_parse
- * Tier 3: embed_compare, graph_query, parallel_fetch, template_render, approval_request
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import Database from "better-sqlite3";
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Validate that a string is a safe git ref (prevent shell injection). */
+function validateGitRef(ref: string): void {
+  if (!/^[a-zA-Z0-9\-_/.~^]+$/.test(ref)) {
+    throw new Error(`Invalid git ref: "${ref}" — only alphanumeric, -, _, /, ., ~, ^ allowed`);
+  }
+}
 
 // ─── State Store (state_load / state_save) ──────────────────────────────────
 
@@ -73,7 +78,6 @@ function getVectorDb(): Database.Database {
 export function vectorIndex(collection: string, text: string, chunkSize: number): string {
   const db = getVectorDb();
   const sourceId = crypto.randomBytes(8).toString("hex");
-  // Chunk text
   const chunks: string[] = [];
   for (let i = 0; i < text.length; i += chunkSize) {
     chunks.push(text.slice(i, i + chunkSize));
@@ -90,22 +94,25 @@ export function vectorIndex(collection: string, text: string, chunkSize: number)
 
 export function vectorQuery(collection: string, query: string, topK: number): string {
   const db = getVectorDb();
-  const rows = db.prepare(`
-    SELECT chunk, rank FROM vectors WHERE collection = ? AND vectors MATCH ? ORDER BY rank LIMIT ?
-  `).all(collection, query, topK) as any[];
-  if (rows.length === 0) return "(no results)";
-  return rows.map((r, i) => `[${i + 1}] ${r.chunk.slice(0, 500)}`).join("\n\n");
+  try {
+    const rows = db.prepare(`
+      SELECT chunk, rank FROM vectors WHERE collection = ? AND vectors MATCH ? ORDER BY rank LIMIT ?
+    `).all(collection, query, topK) as any[];
+    if (rows.length === 0) return "(no results)";
+    return rows.map((r, i) => `[${i + 1}] ${r.chunk}`).join("\n\n");
+  } catch {
+    // FTS5 query syntax error — return empty
+    return "(no results — query syntax may be invalid)";
+  }
 }
 
 // ─── JSON Parse (json_parse) ────────────────────────────────────────────────
 
 export function jsonParse(input: string, jsonPath: string): string {
-  // Try to extract JSON from the input (handles markdown-wrapped JSON)
   let json: any;
   try {
     json = JSON.parse(input);
   } catch {
-    // Try to find JSON in markdown code blocks
     const match = input.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (match) {
       json = JSON.parse(match[1].trim());
@@ -114,12 +121,16 @@ export function jsonParse(input: string, jsonPath: string): string {
     }
   }
 
+  if (jsonPath === "$" || !jsonPath) {
+    return typeof json === "string" ? json : JSON.stringify(json, null, 2);
+  }
+
   // Navigate path: "data.items[0].name"
   const parts = jsonPath.replace(/\[(\d+)\]/g, ".$1").split(".");
   let current = json;
   for (const part of parts) {
     if (current === null || current === undefined) return "";
-    current = current[part];
+    current = Array.isArray(current) ? current[Number(part)] : current[part];
   }
 
   return typeof current === "string" ? current : JSON.stringify(current, null, 2);
@@ -128,45 +139,52 @@ export function jsonParse(input: string, jsonPath: string): string {
 // ─── Diff Inject (diff_inject) ──────────────────────────────────────────────
 
 export function diffInject(repoPath: string, base: string, head: string, maxTokens: number): string {
-  const stat = execSync(`git -C "${repoPath}" diff --stat ${base}...${head}`, { encoding: "utf-8", timeout: 15000 });
-  const diff = execSync(`git -C "${repoPath}" diff ${base}...${head}`, { encoding: "utf-8", timeout: 15000 });
+  // Validate refs to prevent shell injection
+  validateGitRef(base);
+  validateGitRef(head);
 
-  const lines: string[] = [];
-  lines.push("## Changed Files");
-  lines.push(stat.trim());
-  lines.push("");
+  try {
+    const stat = execFileSync("git", ["-C", repoPath, "diff", "--stat", `${base}...${head}`], { encoding: "utf-8", timeout: 15000 });
+    const diff = execFileSync("git", ["-C", repoPath, "diff", `${base}...${head}`], { encoding: "utf-8", timeout: 15000 });
 
-  // Parse diff into per-file sections
-  const fileDiffs = diff.split(/^diff --git/m).filter(Boolean);
-  let totalChars = stat.length;
+    const lines: string[] = [];
+    lines.push("## Changed Files");
+    lines.push(stat.trim());
+    lines.push("");
 
-  for (const fileDiff of fileDiffs) {
-    const nameMatch = fileDiff.match(/a\/(.+?) b\//);
-    const fileName = nameMatch?.[1] ?? "unknown";
+    const fileDiffs = diff.split(/^diff --git/m).filter(Boolean);
+    let totalChars = stat.length;
 
-    // Count additions/deletions
-    const additions = (fileDiff.match(/^\+[^+]/gm) ?? []).length;
-    const deletions = (fileDiff.match(/^-[^-]/gm) ?? []).length;
+    for (const fileDiff of fileDiffs) {
+      const nameMatch = fileDiff.match(/a\/(.+?) b\//);
+      const fileName = nameMatch?.[1] ?? "unknown";
+      const additions = (fileDiff.match(/^\+[^+]/gm) ?? []).length;
+      const deletions = (fileDiff.match(/^-[^-]/gm) ?? []).length;
 
-    const section = `### ${fileName} (+${additions}/-${deletions})\n\`\`\`diff\n${fileDiff.slice(0, 2000)}\n\`\`\``;
+      const section = `### ${fileName} (+${additions}/-${deletions})\n\`\`\`diff\n${fileDiff.slice(0, 2000)}\n\`\`\``;
 
-    if (totalChars + section.length > maxTokens * 4) { // ~4 chars per token
-      lines.push(`\n... (${fileDiffs.length - lines.length} more files truncated)`);
-      break;
+      if (totalChars + section.length > maxTokens * 4) {
+        lines.push(`\n... (${fileDiffs.length - lines.length} more files truncated)`);
+        break;
+      }
+
+      lines.push(section);
+      totalChars += section.length;
     }
 
-    lines.push(section);
-    totalChars += section.length;
+    return lines.join("\n");
+  } catch (err) {
+    throw new Error(`diff_inject failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-
-  return lines.join("\n");
 }
 
 // ─── Notify (notify) ────────────────────────────────────────────────────────
 
 export async function notify(channel: string, webhookUrl: string, message: string): Promise<string> {
+  if (!webhookUrl) throw new Error("notify: webhook_url is required");
+
   let body: string;
-  let headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
 
   switch (channel) {
     case "slack":
@@ -175,18 +193,19 @@ export async function notify(channel: string, webhookUrl: string, message: strin
     case "discord":
       body = JSON.stringify({ content: message });
       break;
-    case "telegram": {
-      // webhookUrl should be: https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>
+    case "telegram":
       body = JSON.stringify({ text: message });
       break;
-    }
     default:
-      // Generic webhook
       body = JSON.stringify({ message, timestamp: new Date().toISOString() });
   }
 
-  const resp = await fetch(webhookUrl, { method: "POST", headers, body });
-  return resp.ok ? `Notified (${channel}: ${resp.status})` : `Notification failed: ${resp.status}`;
+  try {
+    const resp = await fetch(webhookUrl, { method: "POST", headers, body });
+    return resp.ok ? `Notified (${channel}: ${resp.status})` : `Notification failed: ${resp.status}`;
+  } catch (err) {
+    throw new Error(`notify failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 // ─── Semantic Cache (SQLite FTS5 similarity) ────────────────────────────────
@@ -201,32 +220,42 @@ function getSemanticCacheDb(): Database.Database {
   semanticCacheDb.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS sem_cache USING fts5(query, result, tokenize='porter unicode61');
     CREATE TABLE IF NOT EXISTS sem_cache_meta (
-      rowid INTEGER PRIMARY KEY,
-      query_hash TEXT,
-      expires_at TEXT,
+      rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+      query_hash TEXT NOT NULL,
+      ttl_minutes INTEGER NOT NULL DEFAULT 60,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
   return semanticCacheDb;
 }
 
-export function semanticCacheLookup(query: string, ttlMinutes: number, threshold: number): string | null {
+export function semanticCacheLookup(query: string, ttlMinutes: number, _threshold: number): string | null {
   const db = getSemanticCacheDb();
-  // FTS5 match with rank — find similar cached queries
   try {
+    // Check FTS5 match with TTL validation
     const rows = db.prepare(`
-      SELECT result, rank FROM sem_cache WHERE sem_cache MATCH ? ORDER BY rank LIMIT 1
+      SELECT sc.result, scm.created_at FROM sem_cache sc
+      JOIN sem_cache_meta scm ON scm.rowid = sc.rowid
+      WHERE sem_cache MATCH ?
+        AND datetime(scm.created_at, '+' || scm.ttl_minutes || ' minutes') > datetime('now')
+      ORDER BY rank LIMIT 1
     `).all(query) as any[];
     if (rows.length > 0) {
       return rows[0].result;
     }
-  } catch { /* FTS query syntax error — no match */ }
+  } catch {
+    // FTS query syntax error — no match
+  }
   return null;
 }
 
 export function semanticCacheStore(query: string, result: string, ttlMinutes: number): void {
   const db = getSemanticCacheDb();
+  const queryHash = crypto.createHash("sha256").update(query).digest("hex").slice(0, 16);
   db.prepare(`INSERT INTO sem_cache (query, result) VALUES (?, ?)`).run(query, result);
+  // Get the rowid of the just-inserted FTS5 row
+  const lastId = (db.prepare(`SELECT last_insert_rowid() as id`).get() as any).id;
+  db.prepare(`INSERT INTO sem_cache_meta (rowid, query_hash, ttl_minutes) VALUES (?, ?, ?)`).run(lastId, queryHash, ttlMinutes);
 }
 
 // ─── Screenshot (via Playwright) ────────────────────────────────────────────
@@ -234,20 +263,32 @@ export function semanticCacheStore(query: string, result: string, ttlMinutes: nu
 export async function takeScreenshot(url: string, viewport: { width: number; height: number }, waitMs: number): Promise<string> {
   const outputPath = path.join(os.tmpdir(), `occ-screenshot-${Date.now()}.png`);
 
-  // Try Playwright first, fall back to Chrome headless
+  // Try Playwright first
   try {
     const { chromium } = await import("playwright-core");
     const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage({ viewport });
-    await page.goto(url, { waitUntil: "networkidle" });
-    if (waitMs > 0) await page.waitForTimeout(waitMs);
-    await page.screenshot({ path: outputPath, fullPage: false });
-    await browser.close();
+    try {
+      const page = await browser.newPage({ viewport });
+      try {
+        await page.goto(url, { waitUntil: "networkidle" });
+        if (waitMs > 0) await page.waitForTimeout(waitMs);
+        await page.screenshot({ path: outputPath, fullPage: false });
+      } finally {
+        await page.close();
+      }
+    } finally {
+      await browser.close();
+    }
     return outputPath;
   } catch {
-    // Fallback: Chrome headless CLI
+    // Fallback: Chrome headless CLI (use execFileSync to prevent shell injection)
     try {
-      execSync(`google-chrome --headless --disable-gpu --screenshot="${outputPath}" --window-size=${viewport.width},${viewport.height} "${url}"`, { timeout: 30000 });
+      execFileSync("google-chrome", [
+        "--headless", "--disable-gpu",
+        `--screenshot=${outputPath}`,
+        `--window-size=${viewport.width},${viewport.height}`,
+        url,
+      ], { timeout: 30000 });
       return outputPath;
     } catch {
       throw new Error("screenshot requires Playwright or Chrome. Install: npx playwright install chromium");
@@ -258,14 +299,20 @@ export async function takeScreenshot(url: string, viewport: { width: number; hei
 // ─── Sandbox Exec (Docker) ──────────────────────────────────────────────────
 
 export function sandboxExec(image: string, command: string, mount: string | undefined, timeoutMs: number): string {
-  const mountArg = mount ? `-v "${mount}"` : "";
-  const cmd = `docker run --rm --network=none ${mountArg} "${image}" sh -c "${command.replace(/"/g, '\\"')}"`;
-  return execSync(cmd, { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+  // Use execFileSync to prevent shell injection
+  const args = ["run", "--rm", "--network=none"];
+  if (mount) args.push("-v", mount);
+  args.push(image, "sh", "-c", command);
+
+  try {
+    return execFileSync("docker", args, { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+  } catch (err) {
+    throw new Error(`sandbox_exec failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 // ─── Cost Gate ──────────────────────────────────────────────────────────────
 
-// Token costs per million tokens
 const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   "claude-opus-4-6": { input: 15, output: 75 },
   "claude-sonnet-4-6": { input: 3, output: 15 },
@@ -294,9 +341,13 @@ export function costGate(budgetUsd: number, executionSteps: Record<string, { inp
   });
 }
 
-// ─── AST Parse (regex-based, no tree-sitter dependency) ─────────────────────
+// ─── AST Parse (regex-based) ────────────────────────────────────────────────
 
 export function astParse(filePath: string, extracts: string[]): string {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`astParse: file not found: ${filePath}`);
+  }
+
   const content = fs.readFileSync(filePath, "utf-8");
   const ext = path.extname(filePath).toLowerCase();
   const results: string[] = [];
@@ -341,9 +392,7 @@ export function astParse(filePath: string, extracts: string[]): string {
 
   if (extracts.includes("types")) {
     let types: string[] = [];
-    if (isTS) {
-      types = [...content.matchAll(/(?:export\s+)?(?:type|interface)\s+(\w+)/g)].map(m => m[0]);
-    }
+    if (isTS) types = [...content.matchAll(/(?:export\s+)?(?:type|interface)\s+(\w+)/g)].map(m => m[0]);
     if (types.length > 0) results.push(`## Types (${types.length})\n${types.join("\n")}`);
   }
 
@@ -353,7 +402,6 @@ export function astParse(filePath: string, extracts: string[]): string {
 // ─── Embed Compare (keyword-based similarity) ───────────────────────────────
 
 export function embedCompare(textA: string, textB: string): string {
-  // Simple keyword-based similarity (no external model needed)
   const wordsA = new Set(textA.toLowerCase().split(/\W+/).filter(w => w.length > 3));
   const wordsB = new Set(textB.toLowerCase().split(/\W+/).filter(w => w.length > 3));
 
@@ -361,9 +409,7 @@ export function embedCompare(textA: string, textB: string): string {
   const union = new Set([...wordsA, ...wordsB]);
   const similarity = union.size > 0 ? intersection.size / union.size : 0;
 
-  // Find words only in B (new content)
   const newWords = [...wordsB].filter(w => !wordsA.has(w)).slice(0, 20);
-  // Find words only in A (removed content)
   const removedWords = [...wordsA].filter(w => !wordsB.has(w)).slice(0, 20);
 
   return JSON.stringify({
@@ -426,21 +472,21 @@ export function graphRead(subject?: string, predicate?: string): string {
 export async function parallelFetch(urls: string[], rateLimitMs: number, timeoutMs: number): Promise<string> {
   const results: string[] = [];
 
-  // Execute with rate limiting
   for (let i = 0; i < urls.length; i++) {
     if (i > 0 && rateLimitMs > 0) {
       await new Promise(r => setTimeout(r, rateLimitMs));
     }
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
       const resp = await fetch(urls[i], { signal: controller.signal });
-      clearTimeout(timer);
       const text = await resp.text();
       results.push(`[${urls[i]}] (${resp.status})\n${text.slice(0, 5000)}`);
     } catch (err) {
       results.push(`[${urls[i]}] ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      clearTimeout(timer); // Always clean up timer
     }
   }
 
@@ -450,13 +496,15 @@ export async function parallelFetch(urls: string[], rateLimitMs: number, timeout
 // ─── Template Render (Handlebars-like) ──────────────────────────────────────
 
 export function templateRender(template: string, data: Record<string, unknown>): string {
+  if (template.length > 100000) throw new Error("template_render: template too large (max 100KB)");
+
   let result = template;
 
   // {{#each items}}...{{/each}}
   result = result.replace(/\{\{#each\s+(\w+)\}\}([\s\S]*?)\{\{\/each\}\}/g, (_, key, body) => {
     const arr = data[key];
     if (!Array.isArray(arr)) return "";
-    return arr.map((item, idx) => {
+    return arr.slice(0, 1000).map((item, idx) => { // Limit iterations
       let rendered = body;
       if (typeof item === "object" && item !== null) {
         for (const [k, v] of Object.entries(item)) {
@@ -491,12 +539,10 @@ export function templateRender(template: string, data: Record<string, unknown>):
 // ─── Approval Request ───────────────────────────────────────────────────────
 
 export function createApprovalRequest(executionId: string, stepId: string, title: string, description: string, expiresHours: number): string {
-  // Generate a unique approval URL that can be shared
   const token = crypto.randomBytes(16).toString("hex");
+  const host = process.env.PUBLIC_HOST ?? process.env.REST_HOST ?? "localhost";
   const port = process.env.REST_PORT ?? "4242";
-  const host = process.env.REST_HOST ?? "localhost";
 
-  // The approval is handled by the existing POST /executions/:id/approve/:stepId endpoint
   const approveUrl = `http://${host}:${port}/executions/${executionId}/approve/${stepId}`;
 
   return JSON.stringify({

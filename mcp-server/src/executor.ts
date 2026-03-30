@@ -565,7 +565,13 @@ async function executeSinglePreTool(
     case "graph_query": {
       if (tool.triples && tool.triples.length > 0) {
         const { graphWrite } = await import("./pretool-extras.js");
-        result = graphWrite(tool.triples);
+        // Resolve variables in triple values
+        const resolvedTriples = tool.triples.map(t => ({
+          subject: resolveVariables(t.subject, vars),
+          predicate: resolveVariables(t.predicate, vars),
+          object: resolveVariables(t.object, vars),
+        }));
+        result = graphWrite(resolvedTriples);
       } else {
         const { graphRead } = await import("./pretool-extras.js");
         const gqSubject = tool.graph_query_subject ? resolveVariables(tool.graph_query_subject, vars) : undefined;
