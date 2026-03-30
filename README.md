@@ -265,7 +265,7 @@ Claude Code ──MCP──▶ MCP Server (28 tools) ──▶ Executor ──�
 curl/browser ──HTTP──▶ REST+SSE (:4242)   ──▶ Queue ──▶ SQLite (checkpoints)
 ```
 
-15 TypeScript modules: executor, rest, loader, queue, storage, scheduler, linter, utils, mcp-client, pretool-extras, pipeline-executor, pipeline-loader, types, index (MCP), CLI.
+18 TypeScript modules: executor, claude-runner, pretool-executor, gate-manager, rest, loader, queue, storage, scheduler, linter, utils, mcp-client, pretool-extras, pipeline-executor, pipeline-loader, types, index (MCP), CLI.
 
 ## How OCC Compares
 

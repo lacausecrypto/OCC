@@ -9,6 +9,48 @@ import * as crypto from "node:crypto";
 import { execSync, execFileSync } from "node:child_process";
 import Database from "better-sqlite3";
 
+// ─── Optional embeddings (via @xenova/transformers) ────────────────────────
+//
+// If @xenova/transformers is installed, real cosine-similarity embeddings are used
+// for semantic_cache lookup and vector_query. Otherwise, FTS5 keyword matching is
+// used as fallback. This is opt-in: `npm install @xenova/transformers` to enable.
+
+let embeddingPipeline: any = null;
+let embeddingsAvailable: boolean | null = null; // null = not checked yet
+
+async function getEmbedder(): Promise<any> {
+  if (embeddingsAvailable === false) return null;
+  if (embeddingPipeline) return embeddingPipeline;
+
+  try {
+    // Dynamic import — optional dependency, fails gracefully if not installed
+    const mod = await (Function('return import("@xenova/transformers")')()) as any;
+    const { pipeline } = mod;
+    embeddingPipeline = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+    embeddingsAvailable = true;
+    process.stderr.write("[occ-embeddings] Real embeddings enabled (all-MiniLM-L6-v2)\n");
+    return embeddingPipeline;
+  } catch {
+    embeddingsAvailable = false;
+    return null;
+  }
+}
+
+/** Compute embedding for a text. Returns Float32Array or null if embeddings unavailable. */
+async function embed(text: string): Promise<Float32Array | null> {
+  const embedder = await getEmbedder();
+  if (!embedder) return null;
+  const output = await embedder(text, { pooling: "mean", normalize: true });
+  return output.data as Float32Array;
+}
+
+/** Cosine similarity between two normalized vectors. */
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+  return dot;
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Validate that a string is a safe git ref (prevent shell injection). */
@@ -100,16 +142,39 @@ export function vectorIndex(collection: string, text: string, chunkSize: number)
   return `Indexed ${chunks.length} chunks into "${collection}" (id: ${sourceId})`;
 }
 
-export function vectorQuery(collection: string, query: string, topK: number): string {
+export async function vectorQuery(collection: string, query: string, topK: number): Promise<string> {
   const db = getVectorDb();
+
+  // Try real embedding similarity if available
+  const queryEmbed = await embed(query);
+  if (queryEmbed) {
+    // Fetch all chunks for this collection and rank by cosine similarity
+    const rows = db.prepare(`SELECT rowid, chunk FROM vectors WHERE collection = ?`).all(collection) as any[];
+    if (rows.length === 0) return "(no results)";
+
+    const scored: { chunk: string; score: number }[] = [];
+    for (const row of rows) {
+      const chunkEmbed = await embed(row.chunk);
+      if (chunkEmbed) {
+        scored.push({ chunk: row.chunk, score: cosineSimilarity(queryEmbed, chunkEmbed) });
+      }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, topK);
+    if (top.length === 0) return "(no results)";
+    return top.map((r, i) => `[${i + 1}] (similarity: ${r.score.toFixed(3)}) ${r.chunk}`).join("\n\n");
+  }
+
+  // Fallback: FTS5 keyword matching
   try {
+    const safeQuery = query.replace(/['"(){}:*^~\-]/g, " ").replace(/\s+/g, " ").trim();
+    if (!safeQuery) return "(no results — empty query)";
     const rows = db.prepare(`
       SELECT chunk, rank FROM vectors WHERE collection = ? AND vectors MATCH ? ORDER BY rank LIMIT ?
-    `).all(collection, query, topK) as any[];
+    `).all(collection, safeQuery, topK) as any[];
     if (rows.length === 0) return "(no results)";
     return rows.map((r, i) => `[${i + 1}] ${r.chunk}`).join("\n\n");
   } catch {
-    // FTS5 query syntax error — return empty
     return "(no results — query syntax may be invalid)";
   }
 }
@@ -237,14 +302,40 @@ function getSemanticCacheDb(): Database.Database {
   return semanticCacheDb;
 }
 
-export function semanticCacheLookup(query: string, ttlMinutes: number, _threshold: number): string | null {
+export async function semanticCacheLookup(query: string, ttlMinutes: number, threshold: number): Promise<string | null> {
   const db = getSemanticCacheDb();
+
+  // Try real embedding similarity if available
+  const queryEmbed = await embed(query);
+  if (queryEmbed) {
+    // Fetch all non-expired cached entries and compute cosine similarity
+    const rows = db.prepare(`
+      SELECT sc.query, sc.result, scm.created_at, scm.ttl_minutes FROM sem_cache sc
+      JOIN sem_cache_meta scm ON scm.rowid = sc.rowid
+      WHERE datetime(scm.created_at, '+' || scm.ttl_minutes || ' minutes') > datetime('now')
+    `).all() as any[];
+
+    let bestScore = 0;
+    let bestResult: string | null = null;
+    for (const row of rows) {
+      const cachedEmbed = await embed(row.query);
+      if (cachedEmbed) {
+        const score = cosineSimilarity(queryEmbed, cachedEmbed);
+        if (score > bestScore && score >= threshold) {
+          bestScore = score;
+          bestResult = row.result;
+        }
+      }
+    }
+    if (bestResult) return bestResult;
+    return null;
+  }
+
+  // Fallback: FTS5 keyword matching
   try {
-    // Escape FTS5 special characters to prevent syntax errors
     const safeQuery = query.replace(/['"(){}:*^~\-]/g, " ").replace(/\s+/g, " ").trim();
     if (!safeQuery) return null;
 
-    // Check FTS5 match with TTL validation
     const rows = db.prepare(`
       SELECT sc.result, scm.created_at FROM sem_cache sc
       JOIN sem_cache_meta scm ON scm.rowid = sc.rowid
@@ -256,7 +347,6 @@ export function semanticCacheLookup(query: string, ttlMinutes: number, _threshol
       return rows[0].result;
     }
   } catch (err) {
-    // FTS query syntax error or DB issue — log and return no match
     process.stderr.write(`[occ-semantic-cache] Lookup error: ${err instanceof Error ? err.message : String(err)}\n`);
   }
   return null;
@@ -414,9 +504,30 @@ export function astParse(filePath: string, extracts: string[]): string {
   return results.length > 0 ? results.join("\n\n") : "(no matching code structures found)";
 }
 
-// ─── Embed Compare (keyword-based similarity) ───────────────────────────────
+// ─── Embed Compare (real embeddings when available, Jaccard fallback) ──────
 
-export function embedCompare(textA: string, textB: string): string {
+export async function embedCompare(textA: string, textB: string): Promise<string> {
+  // Try real cosine similarity if embeddings available
+  const embA = await embed(textA);
+  const embB = await embed(textB);
+  if (embA && embB) {
+    const similarity = cosineSimilarity(embA, embB);
+    // Still compute keyword diff for context
+    const wordsA = new Set(textA.toLowerCase().split(/\W+/).filter(w => w.length > 3));
+    const wordsB = new Set(textB.toLowerCase().split(/\W+/).filter(w => w.length > 3));
+    const newWords = [...wordsB].filter(w => !wordsA.has(w)).slice(0, 20);
+    const removedWords = [...wordsA].filter(w => !wordsB.has(w)).slice(0, 20);
+
+    return JSON.stringify({
+      similarity: Number(similarity.toFixed(3)),
+      method: "cosine_embedding",
+      new_keywords: newWords,
+      removed_keywords: removedWords,
+      verdict: similarity > 0.8 ? "mostly_same" : similarity > 0.5 ? "partially_changed" : "significantly_changed",
+    });
+  }
+
+  // Fallback: Jaccard keyword similarity
   const wordsA = new Set(textA.toLowerCase().split(/\W+/).filter(w => w.length > 3));
   const wordsB = new Set(textB.toLowerCase().split(/\W+/).filter(w => w.length > 3));
 
@@ -429,6 +540,7 @@ export function embedCompare(textA: string, textB: string): string {
 
   return JSON.stringify({
     similarity: Number(similarity.toFixed(3)),
+    method: "jaccard_keywords",
     new_keywords: newWords,
     removed_keywords: removedWords,
     verdict: similarity > 0.8 ? "mostly_same" : similarity > 0.5 ? "partially_changed" : "significantly_changed",

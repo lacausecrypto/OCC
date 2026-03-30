@@ -94,7 +94,7 @@ output: result
 
   it("direct: same text returns similarity ~1.0", async () => {
     const { embedCompare } = await import("../src/pretool-extras.js");
-    const raw = embedCompare("hello world", "hello world");
+    const raw = await embedCompare("hello world", "hello world");
     const parsed = JSON.parse(raw);
     expect(parsed.similarity).toBeCloseTo(1.0, 1);
     expect(parsed.verdict).toBe("mostly_same");
@@ -102,7 +102,7 @@ output: result
 
   it("direct: different text returns similarity < 0.3", async () => {
     const { embedCompare } = await import("../src/pretool-extras.js");
-    const raw = embedCompare("quantum physics", "chocolate cake recipe");
+    const raw = await embedCompare("quantum physics", "chocolate cake recipe");
     const parsed = JSON.parse(raw);
     expect(parsed.similarity).toBeLessThan(0.3);
     expect(parsed.verdict).toBe("significantly_changed");
