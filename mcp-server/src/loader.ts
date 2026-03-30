@@ -20,8 +20,20 @@ const PreToolSchema = z.object({
   server: z.string().optional(),
   tool: z.string().optional(),
   args: z.record(z.string(), z.unknown()).optional(),
+  // http_fetch advanced
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  body: z.string().optional(),
+  json_path: z.string().optional(),
   // Error handling
   on_error: z.enum(["inject", "skip", "fail"]).optional(),
+  // Timeout & retry
+  timeout_ms: z.number().optional(),
+  retry: z.number().optional(),
+  // Caching
+  cache_ttl_minutes: z.number().optional(),
+  // Execution mode
+  parallel: z.boolean().optional(),
 });
 
 const StepSchema = z.object({

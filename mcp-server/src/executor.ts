@@ -293,98 +293,245 @@ export function cancelExecution(id: string): boolean {
 
 // ─── Pre-tool executor ────────────────────────────────────────────────────────
 
+// ─── Pre-tool cache ─────────────────────────────────────────────────────────
+
+const preToolCache = new Map<string, { result: string; expiresAt: number }>();
+
+function getPreToolCacheKey(tool: PreTool, vars: Record<string, string>): string {
+  const key = JSON.stringify({ type: tool.type, url: tool.url, query: tool.query, path: tool.path,
+    command: tool.command, var_name: tool.var_name, server: tool.server, tool: tool.tool,
+    args: tool.args, method: tool.method, headers: tool.headers, body: tool.body });
+  return resolveVariables(key, vars); // Resolved key so same inputs = same cache
+}
+
+// ─── Single pre-tool executor ───────────────────────────────────────────────
+
+async function executeSinglePreTool(
+  tool: PreTool,
+  vars: Record<string, string>,
+  onLog: (message: string, level: "info" | "warn" | "error") => void
+): Promise<string> {
+  // Check cache
+  if (tool.cache_ttl_minutes && tool.cache_ttl_minutes > 0) {
+    const cacheKey = getPreToolCacheKey(tool, vars);
+    const cached = preToolCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      onLog(`pre-tool ${tool.type} → {${tool.inject_as}} (cache hit)`, "info");
+      return cached.result;
+    }
+  }
+
+  const timeoutMs = tool.timeout_ms ?? 30000;
+  let result = "";
+
+  switch (tool.type) {
+    case "current_datetime":
+      result = new Date().toISOString();
+      break;
+
+    case "http_fetch": {
+      const url = resolveVariables(tool.url ?? "", vars);
+      const method = tool.method ?? "GET";
+
+      // Resolve headers
+      const headers: Record<string, string> = {};
+      if (tool.headers) {
+        for (const [k, v] of Object.entries(tool.headers)) {
+          headers[k] = resolveVariables(v, vars);
+        }
+      }
+
+      // Resolve body
+      let body: string | undefined;
+      if (tool.body && method !== "GET" && method !== "DELETE") {
+        body = resolveVariables(tool.body, vars);
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const resp = await fetch(url, {
+          method,
+          headers: Object.keys(headers).length > 0 ? headers : undefined,
+          body,
+          signal: controller.signal,
+        });
+        result = await resp.text();
+      } finally {
+        clearTimeout(timer);
+      }
+
+      // JSON path extraction
+      if (tool.json_path && result) {
+        try {
+          const json = JSON.parse(result);
+          const extracted = extractJsonPath(json, tool.json_path);
+          result = typeof extracted === "string" ? extracted : JSON.stringify(extracted);
+        } catch {
+          onLog(`http_fetch json_path extraction failed for "${tool.json_path}"`, "warn");
+        }
+      }
+
+      if (result.length > 50000) {
+        result = result.slice(0, 50000) + "\n[truncated]";
+        onLog(`http_fetch truncated to 50KB for ${url}`, "warn");
+      }
+      break;
+    }
+
+    case "web_search": {
+      const query = resolveVariables(tool.query ?? "", vars);
+      const searchPrompt = `Search the web for: ${query}\n\nProvide a comprehensive summary of the most relevant and recent results. Include key facts, numbers, dates, and sources.`;
+      const { stdout } = await runClaude(searchPrompt, { id: "_search", output_var: "_", tools: ["WebSearch"], model: "claude-haiku-4-5", prompt: "" } as ChainStep, () => {});
+      result = stdout;
+      break;
+    }
+
+    case "read_file": {
+      const filePath = resolveVariables(tool.path ?? "", vars);
+      result = fs.readFileSync(filePath, "utf-8");
+      if (result.length > 50000) {
+        result = result.slice(0, 50000) + "\n[truncated]";
+        onLog(`read_file truncated to 50KB for ${filePath}`, "warn");
+      }
+      break;
+    }
+
+    case "write_file": {
+      const filePath = resolveVariables(tool.path ?? "", vars);
+      const fileContent = resolveVariables(tool.content ?? "", vars);
+      const dir = path.dirname(filePath);
+      if (dir) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(filePath, fileContent, "utf-8");
+      result = filePath;
+      onLog(`write_file → ${filePath} (${fileContent.length} chars)`, "info");
+      break;
+    }
+
+    case "bash": {
+      const command = resolveVariables(tool.command ?? "", vars);
+      result = execSync(command, { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+      break;
+    }
+
+    case "env_var":
+      result = process.env[tool.var_name ?? ""] ?? "";
+      break;
+
+    case "mcp_call": {
+      const { mcpCall } = await import("./mcp-client.js");
+      const resolvedArgs: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(tool.args ?? {})) {
+        resolvedArgs[k] = typeof v === "string" ? resolveVariables(v, vars) : v;
+      }
+      result = await mcpCall(tool.server ?? "", tool.tool ?? "", resolvedArgs);
+      break;
+    }
+  }
+
+  // Store in cache
+  if (tool.cache_ttl_minutes && tool.cache_ttl_minutes > 0) {
+    const cacheKey = getPreToolCacheKey(tool, vars);
+    preToolCache.set(cacheKey, { result, expiresAt: Date.now() + tool.cache_ttl_minutes * 60000 });
+  }
+
+  return result;
+}
+
+/** Simple JSON path extractor: "data.items[0].name" → traverse object. */
+function extractJsonPath(obj: any, path: string): any {
+  const parts = path.replace(/\[(\d+)\]/g, ".$1").split(".");
+  let current = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+// ─── Pre-tool orchestrator (chaining + parallel) ────────────────────────────
+
 async function executePreTools(
   preTools: PreTool[],
   vars: Record<string, string>,
   onLog: (message: string, level: "info" | "warn" | "error") => void
 ): Promise<Record<string, string>> {
   const results: Record<string, string> = {};
-  for (const tool of preTools) {
-    try {
-      let result = "";
-      switch (tool.type) {
-        case "current_datetime":
-          result = new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris", dateStyle: "full", timeStyle: "medium" });
-          break;
-        case "http_fetch": {
-          const url = resolveVariables(tool.url ?? "", vars);
-          const resp = await fetch(url);
-          result = await resp.text();
-          if (result.length > 50000) {
-            result = result.slice(0, 50000) + "\n[truncated]";
-            onLog(`http_fetch truncated to 50KB for ${url}`, "warn");
-          }
-          break;
-        }
-        case "web_search": {
-          const query = resolveVariables(tool.query ?? "", vars);
-          const searchPrompt = `Search the web for: ${query}\n\nProvide a comprehensive summary of the most relevant and recent results. Include key facts, numbers, dates, and sources.`;
-          const { stdout } = await runClaude(searchPrompt, { id: "_search", output_var: "_", tools: ["WebSearch"], model: "claude-haiku-4-5", prompt: "" } as ChainStep, () => {});
-          result = stdout;
-          break;
-        }
-        case "read_file": {
-          const filePath = resolveVariables(tool.path ?? "", vars);
-          result = fs.readFileSync(filePath, "utf-8");
-          if (result.length > 50000) {
-            result = result.slice(0, 50000) + "\n[truncated]";
-            onLog(`read_file truncated to 50KB for ${filePath}`, "warn");
-          }
-          break;
-        }
-        case "write_file": {
-          const filePath = resolveVariables(tool.path ?? "", vars);
-          const fileContent = resolveVariables(tool.content ?? "", vars);
-          const dir = filePath.substring(0, filePath.lastIndexOf("/"));
-          if (dir) fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(filePath, fileContent, "utf-8");
-          result = filePath;
-          onLog(`write_file → ${filePath} (${fileContent.length} chars)`, "info");
-          break;
-        }
-        case "bash": {
-          // SECURITY NOTE: Variables are intentionally injected into shell commands
-          // without escaping. Chain authors control the commands and variable content.
-          // This is by design — chains are trusted user-authored automation scripts.
-          const command = resolveVariables(tool.command ?? "", vars);
-          result = execSync(command, { timeout: 30000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
-          break;
-        }
-        case "env_var":
-          result = process.env[tool.var_name ?? ""] ?? "";
-          break;
-        case "mcp_call": {
-          const { mcpCall } = await import("./mcp-client.js");
-          // Resolve variables in args
-          const resolvedArgs: Record<string, unknown> = {};
-          for (const [k, v] of Object.entries(tool.args ?? {})) {
-            resolvedArgs[k] = typeof v === "string" ? resolveVariables(v, vars) : v;
-          }
-          result = await mcpCall(tool.server ?? "", tool.tool ?? "", resolvedArgs);
-          break;
-        }
+
+  // Merge vars so pre-tool B can use output of pre-tool A (chaining)
+  const liveVars = { ...vars };
+
+  // Split into sequential and parallel groups
+  let i = 0;
+  while (i < preTools.length) {
+    // Collect consecutive parallel pre-tools
+    const parallelBatch: PreTool[] = [];
+    while (i < preTools.length && preTools[i].parallel) {
+      parallelBatch.push(preTools[i]);
+      i++;
+    }
+
+    if (parallelBatch.length > 0) {
+      // Execute parallel batch
+      const parallelResults = await Promise.all(
+        parallelBatch.map((tool) => executePreToolWithRetry(tool, liveVars, onLog))
+      );
+      for (let j = 0; j < parallelBatch.length; j++) {
+        results[parallelBatch[j].inject_as] = parallelResults[j];
+        liveVars[parallelBatch[j].inject_as] = parallelResults[j]; // Chain: available to next
       }
+    }
+
+    // Execute next sequential pre-tool (if any)
+    if (i < preTools.length && !preTools[i].parallel) {
+      const tool = preTools[i];
+      const result = await executePreToolWithRetry(tool, liveVars, onLog);
       results[tool.inject_as] = result;
-      onLog(`pre-tool ${tool.type} → {${tool.inject_as}} (${result.length} chars)`, "info");
+      liveVars[tool.inject_as] = result; // Chain: available to next pre-tool
+      i++;
+    }
+  }
+
+  return results;
+}
+
+/** Execute a single pre-tool with retry logic and error handling. */
+async function executePreToolWithRetry(
+  tool: PreTool,
+  vars: Record<string, string>,
+  onLog: (message: string, level: "info" | "warn" | "error") => void
+): Promise<string> {
+  const maxAttempts = (tool.retry ?? 0) + 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await executeSinglePreTool(tool, vars, onLog);
+      onLog(`pre-tool ${tool.type} → {${tool.inject_as}} (${result.length} chars${attempt > 1 ? `, attempt ${attempt}` : ""})`, "info");
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const errorMode = tool.on_error ?? "inject";
 
+      if (attempt < maxAttempts) {
+        onLog(`pre-tool ${tool.type} failed (attempt ${attempt}/${maxAttempts}): ${message}`, "warn");
+        await new Promise((r) => setTimeout(r, 1000 * attempt)); // backoff
+        continue;
+      }
+
+      // All retries exhausted
+      const errorMode = tool.on_error ?? "inject";
       if (errorMode === "fail") {
-        // Abort the entire step
-        throw new Error(`Pre-tool ${tool.type} (${tool.inject_as}) failed: ${message}`);
+        throw new Error(`Pre-tool ${tool.type} (${tool.inject_as}) failed after ${maxAttempts} attempt(s): ${message}`);
       } else if (errorMode === "skip") {
-        // Skip this pre-tool — inject empty string, step continues cleanly
-        results[tool.inject_as] = "";
         onLog(`pre-tool ${tool.type} failed (skipped): ${message}`, "warn");
+        return "";
       } else {
-        // "inject" (default, backwards-compatible): inject error string into prompt
-        results[tool.inject_as] = `[PRE-TOOL ERROR: ${message}]`;
         onLog(`pre-tool ${tool.type} failed: ${message}`, "error");
+        return `[PRE-TOOL ERROR: ${message}]`;
       }
     }
   }
-  return results;
+
+  return ""; // unreachable
 }
 
 // ─── claude -p invocation ─────────────────────────────────────────────────────

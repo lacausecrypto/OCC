@@ -165,6 +165,15 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
       if (pt.type === "mcp_call" && !pt.tool) {
         issues.push({ level: "error", stepId: step.id, message: `Pre-tool mcp_call missing "tool"` });
       }
+      // Validate http_fetch URL format
+      if (pt.type === "http_fetch" && pt.url && !pt.url.includes("{")) {
+        try { new URL(pt.url); }
+        catch { issues.push({ level: "warning", stepId: step.id, message: `http_fetch URL may be invalid: "${pt.url}"` }); }
+      }
+      // Validate http_fetch body only with POST/PUT/PATCH
+      if (pt.type === "http_fetch" && pt.body && (pt.method === "GET" || pt.method === "DELETE")) {
+        issues.push({ level: "warning", stepId: step.id, message: `http_fetch body ignored for ${pt.method} requests` });
+      }
     }
   }
 
@@ -200,8 +209,13 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
     }
     // Check pre_tool queries
     for (const pt of step.pre_tools ?? []) {
-      for (const field of [pt.query, pt.url, pt.path, pt.content, pt.command]) {
+      for (const field of [pt.query, pt.url, pt.path, pt.content, pt.command, pt.body]) {
         if (field) for (const ref of extractVarRefs(field)) referencedVars.add(ref);
+      }
+      if (pt.headers) {
+        for (const v of Object.values(pt.headers)) {
+          for (const ref of extractVarRefs(v)) referencedVars.add(ref);
+        }
       }
     }
     // Condition and loop

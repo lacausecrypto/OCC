@@ -23,8 +23,20 @@ export interface PreTool {
   server?: string;        // MCP server name (from occ-mcp-servers.json)
   tool?: string;          // Tool name on the MCP server
   args?: Record<string, unknown>; // Arguments to pass to the tool
+  // http_fetch advanced
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";  // default: GET
+  headers?: Record<string, string>;  // custom headers (supports {variables})
+  body?: string;          // request body (supports {variables})
+  json_path?: string;     // extract JSON path from response (e.g. "data.items[0]")
   // Error handling
   on_error?: "inject" | "skip" | "fail"; // What to do when pre-tool fails (default: inject)
+  // Timeout & retry (per pre-tool)
+  timeout_ms?: number;    // request timeout (default: 30000)
+  retry?: number;         // retry count on failure (default: 0)
+  // Caching (per pre-tool)
+  cache_ttl_minutes?: number; // cache result for N minutes (0 = no cache, default)
+  // Execution mode
+  parallel?: boolean;     // run in parallel with other parallel:true pre-tools (default: false)
 }
 
 export type StepType = "agent" | "router" | "gate" | "evaluator" | "transform" | "loop" | "merge" | "browser" | "subchain" | "debate" | "webhook";
