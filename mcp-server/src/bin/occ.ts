@@ -536,6 +536,61 @@ function parsePriority(args: string[]): number {
   return 5;
 }
 
+async function cmdGenerate(description: string) {
+  console.log(`\x1b[1mGenerating chain:\x1b[0m ${description}\n`);
+
+  const { status, data } = await fetchJSON("/generate-chain", "POST", { description });
+  if (status >= 400) {
+    console.error(`\x1b[31mError:\x1b[0m ${data.error || JSON.stringify(data)}`);
+    process.exit(1);
+  }
+
+  if (data.status === "questions") {
+    // Claude needs more info — show questions
+    if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+    console.log(`\x1b[33mClaude has questions:\x1b[0m`);
+    for (const q of data.questions ?? []) {
+      console.log(`  - ${q}`);
+    }
+    console.log(`\nSession: ${data.sessionId}`);
+    console.log(`Answer with: occ generate-answer ${data.sessionId} "your answers here"`);
+    return;
+  }
+
+  if (data.status === "created") {
+    if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+    console.log(`\x1b[32mChain created:\x1b[0m ${data.chainName}`);
+    if (data.summary) {
+      console.log(`\n${data.summary.slice(0, 500)}`);
+    }
+    console.log(`\nYAML saved to chains/${data.chainName}.yaml`);
+    console.log(`Run it: occ run ${data.chainName} --input <key>=<value>`);
+    return;
+  }
+
+  // Unknown status
+  if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function cmdGenerateAnswer(sessionId: string, answers: string) {
+  const { status, data } = await fetchJSON("/generate-chain", "POST", { sessionId, answers });
+  if (status >= 400) {
+    console.error(`\x1b[31mError:\x1b[0m ${data.error || JSON.stringify(data)}`);
+    process.exit(1);
+  }
+
+  if (data.status === "created") {
+    if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+    console.log(`\x1b[32mChain created:\x1b[0m ${data.chainName}`);
+    console.log(`Run it: occ run ${data.chainName} --input <key>=<value>`);
+    return;
+  }
+
+  if (JSON_OUTPUT) { console.log(JSON.stringify(data)); return; }
+  console.log(JSON.stringify(data, null, 2));
+}
+
 function printHelp() {
   console.log(`
 \x1b[1mOCC — Claude Chain Orchestrator CLI\x1b[0m
@@ -557,6 +612,8 @@ function printHelp() {
   stats <chainName>                 Execution stats for a chain
   approve <execId> <stepId>         Approve a gate step
   reject <execId> <stepId>          Reject a gate step
+  generate "<description>"          Generate a chain from natural language
+  generate-answer <sessionId> "..." Answer Claude's questions during generation
   health                            Check server health
 
 \x1b[1mFlags:\x1b[0m
@@ -577,6 +634,7 @@ function printHelp() {
   occ timeline 1a2b3c4d
   occ stats deep-researcher
   occ approve 1a2b3c4d gate_step
+  occ generate "Monitor BTC price, alert if >5% change in 24h"
   occ health --json
 
 \x1b[1mEnvironment:\x1b[0m
@@ -648,6 +706,16 @@ switch (command) {
   case "reject":
     if (!args[1] || !args[2]) { console.error("Usage: occ reject <executionId> <stepId>"); process.exit(1); }
     cmdApprove(args[1], args[2], false);
+    break;
+  case "generate":
+  case "gen":
+    if (!args[1]) { console.error("Usage: occ generate \"<description>\""); process.exit(1); }
+    cmdGenerate(args.slice(1).join(" "));
+    break;
+  case "generate-answer":
+  case "gen-answer":
+    if (!args[1] || !args[2]) { console.error("Usage: occ generate-answer <sessionId> \"<answers>\""); process.exit(1); }
+    cmdGenerateAnswer(args[1], args.slice(2).join(" "));
     break;
   case "health":
   case "ping":

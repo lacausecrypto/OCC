@@ -493,7 +493,7 @@ describe("--priority flag", () => {
 });
 
 describe("Help includes new commands", () => {
-  it("help mentions all commands", () => {
+  it("help mentions all 17 commands and flags", () => {
     const { stdout } = occ(["help"]);
     expect(stdout).toContain("cancel");
     expect(stdout).toContain("queue");
@@ -502,7 +502,39 @@ describe("Help includes new commands", () => {
     expect(stdout).toContain("approve");
     expect(stdout).toContain("reject");
     expect(stdout).toContain("run-pipeline");
+    expect(stdout).toContain("generate");
+    expect(stdout).toContain("generate-answer");
     expect(stdout).toContain("--json");
     expect(stdout).toContain("--priority");
+  });
+});
+
+// ─── Generate ───────────────────────────────────────────────────────────────
+
+describe("occ generate", () => {
+  it("exits 1 without description", () => {
+    const { exitCode, stderr } = occ(["generate"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage");
+  });
+
+  it("exits with error when server not running", () => {
+    const { exitCode, stderr } = occ(["generate", "Create a chain that monitors prices"], { OCC_URL: "http://localhost:19999" });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Cannot connect");
+  });
+});
+
+describe("occ generate-answer", () => {
+  it("exits 1 without args", () => {
+    const { exitCode, stderr } = occ(["generate-answer"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage");
+  });
+
+  it("exits 1 without answers", () => {
+    const { exitCode, stderr } = occ(["generate-answer", "session123"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage");
   });
 });

@@ -16,7 +16,7 @@ import type {
 } from "./types.js";
 import { buildDependencyGraph } from "./loader.js";
 import { evaluateCondition, resolveVariables } from "./utils.js";
-import { saveExecution, checkpointStep, loadExecution as loadExecutionFromDb, listExecutions as listExecutionsFromDb, initStorage, getExecutionTimeline } from "./storage.js";
+import { saveExecution, checkpointStep, loadExecution as loadExecutionFromDb, listExecutions as listExecutionsFromDb, initStorage, getExecutionTimeline, loadChainSnapshot } from "./storage.js";
 
 // ─── In-memory execution store ────────────────────────────────────────────────
 
@@ -712,6 +712,17 @@ async function runStepWithRetry(
 
 const pendingApprovals = new Map<string, { resolve: (value: string) => void }>();
 
+// Gate results for suspend/resume pattern (non-blocking gates)
+const gateResults = new Map<string, string>(); // executionId:stepId → "approved"|"rejected"|"skipped"
+
+/** Error thrown to suspend execution at a gate step (frees the worker). */
+export class GateSuspendError extends Error {
+  constructor(public readonly stepId: string, public readonly executionId: string) {
+    super(`Execution suspended at gate "${stepId}"`);
+    this.name = "GateSuspendError";
+  }
+}
+
 export function getPendingApprovals(): Array<{ executionId: string; stepId: string; chainName: string; prompt: string; startedAt: string }> {
   const results: Array<{ executionId: string; stepId: string; chainName: string; prompt: string; startedAt: string }> = [];
   for (const key of pendingApprovals.keys()) {
@@ -733,10 +744,17 @@ export function getPendingApprovals(): Array<{ executionId: string; stepId: stri
 
 export function approveGate(executionId: string, stepId: string, approved: boolean): boolean {
   const key = `${executionId}:${stepId}`;
+
+  // New suspend/resume pattern: store result for when execution resumes
+  gateResults.set(key, approved ? "approved" : "rejected");
+
+  // Legacy Promise-based pattern (backwards compat)
   const pending = pendingApprovals.get(key);
-  if (!pending) return false;
-  pending.resolve(approved ? "approved" : "rejected");
-  pendingApprovals.delete(key);
+  if (pending) {
+    pending.resolve(approved ? "approved" : "rejected");
+    pendingApprovals.delete(key);
+  }
+
   return true;
 }
 
@@ -1243,36 +1261,62 @@ async function executeStep(
       }
     }
 
-    // Gate: pause for human approval
+    // Gate: suspend execution and free the worker (non-blocking)
     const resolvedPrompt = resolveVariables(step.prompt, vars);
     emit({ type: "step_waiting_approval", executionId, stepId, prompt: resolvedPrompt });
-    emit({ type: "step_log", executionId, stepId, message: "Waiting for human approval...", level: "info" });
+    emit({ type: "step_log", executionId, stepId, message: "Waiting for human approval — worker released", level: "info" });
 
-    // Wait for approval via a promise stored in a map
-    const gateStartTime = Date.now();
-    const approved = await waitForApproval(executionId, stepId, step.timeout_hours ?? 24, step.on_timeout ?? "error");
-    // Safety: always clean up pendingApprovals after resolution (approval or timeout)
-    pendingApprovals.delete(`${executionId}:${stepId}`);
-    const gateDuration = Date.now() - gateStartTime;
-
-    if (approved === "approved") {
-      stepResult.status = "done";
-      stepResult.output = "approved";
-      stepResult.finishedAt = new Date().toISOString();
-      stepResult.durationMs = gateDuration;
-      vars[step.output_var] = "approved";
-      emit({ type: "step_done", executionId, stepId, durationMs: gateDuration });
-    } else if (approved === "skipped") {
-      stepResult.status = "skipped";
-      stepResult.finishedAt = new Date().toISOString();
-      stepResult.durationMs = gateDuration;
-      vars[step.output_var] = "";
-      emit({ type: "step_done", executionId, stepId, durationMs: gateDuration });
-    } else {
-      throw new Error("Gate rejected by user");
+    // Check if already approved (from a previous suspended run being resumed)
+    const existingApproval = gateResults.get(`${executionId}:${stepId}`);
+    if (existingApproval) {
+      gateResults.delete(`${executionId}:${stepId}`);
+      if (existingApproval === "approved") {
+        stepResult.status = "done";
+        stepResult.output = "approved";
+        stepResult.finishedAt = new Date().toISOString();
+        vars[step.output_var] = "approved";
+        emit({ type: "step_done", executionId, stepId, durationMs: 0 });
+      } else if (existingApproval === "skipped") {
+        stepResult.status = "skipped";
+        stepResult.finishedAt = new Date().toISOString();
+        vars[step.output_var] = "";
+        emit({ type: "step_done", executionId, stepId, durationMs: 0 });
+      } else {
+        throw new Error("Gate rejected by user");
+      }
+      persistExecutions();
+      return;
     }
+
+    // Suspend: save state, mark as pending, free the worker
+    stepResult.status = "running";
+    stepResult.startedAt = new Date().toISOString();
+    const execution = executions.get(executionId);
+    if (execution) {
+      execution.status = "pending";
+      execution.error = `Suspended at gate "${stepId}" — waiting for approval`;
+    }
+    persistStepCheckpoint(executionId, stepResult);
     persistExecutions();
-    return;
+
+    // Register for timeout
+    const timeoutMs = (step.timeout_hours ?? 24) * 60 * 60 * 1000;
+    const onTimeout = step.on_timeout ?? "error";
+    setTimeout(() => {
+      if (!gateResults.has(`${executionId}:${stepId}`)) {
+        // Auto-resolve on timeout
+        if (onTimeout === "approve") {
+          gateResults.set(`${executionId}:${stepId}`, "approved");
+        } else if (onTimeout === "skip") {
+          gateResults.set(`${executionId}:${stepId}`, "skipped");
+        } else {
+          gateResults.set(`${executionId}:${stepId}`, "rejected");
+        }
+      }
+    }, timeoutMs);
+
+    // Throw to unwind the execution — worker is freed
+    throw new GateSuspendError(stepId, executionId);
   }
 
   if (stepType === "merge") {
@@ -1860,7 +1904,15 @@ export async function executeChain(
   };
   executions.set(executionId, execution);
   trimExecutions();
-  persistExecutions();
+
+  // Save chain snapshot for safe resume (chain YAML can change after this point)
+  try {
+    const yaml = await import("js-yaml");
+    const snapshot = yaml.dump(chain);
+    saveExecution(execution, snapshot);
+  } catch {
+    persistExecutions();
+  }
 
   for (const step of chain.steps) {
     execution.steps[step.id] = {
@@ -1935,6 +1987,15 @@ export async function executeChain(
 
     return result;
   } catch (err) {
+    // Gate suspension — not a real error, execution is paused
+    if (err instanceof GateSuspendError) {
+      execution.status = "pending";
+      execution.error = `Suspended at gate "${err.stepId}" — POST /executions/${executionId}/approve/${err.stepId} to continue`;
+      emit({ type: "step_log", executionId, stepId: err.stepId, message: "Execution suspended — worker released", level: "info" });
+      persistExecutions();
+      return `suspended:${err.stepId}`;
+    }
+
     const error = err instanceof Error ? err.message : String(err);
     execution.status = "error";
     execution.error = error;
@@ -1964,7 +2025,20 @@ export async function resumeExecution(
 ): Promise<string> {
   const existing = executions.get(executionId);
   if (!existing) throw new Error(`Execution ${executionId} not found`);
-  if (existing.status !== "error") throw new Error(`Execution ${executionId} is not in error state (current: ${existing.status})`);
+  if (existing.status !== "error" && existing.status !== "pending") throw new Error(`Execution ${executionId} is not in error/pending state (current: ${existing.status})`);
+
+  // Use chain snapshot from launch if available (protects against YAML changes during execution)
+  try {
+    const snapshot = loadChainSnapshot(executionId);
+    if (snapshot) {
+      const yaml = await import("js-yaml");
+      const parsed = yaml.load(snapshot) as ChainDefinition;
+      if (parsed && parsed.steps) {
+        chain = parsed;
+        emit({ type: "step_log", executionId, stepId: "chain", message: "Resuming from chain snapshot (safe against YAML changes)", level: "info" });
+      }
+    }
+  } catch { /* fallback to provided chain */ }
 
   // Restore vars from completed steps
   const vars: Record<string, string> = {};

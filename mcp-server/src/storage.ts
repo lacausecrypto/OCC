@@ -70,6 +70,11 @@ export function initStorage(): void {
     CREATE INDEX IF NOT EXISTS idx_step_exec ON step_checkpoints(execution_id);
   `);
 
+  // Migration: add chain_snapshot column if missing (safe for existing DBs)
+  try {
+    db.exec(`ALTER TABLE executions ADD COLUMN chain_snapshot TEXT`);
+  } catch { /* column already exists */ }
+
   // Migrate: fix orphaned running executions from previous crash
   db.prepare(`
     UPDATE executions SET status = 'error', error = 'Interrupted — server restarted', finished_at = datetime('now')
@@ -141,12 +146,23 @@ function getStmts() {
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
-export function saveExecution(exec: ChainExecution): void {
+export function saveExecution(exec: ChainExecution, chainSnapshot?: string): void {
   const existing = getStmts().getExecution.get(exec.id);
   if (!existing) {
     getStmts().insertExecution.run(exec.id, exec.chainName, exec.status, JSON.stringify(exec.input), exec.startedAt);
   }
   getStmts().updateExecution.run(exec.status, exec.result ?? null, exec.error ?? null, exec.finishedAt ?? null, exec.durationMs ?? null, exec.id);
+
+  // Save chain snapshot on first save (for resume safety)
+  if (chainSnapshot) {
+    db.prepare(`UPDATE executions SET chain_snapshot = ? WHERE id = ? AND chain_snapshot IS NULL`).run(chainSnapshot, exec.id);
+  }
+}
+
+/** Load the chain snapshot saved at execution start (for safe resume). */
+export function loadChainSnapshot(executionId: string): string | null {
+  const row = db.prepare(`SELECT chain_snapshot FROM executions WHERE id = ?`).get(executionId) as any;
+  return row?.chain_snapshot ?? null;
 }
 
 export function checkpointStep(executionId: string, step: StepResult): void {
