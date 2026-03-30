@@ -17,6 +17,10 @@ RUN cd mcp-server && npm prune --production
 COPY chains ./chains
 COPY pipelines ./pipelines
 
+# Run as non-root user for security
+RUN groupadd -r occ && useradd -r -g occ -d /app occ && chown -R occ:occ /app
+USER occ
+
 ENV CHAINS_DIR=/app/chains
 ENV PIPELINES_DIR=/app/pipelines
 ENV REST_PORT=4242

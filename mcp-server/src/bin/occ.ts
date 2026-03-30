@@ -516,7 +516,7 @@ async function cmdRunPipeline(pipelineName: string, args: string[]) {
     console.log(`\x1b[1mInputs:\x1b[0m ${JSON.stringify(input)}`);
   }
 
-  const { status, data } = await fetchJSON(`/pipelines/${pipelineName}/execute`, "POST", { input });
+  const { status, data } = await fetchJSON(`/pipelines/${pipelineName}/execute`, "POST", { input, priority });
   if (status >= 400) {
     console.error(`\x1b[31mError:\x1b[0m ${data.error || JSON.stringify(data)}`);
     process.exit(1);
@@ -530,7 +530,7 @@ function parsePriority(args: string[]): number {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--priority" || args[i] === "-p") {
       const val = Number(args[i + 1]);
-      if (!isNaN(val)) return val;
+      if (!isNaN(val)) return Math.max(1, Math.min(10, Math.round(val)));
     }
   }
   return 5;

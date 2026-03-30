@@ -92,7 +92,15 @@ async function getClient(serverName: string): Promise<Client> {
       { capabilities: {} },
     );
 
-    await client.connect(transport);
+    try {
+      await client.connect(transport);
+    } catch (err) {
+      // Clean up transport on connection failure to prevent process leak
+      connectingClients.delete(serverName);
+      try { await transport.close(); } catch { /* best-effort cleanup */ }
+      throw err;
+    }
+
     activeClients.set(serverName, client);
     connectingClients.delete(serverName);
 

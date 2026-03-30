@@ -255,7 +255,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   type: "object",
                   required: ["type", "inject_as"],
                   properties: {
-                    type: { type: "string", enum: ["current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var"] },
+                    type: { type: "string", enum: [
+                      "current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var",
+                      "mcp_call", "db_query", "email", "pdf_generate", "ocr",
+                      "state_load", "state_save", "vector_query", "vector_index", "json_parse", "diff_inject", "notify",
+                      "semantic_cache", "screenshot", "sandbox_exec", "cost_gate", "ast_parse",
+                      "embed_compare", "graph_query", "parallel_fetch", "template_render", "approval_request"
+                    ] },
                     inject_as: { type: "string", description: "Variable name available as {inject_as} in the prompt" },
                     label: { type: "string" },
                     url: { type: "string", description: "For http_fetch" },
@@ -353,16 +359,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "add_pre_tool",
       description:
         "Add a pre-tool to a step. Pre-tools run BEFORE the LLM call and inject results as {inject_as} variables into the prompt. " +
-        "Types: current_datetime (no params), web_search (query), http_fetch (url), read_file (path), write_file (path + content), bash (command), env_var (var_name). " +
-        "Example: add web_search with query '{topic} latest 2025' inject_as 'web_data', then use {web_data} in the prompt. " +
-        "write_file writes resolved content (with {variables}) to a file, injecting the path as variable — ideal for materializing large step outputs to disk before a tool-using step.",
+        "27 types available: basic (current_datetime, http_fetch, web_search, read_file, write_file, bash, env_var, mcp_call, db_query, email, pdf_generate, ocr), " +
+        "state/memory (state_load, state_save, vector_query, vector_index, json_parse, diff_inject, notify, semantic_cache), " +
+        "advanced (screenshot, sandbox_exec, cost_gate, ast_parse, embed_compare, graph_query, parallel_fetch, template_render, approval_request). " +
+        "Example: add web_search with query '{topic} latest 2025' inject_as 'web_data', then use {web_data} in the prompt.",
       inputSchema: {
         type: "object",
         required: ["chain_name", "step_id", "type", "inject_as"],
         properties: {
           chain_name: { type: "string" },
           step_id: { type: "string" },
-          type: { type: "string", enum: ["current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var"] },
+          type: { type: "string", enum: [
+            "current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var",
+            "mcp_call", "db_query", "email", "pdf_generate", "ocr",
+            "state_load", "state_save", "vector_query", "vector_index", "json_parse", "diff_inject", "notify",
+            "semantic_cache", "screenshot", "sandbox_exec", "cost_gate", "ast_parse",
+            "embed_compare", "graph_query", "parallel_fetch", "template_render", "approval_request"
+          ] },
           inject_as: { type: "string", description: "Variable name usable as {inject_as} in the step prompt" },
           label: { type: "string" },
           url: { type: "string" },

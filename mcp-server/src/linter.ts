@@ -243,6 +243,18 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
       if (pt.type === "template_render" && !pt.template) {
         issues.push({ level: "error", stepId: step.id, message: `Pre-tool template_render missing "template"` });
       }
+      // graph_query validation
+      if (pt.type === "graph_query" && !pt.triples && !pt.graph_query_subject) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool graph_query needs "triples" (write) or "graph_query_subject" (read)` });
+      }
+      // ast_parse validation
+      if (pt.type === "ast_parse" && !pt.path) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool ast_parse missing "path"` });
+      }
+      // approval_request validation
+      if (pt.type === "approval_request" && !pt.title) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool approval_request missing "title"` });
+      }
       // Validate http_fetch URL format
       if (pt.type === "http_fetch" && pt.url && !pt.url.includes("{")) {
         try { new URL(pt.url); }
@@ -349,7 +361,7 @@ export function dryRunChain(
 
   // Validate inputs
   for (const inputDef of chain.inputs ?? []) {
-    if (!inputDef.optional && !input[inputDef.name]) {
+    if (!inputDef.optional && input[inputDef.name] === undefined) {
       issues.push({
         level: "error",
         message: `Missing required input: "${inputDef.name}"`,

@@ -29,11 +29,11 @@ export function evaluateCondition(expr: string): boolean {
   const containsMatch = trimmed.match(/^(.+?)\s+contains\s+"([^"]*)"$/);
   if (containsMatch) return containsMatch[1].trim().includes(containsMatch[2]);
 
-  // numeric: left > N, left < N
-  const gtMatch = trimmed.match(/^(.+?)\s*>\s*(\d+)$/);
+  // numeric: left > N, left < N (supports integers and floats)
+  const gtMatch = trimmed.match(/^(.+?)\s*>\s*(\d+\.?\d*)$/);
   if (gtMatch) return Number(gtMatch[1].trim()) > Number(gtMatch[2]);
 
-  const ltMatch = trimmed.match(/^(.+?)\s*<\s*(\d+)$/);
+  const ltMatch = trimmed.match(/^(.+?)\s*<\s*(\d+\.?\d*)$/);
   if (ltMatch) return Number(ltMatch[1].trim()) < Number(ltMatch[2]);
 
   // truthy: non-empty string = true
@@ -50,14 +50,17 @@ export function evaluateCondition(expr: string): boolean {
  */
 export function resolveVariables(template: string, vars: Record<string, string>): string {
   return template.replace(
-    /\{(\w+)(?:\.(\w+))?(?:\|"?([^"}\s]*)"?)?\}/g,
-    (_match, key: string, subkey: string | undefined, fallback: string | undefined) => {
+    /\{(\w+)(?:\.(\w+))?(?:\|"([^"]*)"|(\|[^}]*))?\}/g,
+    (_match, key: string, subkey: string | undefined, quotedFallback: string | undefined, unquotedFallback: string | undefined) => {
       if (subkey) {
         const compound = `${key}.${subkey}`;
         if (vars[compound] !== undefined) return vars[compound];
       }
       if (vars[key] !== undefined) return vars[key];
-      if (fallback !== undefined && fallback !== "") return fallback;
+      // Quoted fallback: {var|"hello world"}
+      if (quotedFallback !== undefined) return quotedFallback;
+      // Unquoted fallback: {var|default} (strip leading |)
+      if (unquotedFallback !== undefined && unquotedFallback.length > 1) return unquotedFallback.slice(1);
       return _match; // keep original if no match
     }
   );

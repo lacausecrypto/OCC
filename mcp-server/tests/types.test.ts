@@ -4,7 +4,13 @@ import { z } from "zod";
 // ─── Zod schemas mirroring loader.ts for runtime validation ──────────────────
 
 const PreToolSchema = z.object({
-  type: z.enum(["current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var"]),
+  type: z.enum([
+    "current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var",
+    "mcp_call", "db_query", "email", "pdf_generate", "ocr",
+    "state_load", "state_save", "vector_query", "vector_index", "json_parse", "diff_inject", "notify",
+    "semantic_cache", "screenshot", "sandbox_exec", "cost_gate", "ast_parse",
+    "embed_compare", "graph_query", "parallel_fetch", "template_render", "approval_request",
+  ]),
   inject_as: z.string().min(1),
   label: z.string().optional(),
   url: z.string().optional(),
@@ -23,7 +29,7 @@ const RetrySchema = z.object({
 
 const StepSchema = z.object({
   id: z.string().min(1),
-  type: z.enum(["agent", "router", "gate", "evaluator", "transform", "loop", "merge", "browser"]).optional(),
+  type: z.enum(["agent", "router", "gate", "evaluator", "transform", "loop", "merge", "browser", "subchain", "debate", "webhook"]).optional(),
   label: z.string().optional(),
   model: z.string().optional(),
   prompt: z.string().min(1),
@@ -343,9 +349,15 @@ describe("RetryConfig", () => {
 // ─── 3. PreTool types ────────────────────────────────────────────────────────
 
 describe("PreTool types", () => {
-  const ALL_PRE_TOOL_TYPES = ["current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var"] as const;
+  const ALL_PRE_TOOL_TYPES = [
+    "current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var",
+    "mcp_call", "db_query", "email", "pdf_generate", "ocr",
+    "state_load", "state_save", "vector_query", "vector_index", "json_parse", "diff_inject", "notify",
+    "semantic_cache", "screenshot", "sandbox_exec", "cost_gate", "ast_parse",
+    "embed_compare", "graph_query", "parallel_fetch", "template_render", "approval_request",
+  ] as const;
 
-  it("accepts all 7 PreToolType values", () => {
+  it("accepts all 27 PreToolType values", () => {
     for (const t of ALL_PRE_TOOL_TYPES) {
       const result = PreToolSchema.safeParse({ type: t, inject_as: "var_" + t });
       expect(result.success, `PreToolType "${t}" should be valid`).toBe(true);

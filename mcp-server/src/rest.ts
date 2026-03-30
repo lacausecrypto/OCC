@@ -336,14 +336,15 @@ app.get("/download", (req, res) => {
   const allowed = [os.tmpdir(), "/tmp", process.env.WORKSPACE_DIR ?? ""].filter(Boolean);
   const safe = allowed.some((dir) => {
     const resolvedDir = path.resolve(dir);
-    return resolved.startsWith(resolvedDir + path.sep) || resolved === resolvedDir;
+    return resolved.startsWith(resolvedDir + path.sep);
   });
   if (!safe) return res.status(403).json({ error: "Path not allowed" });
 
   if (!fs.existsSync(resolved)) return res.status(404).json({ error: "File not found" });
 
   const filename = path.basename(resolved);
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  const safeFilename = filename.replace(/["\\\n\r]/g, "_");
+  res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
   res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
   return res.sendFile(resolved);
 });
@@ -690,6 +691,11 @@ app.post("/generate-chain", async (req: Request, res: Response) => {
 
     if (answers && session) {
       // ── Continue conversation with answers ──────────────────
+      // Reset session expiry on access
+      if ((session as any)._timeout) { clearTimeout((session as any)._timeout); }
+      const sid = session.conversationId;
+      (session as any)._timeout = setTimeout(() => sessions.delete(sid), 600_000);
+
       userMessage = `Voici mes réponses à tes questions :\n\n${answers}\n\nMaintenant crée la chain avec les outils MCP.`;
       session.history.push(userMessage);
     } else {
@@ -700,8 +706,9 @@ app.post("/generate-chain", async (req: Request, res: Response) => {
       userMessage = `Demande de l'utilisateur : "${description}"`;
       session.history.push(userMessage);
 
-      // Auto-cleanup old sessions after 10 min
-      setTimeout(() => sessions.delete(sid), 600_000);
+      // Auto-cleanup old sessions after 10 min (reset on each access)
+      const sessionTimeout = setTimeout(() => sessions.delete(sid), 600_000);
+      (session as any)._timeout = sessionTimeout;
     }
 
     const fullPrompt = session.history.length > 1

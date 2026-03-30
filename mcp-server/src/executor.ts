@@ -860,7 +860,7 @@ let claudeBinValidated = false;
 let claudeBinPath = "";
 
 export function validateClaudeBinary(): void {
-  const claudeBin = process.env.CLAUDE_BIN ?? "claude";
+  const claudeBin = process.env.CLAUDE_CLI ?? process.env.CLAUDE_BIN ?? "claude";
   const whichCmd = process.platform === "win32" ? "where" : "which";
   try {
     execSync(`${whichCmd} "${claudeBin}"`, { encoding: "utf-8", timeout: 5000 });
@@ -868,7 +868,7 @@ export function validateClaudeBinary(): void {
     claudeBinValidated = true;
     process.stderr.write(`[occ] Claude binary verified: ${claudeBin}\n`);
   } catch {
-    process.stderr.write(`[occ] WARNING: Claude binary "${claudeBin}" not found in PATH. Set CLAUDE_BIN env var.\n`);
+    process.stderr.write(`[occ] WARNING: Claude binary "${claudeBin}" not found in PATH. Set CLAUDE_CLI env var.\n`);
     claudeBinPath = claudeBin; // still set so error is clear if used
   }
 }
@@ -923,7 +923,7 @@ function runClaude(
         claudeBinValidated = true;
         claudeBinPath = claudeBin;
       } catch {
-        reject(new Error(`Claude binary "${claudeBin}" not found in PATH. Set CLAUDE_BIN env var to the full path.`));
+        reject(new Error(`Claude binary "${claudeBin}" not found in PATH. Set CLAUDE_CLI env var to the full path.`));
         return;
       }
     }
@@ -1056,7 +1056,7 @@ function runClaude(
           }
         } catch {
           // Non-JSON line — treat as raw text (fallback for old CLI versions)
-          if (line.trim() && !fullText && fullText.length < MAX_OUTPUT) {
+          if (line.trim() && fullText.length < MAX_OUTPUT) {
             fullText += line + "\n";
             onChunk(line + "\n");
           }
@@ -1168,6 +1168,7 @@ const pendingApprovals = new Map<string, { resolve: (value: string) => void }>()
 
 // Gate results for suspend/resume pattern (non-blocking gates)
 const gateResults = new Map<string, string>(); // executionId:stepId → "approved"|"rejected"|"skipped"
+const gateTimers = new Map<string, ReturnType<typeof setTimeout>>(); // executionId:stepId → timeout handle
 
 /** Error thrown to suspend execution at a gate step (frees the worker). */
 export class GateSuspendError extends Error {
@@ -1198,6 +1199,10 @@ export function getPendingApprovals(): Array<{ executionId: string; stepId: stri
 
 export function approveGate(executionId: string, stepId: string, approved: boolean): boolean {
   const key = `${executionId}:${stepId}`;
+
+  // Clear the timeout timer for this gate
+  const timer = gateTimers.get(key);
+  if (timer) { clearTimeout(timer); gateTimers.delete(key); }
 
   // New suspend/resume pattern: store result for when execution resumes
   gateResults.set(key, approved ? "approved" : "rejected");
@@ -1313,7 +1318,7 @@ async function executeStep(
       onLog("Early exit triggered", "info");
       stepResult.status = "skipped";
       stepResult.finishedAt = new Date().toISOString();
-      vars[step.output_var] = vars[chain.output] ?? "";
+      vars[step.output_var] = "";
       emit({ type: "step_done", executionId, stepId, durationMs: 0 });
 
       // Signal early exit by setting a special var
@@ -1507,7 +1512,7 @@ async function executeStep(
         break;
       }
       case "truncate": {
-        const limit = step.truncate_limit ?? parseInt(step.template_str ?? step.json_path ?? "5000", 10);
+        const limit = step.truncate_limit ?? 5000;
         result = inputVal.length > limit ? inputVal.slice(0, limit) + `\n[truncated from ${inputVal.length} chars]` : inputVal;
         break;
       }
@@ -1590,8 +1595,8 @@ async function executeStep(
     let passed = false;
     let evalOutput = "";
     let evalDuration = 0;
-    let evalInputTokens: number | undefined;
-    let evalOutputTokens: number | undefined;
+    let evalInputTokens = 0;
+    let evalOutputTokens = 0;
     const maxRetries = step.max_retries ?? 2;
     const retryKey = `__retry_count_${step.retry_target ?? step.id}`;
 
@@ -1612,8 +1617,8 @@ async function executeStep(
 
       evalOutput = evalResult.stdout;
       evalDuration += evalResult.durationMs;
-      evalInputTokens = evalResult.inputTokens;
-      evalOutputTokens = evalResult.outputTokens;
+      evalInputTokens += evalResult.inputTokens ?? 0;
+      evalOutputTokens += evalResult.outputTokens ?? 0;
 
       if (step.eval_scoring) {
         const scoreMatch = evalOutput.match(/^(\d+)/);
@@ -1753,21 +1758,24 @@ async function executeStep(
     persistStepCheckpoint(executionId, stepResult);
     persistExecutions();
 
-    // Register for timeout
+    // Register for timeout (track timer so it can be cancelled on gate resolution)
     const timeoutMs = (step.timeout_hours ?? 24) * 60 * 60 * 1000;
     const onTimeout = step.on_timeout ?? "error";
-    setTimeout(() => {
-      if (!gateResults.has(`${executionId}:${stepId}`)) {
+    const gateKey = `${executionId}:${stepId}`;
+    const gateTimer = setTimeout(() => {
+      gateTimers.delete(gateKey);
+      if (!gateResults.has(gateKey)) {
         // Auto-resolve on timeout
         if (onTimeout === "approve") {
-          gateResults.set(`${executionId}:${stepId}`, "approved");
+          gateResults.set(gateKey, "approved");
         } else if (onTimeout === "skip") {
-          gateResults.set(`${executionId}:${stepId}`, "skipped");
+          gateResults.set(gateKey, "skipped");
         } else {
-          gateResults.set(`${executionId}:${stepId}`, "rejected");
+          gateResults.set(gateKey, "rejected");
         }
       }
     }, timeoutMs);
+    gateTimers.set(gateKey, gateTimer);
 
     // Throw to unwind the execution — worker is freed
     throw new GateSuspendError(stepId, executionId);
@@ -2037,7 +2045,7 @@ async function executeStep(
             if (iterStep.pre_tools && iterStep.pre_tools.length > 0) {
               const preResults = await executePreTools(iterStep.pre_tools, iterVars, (message, level) => {
                 emit({ type: "step_log", executionId, stepId, message: `[iter ${itemIdx}] ${message}`, level });
-              });
+              }, execution, executionId, step);
               Object.assign(iterVars, preResults);
             }
 
@@ -2368,7 +2376,10 @@ async function executeStep(
       vars,
       (message, level) => {
         emit({ type: "step_log", executionId, stepId, message, level });
-      }
+      },
+      execution,
+      executionId,
+      step,
     );
     Object.assign(vars, preResults);
   }

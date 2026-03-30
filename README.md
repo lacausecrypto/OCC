@@ -38,7 +38,7 @@ It is **not** a general-purpose agent framework like LangChain or CrewAI. It doe
 - SQLite persistence with per-step checkpointing and crash recovery
 - Persistent job queue with priority
 - 17-command CLI with dry-run (cost estimate, 0 tokens) and chain linting
-- MCP bidirectional: exposes 25 tools AND consumes external MCP servers
+- MCP bidirectional: exposes 28 tools AND consumes external MCP servers
 
 **What it doesn't do (yet):**
 - No web UI / visual canvas for chain editing
@@ -261,11 +261,11 @@ occ cancel | approve | reject
 ## Architecture
 
 ```
-Claude Code ──MCP──▶ MCP Server (25 tools) ──▶ Executor ──▶ claude --print
+Claude Code ──MCP──▶ MCP Server (28 tools) ──▶ Executor ──▶ claude --print
 curl/browser ──HTTP──▶ REST+SSE (:4242)   ──▶ Queue ──▶ SQLite (checkpoints)
 ```
 
-14 TypeScript modules: executor, rest, loader, queue, storage, scheduler, linter, utils, mcp-client, pipeline-executor, pipeline-loader, types, index (MCP), CLI.
+15 TypeScript modules: executor, rest, loader, queue, storage, scheduler, linter, utils, mcp-client, pretool-extras, pipeline-executor, pipeline-loader, types, index (MCP), CLI.
 
 ## How OCC Compares
 
@@ -299,7 +299,7 @@ A 6-step research chain typically uses ~15K tokens vs ~40K+ in a single-prompt a
 
 ## Tests
 
-457 tests across 12 files:
+553 tests across 18 files:
 
 | File | Tests | Coverage |
 |------|-------|----------|
@@ -307,12 +307,18 @@ A 6-step research chain typically uses ~15K tokens vs ~40K+ in a single-prompt a
 | `rest.test.ts` | 78 | REST endpoints, input validation, SSE |
 | `chains.test.ts` | 48 | All 6 demo chains YAML validation |
 | `types.test.ts` | 47 | Zod schema edge cases |
-| `utils.test.ts` | 37 | evaluateCondition, resolveVariables |
 | `cli.test.ts` | 44 | CLI end-to-end (17 commands) |
+| `utils.test.ts` | 37 | evaluateCondition, resolveVariables |
 | `linter.test.ts` | 32 | Variable detection, dependency checks, dry-run |
 | `storage.test.ts` | 27 | SQLite CRUD, checkpointing, crash recovery, stats |
+| `pretool-tier1.test.ts` | 20 | State, vector, JSON parse, diff, notify |
+| `pretool-tier3.test.ts` | 19 | Embed compare, graph, parallel fetch, template, approval |
+| `pretools-new.test.ts` | 17 | MCP call, db_query, email, pdf, ocr pre-tools |
 | `queue.test.ts` | 16 | Enqueue, priority, cancellation, retry |
+| `webhook.test.ts` | 15 | Webhook step execution, retry, status codes |
+| `pretool-tier2.test.ts` | 13 | Semantic cache, screenshot, sandbox, cost gate, AST |
 | `concurrency.test.ts` | 12 | Parallel SQLite writes, queue contention, isolation |
+| `pretools.test.ts` | 12 | Core pre-tool execution |
 | `mcp-client.test.ts` | 11 | Config loading, registration, error handling |
 | `scheduler.test.ts` | 8 | Cron scheduling |
 
@@ -337,7 +343,7 @@ Run: `cd mcp-server && npm test`
 | `CHAINS_DIR` | `../chains` | Chain YAML files directory |
 | `PIPELINES_DIR` | `../pipelines` | Pipeline YAML files directory |
 | `CLAUDE_CLI` | `claude` | Claude CLI binary path |
-| `CLAUDE_TIMEOUT_MS` | `300000` | Per-step timeout (5 min) |
+| `CLAUDE_TIMEOUT_MS` | `1800000` | Per-step timeout (30 min) |
 | `MAX_CONCURRENT_EXECUTIONS` | `5` | Worker pool size |
 | `EXECUTION_MAX_AGE_DAYS` | `7` | Auto-purge old executions |
 | `OCC_DB` | `<auto>` | SQLite path (executions + checkpoints) |

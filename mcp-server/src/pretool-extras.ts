@@ -240,19 +240,24 @@ function getSemanticCacheDb(): Database.Database {
 export function semanticCacheLookup(query: string, ttlMinutes: number, _threshold: number): string | null {
   const db = getSemanticCacheDb();
   try {
+    // Escape FTS5 special characters to prevent syntax errors
+    const safeQuery = query.replace(/['"(){}:*^~\-]/g, " ").replace(/\s+/g, " ").trim();
+    if (!safeQuery) return null;
+
     // Check FTS5 match with TTL validation
     const rows = db.prepare(`
       SELECT sc.result, scm.created_at FROM sem_cache sc
       JOIN sem_cache_meta scm ON scm.rowid = sc.rowid
-      WHERE sem_cache MATCH ?
+      WHERE sc MATCH ?
         AND datetime(scm.created_at, '+' || scm.ttl_minutes || ' minutes') > datetime('now')
       ORDER BY rank LIMIT 1
-    `).all(query) as any[];
+    `).all(safeQuery) as any[];
     if (rows.length > 0) {
       return rows[0].result;
     }
-  } catch {
-    // FTS query syntax error — no match
+  } catch (err) {
+    // FTS query syntax error or DB issue — log and return no match
+    process.stderr.write(`[occ-semantic-cache] Lookup error: ${err instanceof Error ? err.message : String(err)}\n`);
   }
   return null;
 }
@@ -260,10 +265,12 @@ export function semanticCacheLookup(query: string, ttlMinutes: number, _threshol
 export function semanticCacheStore(query: string, result: string, ttlMinutes: number): void {
   const db = getSemanticCacheDb();
   const queryHash = crypto.createHash("sha256").update(query).digest("hex").slice(0, 16);
-  db.prepare(`INSERT INTO sem_cache (query, result) VALUES (?, ?)`).run(query, result);
-  // Get the rowid of the just-inserted FTS5 row
-  const lastId = (db.prepare(`SELECT last_insert_rowid() as id`).get() as any).id;
-  db.prepare(`INSERT INTO sem_cache_meta (rowid, query_hash, ttl_minutes) VALUES (?, ?, ?)`).run(lastId, queryHash, ttlMinutes);
+  const insertTx = db.transaction(() => {
+    db.prepare(`INSERT INTO sem_cache (query, result) VALUES (?, ?)`).run(query, result);
+    const lastId = (db.prepare(`SELECT last_insert_rowid() as id`).get() as any).id;
+    db.prepare(`INSERT INTO sem_cache_meta (rowid, query_hash, ttl_minutes) VALUES (?, ?, ?)`).run(lastId, queryHash, ttlMinutes);
+  });
+  insertTx();
 }
 
 // ─── Screenshot (via Playwright) ────────────────────────────────────────────

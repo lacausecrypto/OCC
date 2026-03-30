@@ -195,9 +195,9 @@ steps:
       Quality Score: {quality_score}
       Security: {security_review}
       Performance: {performance_review}
-      Architecture: {architecture_review}
-      Frontend: {frontend_review}
-      Testing: {testing_review}
+      Architecture: {architecture_review|"N/A — not applicable for this codebase type"}
+      Frontend: {frontend_review|"N/A — not applicable for this codebase type"}
+      Testing: {testing_review|"N/A — not applicable for this codebase type"}
 
       ## Code Review Report
 

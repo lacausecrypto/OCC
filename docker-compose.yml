@@ -10,5 +10,5 @@ services:
       - REST_PORT=4242
       - CHAINS_DIR=/app/chains
       - PIPELINES_DIR=/app/pipelines
-      - CLAUDE_BIN=claude
+      - CLAUDE_CLI=claude
     restart: unless-stopped
