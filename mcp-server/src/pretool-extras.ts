@@ -47,9 +47,13 @@ export function stateLoad(key: string, scope: string, defaultValue: string): str
 
 export function stateSave(key: string, value: string, scope: string): void {
   const db = getStateDb();
-  db.prepare(`INSERT INTO kv_state (scope, key, value, updated_at) VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `).run(scope, key, value);
+  // Use transaction for atomicity (prevents lost updates in concurrent writes)
+  const saveInTx = db.transaction(() => {
+    db.prepare(`INSERT INTO kv_state (scope, key, value, updated_at) VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+    `).run(scope, key, value);
+  });
+  saveInTx();
 }
 
 // ─── Vector Store (vector_query / vector_index) — SQLite FTS5 ───────────────
@@ -82,13 +86,17 @@ export function vectorIndex(collection: string, text: string, chunkSize: number)
   for (let i = 0; i < text.length; i += chunkSize) {
     chunks.push(text.slice(i, i + chunkSize));
   }
-  const stmt = db.prepare(`INSERT INTO vectors (collection, chunk, source_id) VALUES (?, ?, ?)`);
-  for (const chunk of chunks) {
-    stmt.run(collection, chunk, sourceId);
-  }
-  db.prepare(`INSERT INTO vector_meta (id, collection, source_text) VALUES (?, ?, ?)`).run(
-    sourceId, collection, text.slice(0, 500)
-  );
+  // Transaction: all chunks inserted atomically (no partial writes on crash)
+  const indexInTx = db.transaction(() => {
+    const stmt = db.prepare(`INSERT INTO vectors (collection, chunk, source_id) VALUES (?, ?, ?)`);
+    for (const chunk of chunks) {
+      stmt.run(collection, chunk, sourceId);
+    }
+    db.prepare(`INSERT INTO vector_meta (id, collection, source_text) VALUES (?, ?, ?)`).run(
+      sourceId, collection, text.slice(0, 500)
+    );
+  });
+  indexInTx();
   return `Indexed ${chunks.length} chunks into "${collection}" (id: ${sourceId})`;
 }
 

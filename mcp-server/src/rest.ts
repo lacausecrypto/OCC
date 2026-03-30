@@ -218,17 +218,17 @@ app.get("/executions/:id/stream", (req, res) => {
       res.write(`: heartbeat\n\n`);
     } catch {
       clearInterval(heartbeatTimer);
+      sseClients.set(id, (sseClients.get(id) ?? []).filter((r) => r !== res));
     }
   }, 30000);
 
-  req.on("close", () => {
+  const cleanupSSE = () => {
     clearInterval(heartbeatTimer);
-    const list = sseClients.get(id) ?? [];
-    sseClients.set(
-      id,
-      list.filter((r) => r !== res)
-    );
-  });
+    sseClients.set(id, (sseClients.get(id) ?? []).filter((r) => r !== res));
+  };
+
+  req.on("close", cleanupSSE);
+  res.on("error", cleanupSSE); // Handle silent disconnects
 });
 
 // GET /executions/:id → status

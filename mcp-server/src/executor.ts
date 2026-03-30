@@ -4,7 +4,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import type {
   CacheEntry,
   ChainDefinition,
@@ -400,7 +400,12 @@ async function executeSinglePreTool(
     }
 
     case "read_file": {
-      const filePath = resolveVariables(tool.path ?? "", vars);
+      const filePath = path.resolve(resolveVariables(tool.path ?? "", vars));
+      // Path traversal protection: restrict to WORKSPACE_DIR or cwd
+      const safeRoot = path.resolve(process.env.WORKSPACE_DIR ?? process.cwd());
+      if (!filePath.startsWith(safeRoot) && !filePath.startsWith(os.tmpdir())) {
+        throw new Error(`read_file: path "${filePath}" outside allowed directory "${safeRoot}"`);
+      }
       const encoding = (tool.encoding ?? "utf-8") as BufferEncoding;
       result = fs.readFileSync(filePath, encoding);
       if (result.length > 50000) {
@@ -411,7 +416,12 @@ async function executeSinglePreTool(
     }
 
     case "write_file": {
-      const filePath = resolveVariables(tool.path ?? "", vars);
+      const filePath = path.resolve(resolveVariables(tool.path ?? "", vars));
+      // Path traversal protection
+      const safeWriteRoot = path.resolve(process.env.WORKSPACE_DIR ?? process.cwd());
+      if (!filePath.startsWith(safeWriteRoot) && !filePath.startsWith(os.tmpdir())) {
+        throw new Error(`write_file: path "${filePath}" outside allowed directory "${safeWriteRoot}"`);
+      }
       const fileContent = resolveVariables(tool.content ?? "", vars);
       const encoding = (tool.encoding ?? "utf-8") as BufferEncoding;
       const dir = path.dirname(filePath);
@@ -611,32 +621,30 @@ async function executeSinglePreTool(
     }
 
     case "db_query": {
-      // Database query via shell — supports PostgreSQL, MySQL, SQLite
-      // Requires the DB client CLI to be installed (psql, mysql, sqlite3)
+      // Database query — uses execFileSync to prevent shell injection
       const connStr = resolveVariables(tool.connection ?? "", vars);
       const sqlQuery = resolveVariables(tool.sql ?? "", vars);
 
       if (!connStr || !sqlQuery) throw new Error("db_query requires connection and sql");
 
-      let cmd: string;
-      if (connStr.startsWith("postgres")) {
-        cmd = `psql "${connStr}" -t -A -c "${sqlQuery.replace(/"/g, '\\"')}"`;
-      } else if (connStr.startsWith("mysql")) {
-        // mysql://user:pass@host:port/db
-        cmd = `mysql --batch --raw -e "${sqlQuery.replace(/"/g, '\\"')}" "${connStr}"`;
-      } else if (connStr.endsWith(".db") || connStr.endsWith(".sqlite") || connStr.startsWith("sqlite:")) {
-        const dbPath = connStr.replace("sqlite:", "");
-        cmd = `sqlite3 "${dbPath}" "${sqlQuery.replace(/"/g, '\\"')}"`;
-      } else {
-        throw new Error(`db_query: unsupported connection string format. Use postgres://, mysql://, or path.db`);
+      try {
+        if (connStr.startsWith("postgres")) {
+          result = execFileSync("psql", [connStr, "-t", "-A", "-c", sqlQuery], { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+        } else if (connStr.startsWith("mysql")) {
+          result = execFileSync("mysql", ["--batch", "--raw", "-e", sqlQuery, connStr], { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+        } else if (connStr.endsWith(".db") || connStr.endsWith(".sqlite") || connStr.startsWith("sqlite:")) {
+          const dbPath = connStr.replace("sqlite:", "");
+          result = execFileSync("sqlite3", [dbPath, sqlQuery], { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+        } else {
+          throw new Error(`db_query: unsupported connection. Use postgres://, mysql://, or path.db`);
+        }
+      } catch (e) {
+        throw new Error(`db_query failed: ${e instanceof Error ? e.message : String(e)}`);
       }
-
-      result = execSync(cmd, { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
       break;
     }
 
     case "email": {
-      // Send email via shell — uses built-in mail/sendmail or curl for SendGrid
       const to = resolveVariables(tool.to ?? "", vars);
       const subject = resolveVariables(tool.subject ?? "", vars);
       const emailBody = resolveVariables(tool.content ?? tool.body ?? "", vars);
@@ -661,11 +669,11 @@ async function executeSinglePreTool(
         });
         result = resp.ok ? `Email sent to ${to} (${resp.status})` : `Email failed: ${resp.status} ${await resp.text()}`;
       } else {
-        // SMTP via sendmail/mail CLI
-        const host = tool.smtp_host ? `--smtp-server=${tool.smtp_host}` : "";
-        const cmd = `echo "${emailBody.replace(/"/g, '\\"')}" | mail -s "${subject.replace(/"/g, '\\"')}" ${host} "${to}"`;
+        // SMTP via sendmail — use execFileSync to prevent injection
         try {
-          execSync(cmd, { timeout: timeoutMs, encoding: "utf-8" });
+          const args = ["-s", subject, to];
+          if (tool.smtp_host) args.push(`--smtp-server=${tool.smtp_host}`);
+          execFileSync("mail", args, { input: emailBody, timeout: timeoutMs, encoding: "utf-8" });
           result = `Email sent to ${to}`;
         } catch (e) {
           throw new Error(`email (smtp) failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -675,9 +683,8 @@ async function executeSinglePreTool(
     }
 
     case "pdf_generate": {
-      // Generate PDF from HTML using wkhtmltopdf (must be installed)
       const htmlContent = resolveVariables(tool.html ?? tool.content ?? "", vars);
-      const outputPath = resolveVariables(tool.output_path ?? tool.path ?? "/tmp/occ-output.pdf", vars);
+      const outputPath = resolveVariables(tool.output_path ?? tool.path ?? path.join(os.tmpdir(), "occ-output.pdf"), vars);
 
       if (!htmlContent) throw new Error("pdf_generate requires html content");
 
@@ -687,13 +694,13 @@ async function executeSinglePreTool(
       fs.writeFileSync(htmlTmpPath, htmlContent, "utf-8");
 
       try {
-        execSync(`wkhtmltopdf --quiet "${htmlTmpPath}" "${outputPath}"`, { timeout: timeoutMs });
+        // Use execFileSync to prevent shell injection
+        execFileSync("wkhtmltopdf", ["--quiet", htmlTmpPath, outputPath], { timeout: timeoutMs });
         result = outputPath;
         onLog(`pdf_generate → ${outputPath}`, "info");
       } catch {
-        // Fallback: try Puppeteer/Chrome headless
         try {
-          execSync(`google-chrome --headless --disable-gpu --print-to-pdf="${outputPath}" "${htmlTmpPath}"`, { timeout: timeoutMs });
+          execFileSync("google-chrome", ["--headless", "--disable-gpu", `--print-to-pdf=${outputPath}`, htmlTmpPath], { timeout: timeoutMs });
           result = outputPath;
         } catch {
           throw new Error("pdf_generate requires wkhtmltopdf or Chrome. Install: apt install wkhtmltopdf");
@@ -705,15 +712,15 @@ async function executeSinglePreTool(
     }
 
     case "ocr": {
-      // OCR via Tesseract (must be installed)
       const imagePath = resolveVariables(tool.image_path ?? tool.path ?? "", vars);
       const lang = tool.language ?? "eng";
 
       if (!imagePath) throw new Error("ocr requires image_path");
       if (!fs.existsSync(imagePath)) throw new Error(`ocr: file not found: ${imagePath}`);
 
+      // Use execFileSync to prevent shell injection
       try {
-        result = execSync(`tesseract "${imagePath}" stdout -l ${lang}`, {
+        result = execFileSync("tesseract", [imagePath, "stdout", "-l", lang], {
           timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024,
         });
       } catch {

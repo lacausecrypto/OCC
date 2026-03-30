@@ -213,10 +213,18 @@ async function runJob(row: any): Promise<void> {
       retries: row.retries,
       maxRetries: row.max_retries,
     });
-    stmts().completeJob.run(executionId, jobId);
+    try {
+      stmts().completeJob.run(executionId, jobId);
+    } catch (dbErr) {
+      process.stderr.write(`[occ-queue] CRITICAL: Failed to mark job ${jobId} as done: ${dbErr}\n`);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    stmts().failJob.run(message, jobId);
+    try {
+      stmts().failJob.run(message, jobId);
+    } catch (dbErr) {
+      process.stderr.write(`[occ-queue] CRITICAL: Failed to mark job ${jobId} as error: ${dbErr}\n`);
+    }
     process.stderr.write(`[occ-queue] Job ${jobId} failed: ${message}\n`);
   }
 }
