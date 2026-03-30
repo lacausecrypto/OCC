@@ -110,6 +110,14 @@ export interface ChainStep {
   debate_agents?: Array<{ prompt: string; model?: string }>;
   debate_rounds?: number;
   debate_decision?: "voting" | "consensus" | "last_round";
+  // Webhook
+  webhook_url?: string;              // URL to POST to (supports {variables})
+  webhook_method?: "POST" | "PUT" | "PATCH" | "GET" | "DELETE";  // default: POST
+  webhook_headers?: Record<string, string>;  // custom headers (supports {variables})
+  webhook_body?: string;             // body template (supports {variables}) — default: JSON of all vars
+  webhook_timeout_ms?: number;       // request timeout (default: 30000)
+  webhook_retry?: number;            // retry count on failure (default: 0)
+  webhook_success_status?: number[]; // HTTP status codes considered success (default: [200-299])
   // Early exit
   early_exit_if?: string;  // condition expression
   // Transform extras

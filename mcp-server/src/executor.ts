@@ -1798,12 +1798,114 @@ async function executeStep(
     return;
   }
 
-  // Webhook: HTTP callback (not yet fully implemented — treat as agent with warning)
+  // Webhook: HTTP callback with payload, headers, retry
   if (stepType === "webhook") {
-    onLog("Webhook step type is not yet fully implemented — executing as agent step", "warn");
+    const webhookStart = Date.now();
+
+    if (!step.webhook_url) {
+      throw new Error(`Webhook step "${step.id}" missing webhook_url`);
+    }
+
+    const url = resolveVariables(step.webhook_url, vars);
+    const method = step.webhook_method ?? "POST";
+    const timeoutMs = step.webhook_timeout_ms ?? 30000;
+    const maxRetries = step.webhook_retry ?? 0;
+    const successStatuses = step.webhook_success_status ?? [];
+
+    // Resolve headers
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (step.webhook_headers) {
+      for (const [k, v] of Object.entries(step.webhook_headers)) {
+        headers[k] = resolveVariables(v, vars);
+      }
+    }
+
+    // Build body
+    let body: string | undefined;
+    if (method !== "GET" && method !== "DELETE") {
+      if (step.webhook_body) {
+        body = resolveVariables(step.webhook_body, vars);
+      } else {
+        // Default: send execution context as JSON
+        body = JSON.stringify({
+          executionId,
+          stepId: step.id,
+          chainName: execution.chainName,
+          vars: Object.fromEntries(
+            Object.entries(vars).filter(([k]) => !k.startsWith("__"))
+          ),
+        });
+      }
+    }
+
+    let lastError = "";
+    let responseBody = "";
+    let responseStatus = 0;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        onLog(`Webhook retry ${attempt}/${maxRetries}`, "warn");
+        await new Promise((r) => setTimeout(r, 1000 * attempt)); // backoff
+      }
+
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        const response = await fetch(url, {
+          method,
+          headers,
+          body,
+          signal: controller.signal,
+        });
+
+        clearTimeout(timer);
+        responseStatus = response.status;
+        responseBody = await response.text();
+
+        // Check success
+        const isSuccess = successStatuses.length > 0
+          ? successStatuses.includes(responseStatus)
+          : responseStatus >= 200 && responseStatus < 300;
+
+        if (isSuccess) {
+          break; // Success — stop retrying
+        }
+
+        lastError = `HTTP ${responseStatus}: ${responseBody.slice(0, 200)}`;
+        onLog(`Webhook returned ${responseStatus}`, "warn");
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        onLog(`Webhook failed: ${lastError}`, "error");
+      }
+    }
+
+    const webhookDuration = Date.now() - webhookStart;
+
+    // If all retries exhausted and still failing, throw
+    const finalSuccess = successStatuses.length > 0
+      ? successStatuses.includes(responseStatus)
+      : responseStatus >= 200 && responseStatus < 300;
+
+    if (!finalSuccess && lastError) {
+      throw new Error(`Webhook failed after ${maxRetries + 1} attempt(s): ${lastError}`);
+    }
+
+    // Store result
+    stepResult.status = "done";
+    stepResult.output = responseBody;
+    stepResult.finishedAt = new Date().toISOString();
+    stepResult.durationMs = webhookDuration;
+    vars[step.output_var] = responseBody;
+
+    emit({ type: "step_done", executionId, stepId, durationMs: webhookDuration });
+    onLog(`Webhook ${method} ${url} → ${responseStatus} (${responseBody.length} chars, ${webhookDuration}ms)`, "info");
+    persistStepCheckpoint(executionId, stepResult);
+    persistExecutions();
+    return;
   }
 
-  // Default: "agent" type (and webhook fallback)
+  // Default: "agent" type
 
   // Execute pre-tools
   if (step.pre_tools && step.pre_tools.length > 0) {

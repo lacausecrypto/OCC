@@ -125,7 +125,12 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
       }
     }
 
-    // 4g. Subchain: check subchain name is provided
+    // 4g. Webhook: check url is provided
+    if (step.type === "webhook" && !step.webhook_url) {
+      issues.push({ level: "error", stepId: step.id, message: `Webhook step missing "webhook_url"` });
+    }
+
+    // 4h. Subchain: check subchain name is provided
     if (step.type === "subchain" && !step.subchain) {
       issues.push({
         level: "error",
@@ -216,6 +221,14 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
     if (step.gate_auto_approve_if) for (const ref of extractVarRefs(step.gate_auto_approve_if)) referencedVars.add(ref);
     // Transform fields
     if (step.template_str) for (const ref of extractVarRefs(step.template_str)) referencedVars.add(ref);
+    // Webhook fields
+    if (step.webhook_url) for (const ref of extractVarRefs(step.webhook_url)) referencedVars.add(ref);
+    if (step.webhook_body) for (const ref of extractVarRefs(step.webhook_body)) referencedVars.add(ref);
+    if (step.webhook_headers) {
+      for (const v of Object.values(step.webhook_headers)) {
+        for (const ref of extractVarRefs(v)) referencedVars.add(ref);
+      }
+    }
   }
 
   for (const step of chain.steps) {

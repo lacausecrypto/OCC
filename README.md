@@ -46,7 +46,6 @@ It is **not** a general-purpose agent framework like LangChain or CrewAI. It doe
 - No distributed execution across multiple machines (single-process, single-machine)
 - No built-in RAG / vector store / knowledge base
 - No authentication on the REST API (designed for local use, add a reverse proxy for production)
-- Webhook step type is defined but not fully implemented (runs as agent step)
 - No OpenAPI/Swagger auto-generated docs
 
 ## Quick Start
@@ -128,7 +127,7 @@ Steps without shared `depends_on` run in parallel automatically.
 | **browser** | Web automation via Playwright |
 | **subchain** | Execute another chain as a step |
 | **debate** | Multi-agent discussion with voting/consensus |
-| **webhook** | HTTP callback (planned — currently runs as agent) |
+| **webhook** | HTTP callback with configurable method, headers, body, retry, status codes |
 
 ### Pre-Tools
 
@@ -296,7 +295,6 @@ Run: `cd mcp-server && npm test`
 - **No authentication** — REST API has no auth layer. Use behind a reverse proxy in production.
 - **No RAG** — no built-in vector store or knowledge base. Use pre-tools for data injection.
 - **Memory** — in-memory execution store + SQLite. Large outputs (>5MB per step) can increase memory usage.
-- **Webhook step** — defined in the schema but executes as a regular agent step.
 
 ## Configuration
 

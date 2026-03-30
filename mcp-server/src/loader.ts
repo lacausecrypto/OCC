@@ -90,6 +90,14 @@ const StepSchema = z.object({
   debate_agents: z.array(z.object({ prompt: z.string(), model: z.string().optional() })).optional(),
   debate_rounds: z.number().optional(),
   debate_decision: z.enum(["voting", "consensus", "last_round"]).optional(),
+  // Webhook
+  webhook_url: z.string().optional(),
+  webhook_method: z.enum(["POST", "PUT", "PATCH", "GET", "DELETE"]).optional(),
+  webhook_headers: z.record(z.string(), z.string()).optional(),
+  webhook_body: z.string().optional(),
+  webhook_timeout_ms: z.number().optional(),
+  webhook_retry: z.number().optional(),
+  webhook_success_status: z.array(z.number()).optional(),
   // Early exit
   early_exit_if: z.string().optional(),
   // Transform extras
