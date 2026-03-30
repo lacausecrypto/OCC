@@ -998,6 +998,7 @@ async function shutdown() {
   try { closeQueue(); } catch { /* ignore */ }
   try { await closeMcpClients(); } catch { /* ignore */ }
   try { closeStorage(); } catch { /* ignore */ }
+  try { const { closeExtraDbs } = await import("./pretool-extras.js"); closeExtraDbs(); } catch { /* ignore */ }
   if (!process.env.VITEST) process.exit(0);
 }
 

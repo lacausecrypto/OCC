@@ -33,7 +33,7 @@ It is **not** a general-purpose agent framework like LangChain or CrewAI. It doe
 - Declarative YAML chains — no Python, no code to write
 - Automatic parallel execution from dependency graph
 - 11 step types (router, evaluator, gate, transform, loop, merge, browser, subchain, debate, webhook)
-- Pre-tools inject data before LLM calls (web search, API calls, MCP servers, bash, files)
+- 27 pre-tool types inject data before LLM calls (HTTP, MCP, SQL, files, git diff, OCR, notifications, state, vectors...)
 - Per-step model selection, caching, retry with fallback, output validation
 - SQLite persistence with per-step checkpointing and crash recovery
 - Persistent job queue with priority
@@ -131,29 +131,60 @@ Steps without shared `depends_on` run in parallel automatically.
 
 ### Pre-Tools
 
-Inject data before a step executes (8 types):
+27 pre-tool types inject data before LLM calls. All support `{variable}` interpolation, `on_error` (inject/skip/fail), `timeout_ms`, `retry`, `cache_ttl_minutes`, and `parallel` execution.
 
+**Data fetching:**
 ```yaml
 pre_tools:
+  - type: http_fetch           # Full HTTP client (GET/POST/PUT, headers, auth, json_path)
   - type: web_search           # Claude web search
-    query: "AI trends 2026"
-    inject_as: trends
-  - type: http_fetch           # HTTP GET
-    url: "https://api.example.com/data"
-    inject_as: api_data
-  - type: mcp_call             # External MCP server
-    server: "github"
-    tool: "search_repositories"
-    args: { query: "{input.topic}" }
-    inject_as: repos
-  - type: bash                 # Shell command
-    command: "git log --oneline -5"
-    inject_as: commits
-    on_error: skip             # "inject" (default) | "skip" | "fail"
-  - type: read_file            # File read
-  - type: write_file           # File write
-  - type: env_var              # Environment variable
-  - type: current_datetime     # Current timestamp
+  - type: mcp_call             # External MCP server (GitHub, Slack, PostgreSQL...)
+  - type: db_query             # SQL queries (PostgreSQL, MySQL, SQLite)
+  - type: parallel_fetch       # Batch URLs with rate limiting
+```
+
+**Files & code:**
+```yaml
+  - type: read_file            # Read file (configurable encoding)
+  - type: write_file           # Write file (append mode, encoding)
+  - type: bash                 # Shell command (stderr capture, timeout)
+  - type: diff_inject          # Git diff — structured, LLM-optimized
+  - type: ast_parse            # Code structure extraction (functions, classes, imports)
+  - type: ocr                  # Image → text (Tesseract)
+  - type: screenshot           # URL → screenshot (Playwright)
+  - type: pdf_generate         # HTML → PDF (wkhtmltopdf/Chrome)
+```
+
+**State & memory:**
+```yaml
+  - type: state_load           # Load persistent state from previous runs
+  - type: state_save           # Save state for future runs
+  - type: vector_query         # Semantic search (SQLite FTS5)
+  - type: vector_index         # Index text into vector store
+  - type: semantic_cache       # Cache by semantic similarity, not exact match
+  - type: graph_query          # Knowledge graph (triples: subject→predicate→object)
+```
+
+**Data processing:**
+```yaml
+  - type: json_parse           # Extract JSON path from LLM output
+  - type: template_render      # Handlebars-style templates (each, if/else)
+  - type: embed_compare        # Compare two texts — similarity + drift detection
+  - type: cost_gate            # Check token budget, skip/warn if over
+```
+
+**Notifications:**
+```yaml
+  - type: notify               # Slack, Discord, Telegram, or generic webhook
+  - type: email                # SMTP or SendGrid
+  - type: approval_request     # Generate approval URL for human-in-the-loop
+```
+
+**System:**
+```yaml
+  - type: env_var              # Environment variable (with default_value)
+  - type: current_datetime     # Timestamp (configurable timezone + format)
+  - type: sandbox_exec         # Docker container execution (isolated)
 ```
 
 ### Advanced

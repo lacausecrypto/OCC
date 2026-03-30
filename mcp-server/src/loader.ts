@@ -7,7 +7,14 @@ import type { ChainDefinition } from "./types.js";
 // ─── Validation schema ────────────────────────────────────────────────────────
 
 const PreToolSchema = z.object({
-  type: z.enum(["current_datetime", "http_fetch", "web_search", "read_file", "write_file", "bash", "env_var", "mcp_call", "db_query", "email", "pdf_generate", "ocr"]),
+  type: z.enum([
+    "current_datetime", "http_fetch", "web_search", "read_file", "write_file",
+    "bash", "env_var", "mcp_call", "db_query", "email", "pdf_generate", "ocr",
+    "state_load", "state_save", "vector_query", "vector_index", "json_parse",
+    "diff_inject", "notify", "semantic_cache", "screenshot", "sandbox_exec",
+    "cost_gate", "ast_parse", "embed_compare", "graph_query", "parallel_fetch",
+    "template_render", "approval_request",
+  ]),
   inject_as: z.string().min(1),
   label: z.string().optional(),
   url: z.string().optional(),
@@ -51,6 +58,57 @@ const PreToolSchema = z.object({
   // ocr
   image_path: z.string().optional(),
   language: z.string().optional(),
+  // state_load / state_save
+  key: z.string().optional(),
+  value: z.string().optional(),
+  scope: z.string().optional(),
+  default: z.string().optional(),
+  // vector_query / vector_index
+  collection: z.string().optional(),
+  top_k: z.number().optional(),
+  source: z.string().optional(),
+  chunk_size: z.number().optional(),
+  // json_parse
+  input: z.string().optional(),
+  // diff_inject
+  repo: z.string().optional(),
+  base: z.string().optional(),
+  head: z.string().optional(),
+  max_tokens: z.number().optional(),
+  // notify
+  channel: z.string().optional(),
+  webhook_url: z.string().optional(),
+  message: z.string().optional(),
+  // semantic_cache
+  similarity_threshold: z.number().optional(),
+  // screenshot
+  viewport: z.object({ width: z.number(), height: z.number() }).optional(),
+  wait_ms: z.number().optional(),
+  // sandbox_exec
+  image: z.string().optional(),
+  mount: z.string().optional(),
+  // cost_gate
+  budget_usd: z.number().optional(),
+  action: z.string().optional(),
+  // ast_parse
+  extract: z.array(z.string()).optional(),
+  // embed_compare
+  text_a: z.string().optional(),
+  text_b: z.string().optional(),
+  // graph_query
+  triples: z.array(z.object({ subject: z.string(), predicate: z.string(), object: z.string() })).optional(),
+  graph_query_subject: z.string().optional(),
+  graph_query_predicate: z.string().optional(),
+  // parallel_fetch
+  urls: z.array(z.string()).optional(),
+  rate_limit_ms: z.number().optional(),
+  // template_render
+  template: z.string().optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
+  // approval_request
+  title: z.string().optional(),
+  description: z.string().optional(),
+  expires_hours: z.number().optional(),
   // Error handling
   on_error: z.enum(["inject", "skip", "fail"]).optional(),
   // Timeout & retry

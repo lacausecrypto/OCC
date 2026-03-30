@@ -6,7 +6,16 @@ export interface ChainInput {
   optional?: boolean;
 }
 
-export type PreToolType = "current_datetime" | "http_fetch" | "web_search" | "read_file" | "write_file" | "bash" | "env_var" | "mcp_call" | "db_query" | "email" | "pdf_generate" | "ocr";
+export type PreToolType =
+  | "current_datetime" | "http_fetch" | "web_search" | "read_file" | "write_file"
+  | "bash" | "env_var" | "mcp_call" | "db_query" | "email" | "pdf_generate" | "ocr"
+  // Tier 1: Game changers
+  | "state_load" | "state_save" | "vector_query" | "vector_index" | "json_parse"
+  | "diff_inject" | "notify"
+  // Tier 2: Strong differentiation
+  | "semantic_cache" | "screenshot" | "sandbox_exec" | "cost_gate" | "ast_parse"
+  // Tier 3: Forward-looking
+  | "embed_compare" | "graph_query" | "parallel_fetch" | "template_render" | "approval_request";
 
 export interface PreTool {
   type: PreToolType;
@@ -54,6 +63,57 @@ export interface PreTool {
   // ocr
   image_path?: string;        // path to image file (supports {variables})
   language?: string;          // OCR language (default: "eng")
+  // state_load / state_save
+  key?: string;               // state key name (supports {variables})
+  value?: string;             // state_save: value to persist (supports {variables})
+  scope?: string;             // scope: chain name or "global" (default: current chain)
+  default?: string;           // state_load: default if key not found
+  // vector_query / vector_index
+  collection?: string;        // vector collection name
+  top_k?: number;             // vector_query: number of results (default: 5)
+  source?: string;            // vector_index: text to index (supports {variables})
+  chunk_size?: number;        // vector_index: chunk size in chars (default: 512)
+  // json_parse
+  input?: string;             // json_parse: variable to parse (supports {variables})
+  // diff_inject
+  repo?: string;              // diff_inject: repo path (supports {variables})
+  base?: string;              // diff_inject: base ref (default: "main")
+  head?: string;              // diff_inject: head ref (default: "HEAD")
+  max_tokens?: number;        // diff_inject: max output size (default: 4000)
+  // notify
+  channel?: string;           // notify: "slack" | "discord" | "telegram" | "webhook"
+  webhook_url?: string;       // notify: webhook URL (supports {variables})
+  message?: string;           // notify: message text (supports {variables})
+  // semantic_cache
+  similarity_threshold?: number; // semantic_cache: 0-1 threshold (default: 0.85)
+  // screenshot
+  viewport?: { width: number; height: number }; // screenshot: viewport size
+  wait_ms?: number;           // screenshot: wait after load (default: 3000)
+  // sandbox_exec
+  image?: string;             // sandbox_exec: Docker image
+  mount?: string;             // sandbox_exec: volume mount (host:container)
+  // cost_gate
+  budget_usd?: number;        // cost_gate: max spend in USD
+  action?: string;            // cost_gate: "warn" | "skip" | "downgrade" (default: "warn")
+  // ast_parse
+  extract?: string[];         // ast_parse: what to extract (functions, classes, imports, exports, types)
+  // embed_compare
+  text_a?: string;            // embed_compare: first text (supports {variables})
+  text_b?: string;            // embed_compare: second text (supports {variables})
+  // graph_query
+  triples?: Array<{ subject: string; predicate: string; object: string }>; // graph write
+  graph_query_subject?: string;  // graph read: query by subject
+  graph_query_predicate?: string; // graph read: filter by predicate
+  // parallel_fetch
+  urls?: string[];            // parallel_fetch: array of URLs
+  rate_limit_ms?: number;     // parallel_fetch: delay between requests (default: 100)
+  // template_render
+  template?: string;          // template_render: Handlebars-style template
+  data?: Record<string, unknown>; // template_render: data context
+  // approval_request
+  title?: string;             // approval_request: approval title
+  description?: string;       // approval_request: description
+  expires_hours?: number;     // approval_request: expiry (default: 24)
   // Error handling
   on_error?: "inject" | "skip" | "fail"; // What to do when pre-tool fails (default: inject)
   // Timeout & retry (per pre-tool)

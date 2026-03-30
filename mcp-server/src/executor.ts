@@ -309,7 +309,10 @@ function getPreToolCacheKey(tool: PreTool, vars: Record<string, string>): string
 async function executeSinglePreTool(
   tool: PreTool,
   vars: Record<string, string>,
-  onLog: (message: string, level: "info" | "warn" | "error") => void
+  onLog: (message: string, level: "info" | "warn" | "error") => void,
+  execution?: ChainExecution,
+  executionId?: string,
+  step?: ChainStep,
 ): Promise<string> {
   // Check cache
   if (tool.cache_ttl_minutes && tool.cache_ttl_minutes > 0) {
@@ -455,6 +458,152 @@ async function executeSinglePreTool(
       break;
     }
 
+    // ── TIER 1: Game changers ───────────────────────────────────
+    case "state_load": {
+      const { stateLoad } = await import("./pretool-extras.js");
+      const stKey = resolveVariables(tool.key ?? "", vars);
+      const stScope = tool.scope ?? execution?.chainName ?? "global";
+      result = stateLoad(stKey, stScope, tool.default ?? "");
+      break;
+    }
+    case "state_save": {
+      const { stateSave } = await import("./pretool-extras.js");
+      const stKey = resolveVariables(tool.key ?? "", vars);
+      const stValue = resolveVariables(tool.value ?? "", vars);
+      const stScope = tool.scope ?? execution?.chainName ?? "global";
+      stateSave(stKey, stValue, stScope);
+      result = `Saved "${stKey}" (${stValue.length} chars)`;
+      break;
+    }
+    case "vector_query": {
+      const { vectorQuery: vq } = await import("./pretool-extras.js");
+      const vqQuery = resolveVariables(tool.query ?? "", vars);
+      result = vq(tool.collection ?? "default", vqQuery, tool.top_k ?? 5);
+      break;
+    }
+    case "vector_index": {
+      const { vectorIndex: vi } = await import("./pretool-extras.js");
+      const viSource = resolveVariables(tool.source ?? "", vars);
+      result = vi(tool.collection ?? "default", viSource, tool.chunk_size ?? 512);
+      break;
+    }
+    case "json_parse": {
+      const { jsonParse } = await import("./pretool-extras.js");
+      const jpInput = resolveVariables(tool.input ?? "", vars);
+      const jpPath = tool.json_path ?? "$";
+      result = jsonParse(jpInput, jpPath);
+      break;
+    }
+    case "diff_inject": {
+      const { diffInject } = await import("./pretool-extras.js");
+      const diRepo = resolveVariables(tool.repo ?? "", vars);
+      result = diffInject(diRepo, tool.base ?? "main", tool.head ?? "HEAD", tool.max_tokens ?? 4000);
+      break;
+    }
+    case "notify": {
+      const { notify: ntf } = await import("./pretool-extras.js");
+      const nUrl = resolveVariables(tool.webhook_url ?? "", vars);
+      const nMsg = resolveVariables(tool.message ?? "", vars);
+      result = await ntf(tool.channel ?? "webhook", nUrl, nMsg);
+      break;
+    }
+
+    // ── TIER 2: Strong differentiation ──────────────────────────
+    case "semantic_cache": {
+      const { semanticCacheLookup, semanticCacheStore } = await import("./pretool-extras.js");
+      const scQuery = resolveVariables(tool.query ?? "", vars);
+      const ttl = tool.cache_ttl_minutes ?? 60;
+      const cached = semanticCacheLookup(scQuery, ttl, tool.similarity_threshold ?? 0.85);
+      if (cached) {
+        result = cached;
+        onLog(`semantic_cache HIT for "${scQuery.slice(0, 50)}..."`, "info");
+      } else {
+        // Execute the underlying web_search and cache the result
+        const searchPrompt = `Search the web for: ${scQuery}\n\nProvide a comprehensive summary.`;
+        const { stdout } = await runClaude(searchPrompt, { id: "_search", output_var: "_", tools: ["WebSearch"], model: "claude-haiku-4-5", prompt: "" } as ChainStep, () => {});
+        result = stdout;
+        semanticCacheStore(scQuery, result, ttl);
+        onLog(`semantic_cache MISS — stored for ${ttl}min`, "info");
+      }
+      break;
+    }
+    case "screenshot": {
+      const { takeScreenshot } = await import("./pretool-extras.js");
+      const ssUrl = resolveVariables(tool.url ?? "", vars);
+      const vp = tool.viewport ?? { width: 1440, height: 900 };
+      result = await takeScreenshot(ssUrl, vp, tool.wait_ms ?? 3000);
+      break;
+    }
+    case "sandbox_exec": {
+      const { sandboxExec } = await import("./pretool-extras.js");
+      const seCmd = resolveVariables(tool.command ?? "", vars);
+      const seMount = tool.mount ? resolveVariables(tool.mount, vars) : undefined;
+      result = sandboxExec(tool.image ?? "node:20-slim", seCmd, seMount, timeoutMs);
+      break;
+    }
+    case "cost_gate": {
+      const { costGate } = await import("./pretool-extras.js");
+      const steps = execution ? execution.steps : {};
+      result = costGate(tool.budget_usd ?? 1.0, steps, tool.action ?? "warn");
+      break;
+    }
+    case "ast_parse": {
+      const { astParse } = await import("./pretool-extras.js");
+      const apPath = resolveVariables(tool.path ?? "", vars);
+      result = astParse(apPath, tool.extract ?? ["functions", "classes", "exports"]);
+      break;
+    }
+
+    // ── TIER 3: Forward-looking ─────────────────────────────────
+    case "embed_compare": {
+      const { embedCompare } = await import("./pretool-extras.js");
+      const ecA = resolveVariables(tool.text_a ?? "", vars);
+      const ecB = resolveVariables(tool.text_b ?? "", vars);
+      result = embedCompare(ecA, ecB);
+      break;
+    }
+    case "graph_query": {
+      if (tool.triples && tool.triples.length > 0) {
+        const { graphWrite } = await import("./pretool-extras.js");
+        result = graphWrite(tool.triples);
+      } else {
+        const { graphRead } = await import("./pretool-extras.js");
+        const gqSubject = tool.graph_query_subject ? resolveVariables(tool.graph_query_subject, vars) : undefined;
+        const gqPred = tool.graph_query_predicate ? resolveVariables(tool.graph_query_predicate, vars) : undefined;
+        result = graphRead(gqSubject, gqPred);
+      }
+      break;
+    }
+    case "parallel_fetch": {
+      const { parallelFetch } = await import("./pretool-extras.js");
+      const pfUrls = (tool.urls ?? []).map(u => resolveVariables(u, vars));
+      result = await parallelFetch(pfUrls, tool.rate_limit_ms ?? 100, timeoutMs);
+      break;
+    }
+    case "template_render": {
+      const { templateRender } = await import("./pretool-extras.js");
+      const trTemplate = resolveVariables(tool.template ?? "", vars);
+      const trData: Record<string, unknown> = {};
+      // Merge vars + explicit data
+      for (const [k, v] of Object.entries(vars)) trData[k] = v;
+      if (tool.data) for (const [k, v] of Object.entries(tool.data)) trData[k] = v;
+      result = templateRender(trTemplate, trData);
+      break;
+    }
+    case "approval_request": {
+      const { createApprovalRequest } = await import("./pretool-extras.js");
+      const arTitle = resolveVariables(tool.title ?? "Approval Required", vars);
+      const arDesc = resolveVariables(tool.description ?? "", vars);
+      result = createApprovalRequest(
+        executionId ?? "unknown",
+        step?.id ?? "unknown",
+        arTitle,
+        arDesc,
+        tool.expires_hours ?? 24,
+      );
+      break;
+    }
+
     case "db_query": {
       // Database query via shell — supports PostgreSQL, MySQL, SQLite
       // Requires the DB client CLI to be installed (psql, mysql, sqlite3)
@@ -593,7 +742,10 @@ function extractJsonPath(obj: any, path: string): any {
 async function executePreTools(
   preTools: PreTool[],
   vars: Record<string, string>,
-  onLog: (message: string, level: "info" | "warn" | "error") => void
+  onLog: (message: string, level: "info" | "warn" | "error") => void,
+  execution?: ChainExecution,
+  executionId?: string,
+  step?: ChainStep,
 ): Promise<Record<string, string>> {
   const results: Record<string, string> = {};
 
@@ -613,7 +765,7 @@ async function executePreTools(
     if (parallelBatch.length > 0) {
       // Execute parallel batch
       const parallelResults = await Promise.all(
-        parallelBatch.map((tool) => executePreToolWithRetry(tool, liveVars, onLog))
+        parallelBatch.map((tool) => executePreToolWithRetry(tool, liveVars, onLog, execution, executionId, step))
       );
       for (let j = 0; j < parallelBatch.length; j++) {
         results[parallelBatch[j].inject_as] = parallelResults[j];
@@ -624,7 +776,7 @@ async function executePreTools(
     // Execute next sequential pre-tool (if any)
     if (i < preTools.length && !preTools[i].parallel) {
       const tool = preTools[i];
-      const result = await executePreToolWithRetry(tool, liveVars, onLog);
+      const result = await executePreToolWithRetry(tool, liveVars, onLog, execution, executionId, step);
       results[tool.inject_as] = result;
       liveVars[tool.inject_as] = result; // Chain: available to next pre-tool
       i++;
@@ -638,13 +790,16 @@ async function executePreTools(
 async function executePreToolWithRetry(
   tool: PreTool,
   vars: Record<string, string>,
-  onLog: (message: string, level: "info" | "warn" | "error") => void
+  onLog: (message: string, level: "info" | "warn" | "error") => void,
+  execution?: ChainExecution,
+  executionId?: string,
+  step?: ChainStep,
 ): Promise<string> {
   const maxAttempts = (tool.retry ?? 0) + 1;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const result = await executeSinglePreTool(tool, vars, onLog);
+      const result = await executeSinglePreTool(tool, vars, onLog, execution, executionId, step);
       onLog(`pre-tool ${tool.type} → {${tool.inject_as}} (${result.length} chars${attempt > 1 ? `, attempt ${attempt}` : ""})`, "info");
       return result;
     } catch (err) {

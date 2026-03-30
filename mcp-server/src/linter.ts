@@ -187,6 +187,62 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
       if (pt.type === "ocr" && !pt.image_path && !pt.path) {
         issues.push({ level: "error", stepId: step.id, message: `Pre-tool ocr missing "image_path"` });
       }
+      // state_load / state_save validation
+      if ((pt.type === "state_load" || pt.type === "state_save") && !pt.key) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool ${pt.type} missing "key"` });
+      }
+      if (pt.type === "state_save" && !pt.value) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool state_save missing "value"` });
+      }
+      // vector_query / vector_index validation
+      if (pt.type === "vector_query" && !pt.collection) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool vector_query missing "collection"` });
+      }
+      if (pt.type === "vector_index" && (!pt.collection || !pt.source)) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool vector_index missing "collection" or "source"` });
+      }
+      // json_parse validation
+      if (pt.type === "json_parse" && !pt.input) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool json_parse missing "input"` });
+      }
+      // diff_inject validation
+      if (pt.type === "diff_inject" && !pt.repo) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool diff_inject missing "repo"` });
+      }
+      // notify validation
+      if (pt.type === "notify" && !pt.channel) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool notify missing "channel"` });
+      }
+      if (pt.type === "notify" && !pt.message) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool notify missing "message"` });
+      }
+      // screenshot validation
+      if (pt.type === "screenshot" && !pt.url) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool screenshot missing "url"` });
+      }
+      // sandbox_exec validation
+      if (pt.type === "sandbox_exec" && !pt.image) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool sandbox_exec missing "image"` });
+      }
+      if (pt.type === "sandbox_exec" && !pt.command) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool sandbox_exec missing "command"` });
+      }
+      // cost_gate validation
+      if (pt.type === "cost_gate" && !pt.budget_usd) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool cost_gate missing "budget_usd"` });
+      }
+      // embed_compare validation
+      if (pt.type === "embed_compare" && (!pt.text_a || !pt.text_b)) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool embed_compare missing "text_a" or "text_b"` });
+      }
+      // parallel_fetch validation
+      if (pt.type === "parallel_fetch" && (!pt.urls || pt.urls.length === 0)) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool parallel_fetch missing "urls"` });
+      }
+      // template_render validation
+      if (pt.type === "template_render" && !pt.template) {
+        issues.push({ level: "error", stepId: step.id, message: `Pre-tool template_render missing "template"` });
+      }
       // Validate http_fetch URL format
       if (pt.type === "http_fetch" && pt.url && !pt.url.includes("{")) {
         try { new URL(pt.url); }
@@ -231,7 +287,7 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
     }
     // Check pre_tool queries
     for (const pt of step.pre_tools ?? []) {
-      for (const field of [pt.query, pt.url, pt.path, pt.content, pt.command, pt.body, pt.connection, pt.sql, pt.to, pt.subject, pt.html, pt.output_path, pt.image_path]) {
+      for (const field of [pt.query, pt.url, pt.path, pt.content, pt.command, pt.body, pt.connection, pt.sql, pt.to, pt.subject, pt.html, pt.output_path, pt.image_path, pt.key, pt.value, pt.source, pt.input, pt.repo, pt.message, pt.webhook_url, pt.text_a, pt.text_b, pt.template, pt.title, pt.description, pt.mount, pt.image]) {
         if (field) for (const ref of extractVarRefs(field)) referencedVars.add(ref);
       }
       if (pt.headers) {
