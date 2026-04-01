@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Tests](https://github.com/lacausecrypto/OCC/actions/workflows/ci.yml/badge.svg)](https://github.com/lacausecrypto/OCC/actions)
-[![Node.js](https://img.shields.io/badge/Node.js-18%20%7C%2020%20%7C%2022-brightgreen)](https://nodejs.org)
+[![Node.js](https://img.shields.io/badge/Node.js-20%20%7C%2022-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
 [![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
 [![Pre--tools](https://img.shields.io/badge/Pre--tools-27%20types-orange)](#pre-tools)
