@@ -13,7 +13,7 @@
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](#)
 [![Claude](https://img.shields.io/badge/Powered%20by-Claude-cc785c?logo=anthropic&logoColor=white)](https://claude.ai)
 
-Workflow orchestrator for Claude. Define multi-step chains in YAML, run them with parallel execution and dependency resolution, access via MCP or REST API.
+Workflow orchestrator for Claude subscribe. Define multi-step chains in YAML, run them with parallel execution and dependency resolution, access via MCP or REST API.
 
 ```
 $ occ run deep-researcher --input topic="quantum computing"
