@@ -1,10 +1,17 @@
 # OCC — Claude Chain Orchestrator
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-brightgreen)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
 [![Tests](https://github.com/lacausecrypto/OCC/actions/workflows/ci.yml/badge.svg)](https://github.com/lacausecrypto/OCC/actions)
-[![MCP](https://img.shields.io/badge/MCP-Compatible-purple)](https://modelcontextprotocol.io)
+[![Node.js](https://img.shields.io/badge/Node.js-18%20%7C%2020%20%7C%2022-brightgreen)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
+[![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
+[![Pre--tools](https://img.shields.io/badge/Pre--tools-27%20types-orange)](#pre-tools)
+[![REST](https://img.shields.io/badge/REST%20API-40%2B%20endpoints-green)](#rest-api)
+[![Tests](https://img.shields.io/badge/Tests-553%20passed-brightgreen)](#tests)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
+[![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](#)
+[![Claude](https://img.shields.io/badge/Powered%20by-Claude-cc785c?logo=anthropic&logoColor=white)](https://claude.ai)
 
 Workflow orchestrator for Claude. Define multi-step chains in YAML, run them with parallel execution and dependency resolution, access via MCP or REST API.
 
