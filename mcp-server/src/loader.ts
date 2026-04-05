@@ -144,7 +144,7 @@ const StepSchema = z.object({
   on_timeout: z.enum(["skip", "error", "approve"]).optional(),
   input_var: z.string().optional(),
   criteria: z.string().optional(),
-  on_fail: z.enum(["retry", "skip", "error"]).optional(),
+  on_fail: z.enum(["retry", "skip", "error", "continue"]).optional(),
   max_retries: z.number().optional(),
   retry_target: z.string().optional(),
   operation: z.enum(["json_extract", "regex_match", "template", "split", "merge", "truncate", "replace", "filter", "map", "join", "to_json", "from_json"]).optional(),
@@ -153,8 +153,8 @@ const StepSchema = z.object({
   template_str: z.string().optional(),
   items_var: z.string().optional(),
   max_parallel: z.number().optional(),
-  inputs: z.array(z.string()).optional(),
-  strategy: z.enum(["concatenate", "json_array", "llm_summarize", "pick_best"]).optional(),
+  inputs: z.union([z.array(z.string()), z.record(z.string())]).optional(),
+  strategy: z.enum(["concatenate", "json_array", "llm_summarize", "pick_best", "consensus", "vote"]).optional(),
   browser_url: z.string().optional(),
   browser_task: z.string().optional(),
   browser_max_steps: z.number().optional(),
@@ -181,6 +181,8 @@ const StepSchema = z.object({
   timeout_ms: z.number().optional(),
   // Subchain
   subchain: z.string().optional(),
+  chain: z.string().optional(),      // alias for subchain
+  url: z.string().optional(),        // alias for webhook_url
   subchain_input_map: z.record(z.string(), z.string()).optional(),
   // Debate
   debate_agents: z.array(z.object({ prompt: z.string(), model: z.string().optional() })).optional(),
@@ -238,6 +240,16 @@ export function getChainsDir(): string {
   return process.env.CHAINS_DIR ?? path.join(process.cwd(), "..", "chains");
 }
 
+/** Sanitize a chain/pipeline name to prevent path traversal */
+export function sanitizeName(name: string): string {
+  // Strip directory separators, null bytes, and path traversal patterns
+  const clean = name.replace(/[\/\\:*?"<>|\x00]/g, '').replace(/\.\./g, '');
+  if (!clean || clean !== name || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(clean)) {
+    throw new Error(`Invalid name: "${name}" — only alphanumeric, dash, underscore, dot allowed`);
+  }
+  return clean;
+}
+
 export function listChains(): string[] {
   const dir = getChainsDir();
   if (!fs.existsSync(dir)) return [];
@@ -248,10 +260,11 @@ export function listChains(): string[] {
 }
 
 export function loadChain(name: string): ChainDefinition {
+  const safeName = sanitizeName(name);
   const dir = getChainsDir();
   const candidates = [
-    path.join(dir, `${name}.yaml`),
-    path.join(dir, `${name}.yml`),
+    path.join(dir, `${safeName}.yaml`),
+    path.join(dir, `${safeName}.yml`),
   ];
   const filePath = candidates.find((p) => fs.existsSync(p));
   if (!filePath) {
@@ -270,18 +283,20 @@ export function loadChain(name: string): ChainDefinition {
 }
 
 export function saveChain(name: string, chain: ChainDefinition): void {
+  const safeName = sanitizeName(name);
   const dir = getChainsDir();
   fs.mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, `${name}.yaml`);
+  const filePath = path.join(dir, `${safeName}.yaml`);
   const content = yaml.dump(chain, { lineWidth: 120, quotingType: '"' });
   fs.writeFileSync(filePath, content, "utf-8");
 }
 
 export function deleteChain(name: string): void {
+  const safeName = sanitizeName(name);
   const dir = getChainsDir();
   const candidates = [
-    path.join(dir, `${name}.yaml`),
-    path.join(dir, `${name}.yml`),
+    path.join(dir, `${safeName}.yaml`),
+    path.join(dir, `${safeName}.yml`),
   ];
   const filePath = candidates.find((p) => fs.existsSync(p));
   if (!filePath) throw new Error(`Chain "${name}" not found`);
@@ -289,10 +304,11 @@ export function deleteChain(name: string): void {
 }
 
 export function loadChainRaw(name: string): string {
+  const safeName = sanitizeName(name);
   const dir = getChainsDir();
   const candidates = [
-    path.join(dir, `${name}.yaml`),
-    path.join(dir, `${name}.yml`),
+    path.join(dir, `${safeName}.yaml`),
+    path.join(dir, `${safeName}.yml`),
   ];
   const filePath = candidates.find((p) => fs.existsSync(p));
   if (!filePath) throw new Error(`Chain "${name}" not found`);
@@ -341,7 +357,7 @@ export function buildDependencyGraph(chain: ChainDefinition): DependencyGraph {
   }
 
   const waves: string[][] = [];
-  let remaining = new Set(chain.steps.map((s) => s.id));
+  const remaining = new Set(chain.steps.map((s) => s.id));
 
   while (remaining.size > 0) {
     const wave = [...remaining].filter((id) => (inDegree.get(id) ?? 0) === 0);

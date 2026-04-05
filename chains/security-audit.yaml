@@ -1,0 +1,522 @@
+name: security-audit
+description: "Comprehensive security audit — classifies the codebase, runs parallel specialized scans (OWASP top 10, dependency vulnerabilities, secrets detection, configuration review), scores severity, facilitates an offensive vs defensive security debate, and generates a remediation report with webhook notification. Demonstrates: router, parallel agents, pre_tools (bash, read_file), evaluator with scoring, merge, debate, webhook."
+version: "1.0"
+
+inputs:
+  - name: path
+    description: "Path to the codebase or repository to audit"
+  - name: severity_threshold
+    description: "Minimum severity to flag: critical, high, medium, low (default: medium)"
+    optional: true
+  - name: compliance_framework
+    description: "Compliance framework to check against: owasp, pci-dss, soc2, hipaa, none (default: owasp)"
+    optional: true
+
+steps:
+  # ── PHASE 1: Classify the codebase and gather metadata ─────────
+
+  - id: classify_codebase
+    type: router
+    label: "Classify codebase for targeted scanning"
+    model: claude-sonnet-4-6
+    tools: [Bash, Read, Glob]
+    prompt: |
+      Examine the codebase at: {input.path}
+
+      Determine the application type to guide security scanning:
+      - "web_app" — web application (frontend + backend, HTTP endpoints, sessions)
+      - "api_service" — API-only backend (REST/GraphQL, microservice)
+      - "cli_tool" — command-line tool, scripts, automation
+      - "library" — reusable package/module consumed by other code
+      - "infrastructure" — Terraform, Docker, Kubernetes, CI/CD configs
+
+      Also identify: language(s), framework(s), package manager, presence of Dockerfile,
+      CI/CD configs, .env files, and any authentication mechanisms.
+
+      Return ONLY one of: web_app, api_service, cli_tool, library, infrastructure
+    routes:
+      web_app: [scan_owasp, scan_dependencies, scan_secrets, scan_config, scan_auth]
+      api_service: [scan_owasp, scan_dependencies, scan_secrets, scan_config, scan_auth]
+      cli_tool: [scan_owasp, scan_dependencies, scan_secrets, scan_config]
+      library: [scan_dependencies, scan_secrets, scan_config]
+      infrastructure: [scan_secrets, scan_config, scan_infra]
+    default_route: web_app
+    output_var: app_type
+    timeout_ms: 60000
+
+  # ── PHASE 2: Parallel specialized security scans ───────────────
+
+  - id: scan_owasp
+    type: agent
+    label: "OWASP Top 10 vulnerability scan"
+    depends_on: [classify_codebase]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob]
+    prompt: |
+      You are a senior application security engineer. Perform an OWASP Top 10 (2021) audit on the codebase at: {input.path}
+      Application type: {app_type}
+
+      Systematically check for each OWASP category:
+
+      **A01:2021 — Broken Access Control**
+      - Missing authorization checks on endpoints
+      - IDOR vulnerabilities (direct object references without ownership validation)
+      - Missing CORS configuration or overly permissive CORS
+      - Directory traversal possibilities
+
+      **A02:2021 — Cryptographic Failures**
+      - Hardcoded secrets, weak encryption algorithms (MD5, SHA1 for passwords)
+      - Missing HTTPS enforcement, insecure cookie flags
+      - Sensitive data transmitted or stored in plaintext
+
+      **A03:2021 — Injection**
+      - SQL injection (string concatenation in queries)
+      - Command injection (unsanitized input in exec/spawn)
+      - XSS (unescaped user input in HTML/templates)
+      - Template injection, LDAP injection, NoSQL injection
+
+      **A04:2021 — Insecure Design**
+      - Missing rate limiting on sensitive endpoints
+      - No account lockout after failed attempts
+      - Business logic flaws
+
+      **A05:2021 — Security Misconfiguration**
+      - Debug mode enabled in production configs
+      - Default credentials or unnecessary features enabled
+      - Missing security headers
+
+      **A06:2021 — Vulnerable and Outdated Components**
+      - Known vulnerable dependency versions (check package.json, requirements.txt, etc.)
+
+      **A07:2021 — Identification and Authentication Failures**
+      - Weak password policies, missing MFA support
+      - Session fixation, insecure token storage
+
+      **A08:2021 — Software and Data Integrity Failures**
+      - Missing integrity checks on CI/CD pipelines
+      - Deserialization of untrusted data
+
+      **A09:2021 — Security Logging and Monitoring Failures**
+      - Missing audit logs for sensitive operations
+      - No error handling that could leak stack traces
+
+      **A10:2021 — Server-Side Request Forgery (SSRF)**
+      - User-controlled URLs passed to HTTP clients without validation
+
+      For EACH finding, report:
+      - **OWASP Category**: A0X
+      - **File**: exact file path and line number
+      - **Severity**: CRITICAL / HIGH / MEDIUM / LOW
+      - **Description**: what the vulnerability is and how it could be exploited
+      - **Proof**: the vulnerable code snippet
+      - **Remediation**: specific fix with corrected code
+
+      If a category has no findings, explicitly state "No issues found" for that category.
+    output_var: owasp_findings
+    timeout_ms: 300000
+
+  - id: scan_dependencies
+    type: agent
+    label: "Dependency vulnerability audit"
+    depends_on: [classify_codebase]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob, Bash]
+    pre_tools:
+      - type: bash
+        command: "cd '{input.path}' && (cat package-lock.json 2>/dev/null || cat yarn.lock 2>/dev/null || cat requirements.txt 2>/dev/null || cat Pipfile.lock 2>/dev/null || cat go.sum 2>/dev/null || cat Cargo.lock 2>/dev/null || echo 'No lockfile found') | head -500"
+        inject_as: lockfile_excerpt
+      - type: bash
+        command: "cd '{input.path}' && (npm audit --json 2>/dev/null || pip-audit --format=json 2>/dev/null || echo '{\"note\": \"audit tool not available, manual review needed\"}') | head -300"
+        inject_as: audit_output
+    prompt: |
+      You are a supply chain security analyst. Audit the dependencies of the project at: {input.path}
+      Application type: {app_type}
+
+      Lockfile excerpt:
+      {lockfile_excerpt}
+
+      Automated audit output:
+      {audit_output}
+
+      Perform a thorough dependency audit:
+
+      1. **Known Vulnerabilities**: identify any dependencies with known CVEs
+         - Package name, version, CVE ID, severity, fix version
+
+      2. **Outdated Dependencies**: flag significantly outdated packages (more than 2 major versions behind)
+         - Package name, current version, latest version, risk
+
+      3. **Suspicious Packages**: check for:
+         - Typosquatting (packages with names similar to popular ones)
+         - Packages with very few downloads or recent ownership transfers
+         - Packages that request unnecessary permissions
+
+      4. **License Compliance**: flag any dependencies with:
+         - GPL/AGPL licenses in proprietary projects
+         - Missing license declarations
+         - License incompatibilities
+
+      5. **Dependency Tree Risks**:
+         - Deeply nested dependencies (transitive risk)
+         - Single-maintainer critical packages
+         - Packages with no recent updates (abandoned)
+
+      For each finding, provide:
+      - **Package**: name@version
+      - **Risk**: CRITICAL / HIGH / MEDIUM / LOW
+      - **Issue**: description
+      - **Action**: specific remediation step
+    output_var: dependency_findings
+    timeout_ms: 180000
+
+  - id: scan_secrets
+    type: agent
+    label: "Secrets and credentials scan"
+    depends_on: [classify_codebase]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob, Bash]
+    pre_tools:
+      - type: bash
+        command: "cd '{input.path}' && grep -rnI --include='*.{js,ts,py,rb,go,java,yaml,yml,json,toml,env,cfg,conf,ini,xml,sh}' -E '(api[_-]?key|secret|password|token|credential|private[_-]?key|access[_-]?key)\\s*[=:]\\s*[\"'\\''\\`][^\"'\\''\\`]{8,}' . 2>/dev/null | head -100"
+        inject_as: potential_secrets
+      - type: bash
+        command: "cd '{input.path}' && (cat .gitignore 2>/dev/null || echo 'No .gitignore found')"
+        inject_as: gitignore_content
+    prompt: |
+      You are a secrets detection specialist. Scan the codebase at: {input.path}
+      Application type: {app_type}
+
+      Potential secrets found by pattern matching:
+      {potential_secrets}
+
+      Current .gitignore:
+      {gitignore_content}
+
+      Perform a comprehensive secrets scan:
+
+      1. **Hardcoded Secrets**: identify any of the following in source code:
+         - API keys (AWS, GCP, Azure, Stripe, SendGrid, Twilio, etc.)
+         - Database connection strings with credentials
+         - JWT signing secrets
+         - OAuth client secrets
+         - Private keys (RSA, SSH, PGP)
+         - Webhook secrets
+         - Encryption keys
+
+      2. **Configuration Files**: check for secrets in:
+         - .env files committed to the repo
+         - Docker Compose files with hardcoded passwords
+         - CI/CD configs (GitHub Actions, GitLab CI) with inline secrets
+         - Kubernetes manifests with plaintext secrets
+
+      3. **Git History Risk**: identify if .env or secret files are NOT in .gitignore
+
+      4. **Secure Alternatives**: for each finding, recommend:
+         - Environment variable injection
+         - Secrets manager (Vault, AWS Secrets Manager, etc.)
+         - Encrypted configuration
+
+      For EACH finding:
+      - **File**: exact path and line
+      - **Severity**: CRITICAL (real key found) / HIGH (appears to be a real secret) / MEDIUM (suspicious pattern) / LOW (likely placeholder)
+      - **Type**: what kind of secret
+      - **Remediation**: how to remove and rotate
+
+      IMPORTANT: if you find real secrets, flag them as CRITICAL and recommend immediate rotation.
+    output_var: secrets_findings
+    timeout_ms: 180000
+
+  - id: scan_config
+    type: agent
+    label: "Security configuration review"
+    depends_on: [classify_codebase]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob]
+    prompt: |
+      You are a DevSecOps engineer. Review security configurations at: {input.path}
+      Application type: {app_type}
+      Compliance framework: {input.compliance_framework}
+
+      Check the following configuration areas:
+
+      1. **HTTP Security Headers** (if web app):
+         - Content-Security-Policy, X-Frame-Options, X-Content-Type-Options
+         - Strict-Transport-Security, Referrer-Policy
+         - Permissions-Policy
+
+      2. **Authentication Configuration**:
+         - Password hashing algorithm (bcrypt/argon2 preferred)
+         - Session timeout settings
+         - CSRF protection enabled
+         - Rate limiting on auth endpoints
+
+      3. **TLS/SSL Configuration**:
+         - Minimum TLS version (1.2+)
+         - Certificate validation not disabled
+         - Secure cipher suites
+
+      4. **CORS Configuration**:
+         - Overly permissive origins (wildcard *)
+         - Credentials allowed with wildcard origins
+
+      5. **Logging and Monitoring**:
+         - Sensitive data not logged (passwords, tokens, PII)
+         - Audit trail for admin actions
+         - Error handling doesn't expose stack traces to users
+
+      6. **Container/Infrastructure** (if applicable):
+         - Docker running as non-root
+         - No privileged containers
+         - Read-only file systems where possible
+         - Network policies defined
+
+      For each misconfiguration:
+      - **Area**: which category
+      - **File**: path and line
+      - **Severity**: CRITICAL / HIGH / MEDIUM / LOW
+      - **Current**: what's configured now
+      - **Recommended**: what it should be
+      - **Fix**: exact configuration change
+    output_var: config_findings
+    timeout_ms: 180000
+
+  - id: scan_auth
+    type: agent
+    label: "Authentication and authorization deep review"
+    depends_on: [classify_codebase]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob]
+    condition: '{app_type} == "web_app" || {app_type} == "api_service"'
+    prompt: |
+      You are an identity and access management specialist. Review authentication and authorization at: {input.path}
+      Application type: {app_type}
+
+      Perform a deep review of:
+
+      1. **Authentication Flow**:
+         - Is password hashing using bcrypt/argon2/scrypt with appropriate cost factors?
+         - Are JWTs properly validated (signature, expiry, issuer, audience)?
+         - Is there protection against credential stuffing (rate limiting, CAPTCHA)?
+         - Are password reset flows secure (time-limited tokens, no user enumeration)?
+
+      2. **Authorization**:
+         - Is there role-based access control (RBAC) or attribute-based (ABAC)?
+         - Are all sensitive endpoints protected with authorization middleware?
+         - Can users escalate privileges through parameter manipulation?
+         - Are admin routes properly separated and protected?
+
+      3. **Session Management**:
+         - Secure session configuration (httpOnly, secure, sameSite cookies)
+         - Session invalidation on logout and password change
+         - Concurrent session handling
+
+      4. **OAuth/SSO** (if applicable):
+         - State parameter validation (CSRF protection)
+         - Redirect URI validation (open redirect prevention)
+         - Token storage security (not in localStorage for sensitive apps)
+
+      For each finding:
+      - **Category**: Authentication / Authorization / Session / OAuth
+      - **File**: path and line
+      - **Severity**: CRITICAL / HIGH / MEDIUM / LOW
+      - **Vulnerability**: description and potential exploit scenario
+      - **Fix**: specific remediation with code
+    output_var: auth_findings
+    timeout_ms: 180000
+
+  - id: scan_infra
+    type: agent
+    label: "Infrastructure security review"
+    depends_on: [classify_codebase]
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob]
+    condition: '{app_type} == "infrastructure"'
+    prompt: |
+      You are an infrastructure security engineer. Review the IaC and deployment configs at: {input.path}
+
+      Check for:
+
+      1. **Terraform/CloudFormation**:
+         - Security groups with 0.0.0.0/0 ingress on sensitive ports
+         - Public S3 buckets or storage containers
+         - Missing encryption at rest
+         - IAM roles with overly broad permissions (Action: *)
+         - Missing resource tagging for audit trail
+
+      2. **Docker**:
+         - Base images with known vulnerabilities (use specific tags, not :latest)
+         - Running as root user
+         - Unnecessary packages installed
+         - Secrets in build args or ENV
+         - Missing health checks
+
+      3. **Kubernetes**:
+         - Containers running as privileged
+         - Missing network policies
+         - No resource limits (DoS risk)
+         - Default service account usage
+         - Missing pod security policies/standards
+
+      4. **CI/CD**:
+         - Secrets in pipeline definitions (not using secrets manager)
+         - Missing branch protection rules
+         - Self-hosted runners without isolation
+         - Pull request from forks can access secrets
+
+      For each finding provide file, severity, description, and specific fix.
+    output_var: infra_findings
+    timeout_ms: 180000
+
+  # ── PHASE 3: Evaluate overall severity ─────────────────────────
+
+  - id: severity_scoring
+    type: evaluator
+    label: "Severity scoring and risk assessment"
+    depends_on: [scan_owasp, scan_dependencies, scan_secrets, scan_config, scan_auth, scan_infra]
+    model: claude-sonnet-4-6
+    eval_scoring: true
+    eval_threshold: 3
+    input_var: owasp_findings
+    criteria: |
+      Score the overall security posture from 1-10 (10 = excellent, 1 = critical risk):
+      - 9-10: No significant issues found. Production-ready.
+      - 7-8: Minor issues only. Low risk, fix at convenience.
+      - 5-6: Moderate issues. Should be fixed before next release.
+      - 3-4: Serious issues. Fix before deploying to production.
+      - 1-2: Critical vulnerabilities. Stop deployment immediately.
+
+      Base your score on:
+      - Number of CRITICAL findings (each drops score by 2-3 points)
+      - Number of HIGH findings (each drops score by 1 point)
+      - Whether real secrets were found in code
+      - Overall attack surface based on application type
+    on_fail: continue
+    prompt: "Evaluate overall security risk level"
+    output_var: security_score
+    timeout_ms: 60000
+
+  # ── PHASE 4: Merge all findings ────────────────────────────────
+
+  - id: merge_findings
+    type: merge
+    label: "Consolidate all security findings"
+    depends_on: [severity_scoring, scan_dependencies, scan_secrets, scan_config, scan_auth, scan_infra]
+    inputs: [owasp_findings, dependency_findings, secrets_findings, config_findings, auth_findings, infra_findings]
+    strategy: concatenate
+    prompt: "Merge all security scan findings into a single document"
+    output_var: all_findings
+    timeout_ms: 10000
+
+  # ── PHASE 4.5: Debate findings from offensive vs defensive perspectives ──
+
+  - id: security_debate
+    type: debate
+    label: "Debate findings: Offensive vs Defensive security"
+    depends_on: [merge_findings]
+    model: claude-sonnet-4-6
+    agents:
+      - role: "Offensive Security (Red Team)"
+        prompt: |
+          You are a red team penetration tester. Review the consolidated security findings and argue
+          from an attacker's perspective. Prioritize findings by exploitability and real-world attack
+          likelihood. Identify attack chains where multiple medium-severity issues combine into a
+          critical exploit path. Challenge any findings marked as low severity that could actually
+          be leveraged in a sophisticated attack.
+
+          All findings: {all_findings}
+          Security score: {security_score}
+          Application type: {app_type}
+      - role: "Defensive Security (Blue Team)"
+        prompt: |
+          You are a blue team security engineer. Review the consolidated security findings and argue
+          from a defender's perspective. Prioritize findings by business impact and remediation effort.
+          Identify which findings have existing mitigating controls and which are truly unprotected.
+          Challenge any findings rated as critical if there are compensating controls in place.
+
+          All findings: {all_findings}
+          Security score: {security_score}
+          Application type: {app_type}
+    rounds: 2
+    strategy: consensus
+    prompt: "Debate the security findings from offensive and defensive perspectives to produce a balanced risk assessment."
+    output_var: security_debate_result
+    timeout_ms: 300000
+
+  # ── PHASE 5: Generate remediation report ───────────────────────
+
+  - id: remediation_report
+    type: agent
+    label: "Remediation report"
+    depends_on: [security_debate]
+    model: claude-opus-4-6
+    prompt: |
+      You are a Chief Information Security Officer preparing a security audit report.
+
+      Application type: {app_type}
+      Security score: {security_score}
+      Compliance framework: {input.compliance_framework}
+
+      All findings:
+      {all_findings}
+
+      Security debate (Red Team vs Blue Team):
+      {security_debate_result}
+
+      Generate a comprehensive Security Audit Report:
+
+      ## Executive Summary
+      3-5 sentences: overall security posture, number of findings by severity, key risk areas.
+      Security Score: {security_score}/10
+
+      ## Critical Findings (Immediate Action Required)
+      List all CRITICAL severity findings. For each:
+      - Description and impact
+      - Affected files
+      - Step-by-step remediation
+      - Estimated effort (hours)
+
+      ## High Severity Findings
+      Same format as critical.
+
+      ## Medium Severity Findings
+      Grouped by category for easier triage.
+
+      ## Low Severity Findings
+      Brief summary, grouped.
+
+      ## Dependency Security Summary
+      - Total dependencies analyzed
+      - Vulnerable packages and required updates
+      - License compliance status
+
+      ## Compliance Status ({input.compliance_framework})
+      Map findings to relevant compliance requirements. Note gaps.
+
+      ## Remediation Roadmap
+      Prioritized action plan:
+      1. **Immediate** (this week): critical issues
+      2. **Short-term** (this sprint): high issues
+      3. **Medium-term** (this quarter): medium issues + dependency updates
+      4. **Ongoing**: low issues + security process improvements
+
+      ## Security Recommendations
+      Top 5 architectural or process improvements to prevent future vulnerabilities.
+
+      Be specific and actionable. Include code snippets for all fixes. No generic advice.
+    output_var: audit_report
+    timeout_ms: 300000
+
+  # ── PHASE 6: Notify security channel via webhook ───────────────
+
+  - id: webhook_notify
+    type: webhook
+    label: "Notify security channel"
+    depends_on: [remediation_report]
+    model: claude-sonnet-4-6
+    url: "https://hooks.example.com/occ"
+    method: POST
+    prompt: "Send the completed security audit report to the security channel notification endpoint."
+    output_var: webhook_response
+    timeout_ms: 30000
+
+output: audit_report

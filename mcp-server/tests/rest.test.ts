@@ -438,10 +438,15 @@ output: result
   // ── CORS ──
 
   describe("CORS", () => {
-    it("returns CORS headers on any request", async () => {
-      const res = await request(app).get("/health");
-      expect(res.headers["access-control-allow-origin"]).toBe("*");
+    it("returns CORS headers when Origin is sent", async () => {
+      const res = await request(app).get("/health").set("Origin", "http://localhost:8888");
+      expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:8888");
       expect(res.headers["access-control-allow-methods"]).toContain("GET");
+    });
+
+    it("does not set Allow-Origin for unknown origins", async () => {
+      const res = await request(app).get("/health").set("Origin", "http://evil.com");
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
     });
 
     it("handles OPTIONS preflight", async () => {

@@ -68,7 +68,7 @@ function persistExecutions(): void {
   try {
     const file = getExecutionsFile();
     const data = JSON.stringify([...executions.values()].slice(-200), null, 2);
-    fs.writeFile(file, data, "utf-8", () => {}); // non-blocking, best-effort
+    fs.writeFile(file, data, "utf-8", (err) => { if (err) console.error("[executor] writeFile error:", err.message); }); // non-blocking, best-effort
   } catch { /* ignore */ }
 }
 
@@ -157,13 +157,24 @@ export function getAllExecutions(): ChainExecution[] {
   );
 }
 
-/** Trim in-memory executions map to prevent unbounded growth. */
+/** Trim in-memory executions map to prevent unbounded growth. Uses TTL + size limit. */
 function trimExecutions(): void {
-  if (executions.size > 250) {
-    const sorted = [...executions.entries()].sort(
-      (a, b) => a[1].startedAt.localeCompare(b[1].startedAt)
-    );
-    const toRemove = sorted.slice(0, sorted.length - 200);
+  const maxAge = (Number(process.env.EXECUTION_MAX_AGE_DAYS) || 7) * 86400000;
+  const cutoff = Date.now() - maxAge;
+
+  // Pass 1: TTL eviction — remove entries older than max age
+  for (const [key, exec] of executions) {
+    if (exec.status !== "running" && new Date(exec.startedAt).getTime() < cutoff) {
+      executions.delete(key);
+    }
+  }
+
+  // Pass 2: size cap — if still over 200, remove oldest non-running
+  if (executions.size > 200) {
+    const sorted = [...executions.entries()]
+      .filter(([, e]) => e.status !== "running")
+      .sort((a, b) => a[1].startedAt.localeCompare(b[1].startedAt));
+    const toRemove = sorted.slice(0, executions.size - 200);
     for (const [key] of toRemove) {
       executions.delete(key);
     }
@@ -202,7 +213,8 @@ function loadCache(chainName: string, cacheKey: string, ttlMinutes: number): Cac
       return null;
     }
     return entry;
-  } catch {
+  } catch (err) {
+    console.error("[cache]", err);
     return null;
   }
 }
@@ -213,7 +225,7 @@ function saveCache(chainName: string, entry: CacheEntry): void {
     fs.mkdirSync(cacheDir, { recursive: true });
     const cacheFile = path.join(cacheDir, `${entry.key}.json`);
     fs.writeFileSync(cacheFile, JSON.stringify(entry, null, 2), "utf-8");
-  } catch { /* best-effort */ }
+  } catch (err) { console.error("[cache]", err); }
 }
 
 // ─── Output validation (guardrails) ─────────────────────────────────────────
@@ -317,6 +329,7 @@ export function cancelExecution(id: string): boolean {
 export { validateClaudeBinary, getRunningExecutionCount, canStartExecution, MAX_CONCURRENT_EXECUTIONS };
 export { GateSuspendError, approveGate };
 export function getPendingApprovals() { return _getPendingApprovals(getExecution); }
+export function getAllActiveProcesses() { return activeProcesses; }
 
 /** Process tracker adapter — lets claude-runner.ts register/unregister child processes. */
 const processTracker: ProcessTracker = {
@@ -442,6 +455,8 @@ async function executeStep(
       if (step.default_route && routes[step.default_route]) {
         routeKey = step.default_route;
         emit({ type: "step_log", executionId, stepId, message: `Using default route: ${routeKey}`, level: "info" });
+      } else {
+        throw new Error(`Router step "${stepId}" returned empty output and no default_route is configured`);
       }
     }
 
@@ -838,8 +853,11 @@ async function executeStep(
 
   if (stepType === "merge") {
     // Merge: combine multiple inputs
+    if (!step.inputs || step.inputs.length === 0) {
+      throw new Error(`Merge step "${stepId}" requires a non-empty "inputs" array`);
+    }
     const mergeStartTime = Date.now();
-    const mergeInputs = step.inputs ?? [];
+    const mergeInputs = step.inputs;
     const strategy = step.strategy ?? "concatenate";
     let result = "";
 
@@ -1084,7 +1102,7 @@ async function executeStep(
         batch.map(async (item, batchIdx) => {
           const itemIdx = i + batchIdx;
           try {
-            const iterVars = { ...vars, item, item_index: String(itemIdx), loop_total: String(items.length) };
+            const iterVars: Record<string, string> = { ...vars, item, item_index: String(itemIdx), loop_total: String(items.length) };
             const iterPrompt = resolveVariables(template?.prompt ?? step.prompt, iterVars);
 
             emit({ type: "step_log", executionId, stepId, message: `Loop item ${itemIdx + 1}/${items.length}: ${item.slice(0, 50)}...`, level: "info" });
@@ -1104,7 +1122,11 @@ async function executeStep(
               const preResults = await executePreTools(iterStep.pre_tools, iterVars, (message, level) => {
                 emit({ type: "step_log", executionId, stepId, message: `[iter ${itemIdx}] ${message}`, level });
               }, execution, executionId, step, runClaudeTracked);
-              Object.assign(iterVars, preResults);
+              // Merge pre-tool results — guard against prototype pollution
+              for (const [k, v] of Object.entries(preResults)) {
+                if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+                iterVars[k] = v;
+              }
             }
 
             const finalPrompt = resolveVariables(iterStep.prompt, iterVars);
@@ -1116,7 +1138,7 @@ async function executeStep(
       processTracker,
     );
 
-            totalDuration += d;
+            totalDuration += d ?? 0;
             totalInput += it ?? 0;
             totalOutput += ot ?? 0;
             return stdout;
@@ -1441,7 +1463,11 @@ async function executeStep(
       execution,
       executionId,
       step, runClaudeTracked);
-    Object.assign(vars, preResults);
+    // Merge pre-tool results into vars — guard against prototype pollution
+    for (const [k, v] of Object.entries(preResults)) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+      vars[k] = v;
+    }
   }
 
   // Apply context compression if specified

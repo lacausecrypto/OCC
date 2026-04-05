@@ -1,0 +1,10 @@
+node_modules
+.git
+.env
+*.db
+coverage
+frontend-react/node_modules
+frontend-react/dist
+mcp-server/node_modules
+mcp-server/coverage
+.github

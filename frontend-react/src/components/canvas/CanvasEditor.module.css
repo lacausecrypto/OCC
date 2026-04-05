@@ -1,0 +1,372 @@
+/* ═══════════════════════════════════════════════════════════════
+   Canvas Editor — glass via var(--glass-*) tokens
+   ═══════════════════════════════════════════════════════════════ */
+
+.canvasWrap {
+  flex: 1;
+  position: relative;
+  overflow: clip;
+}
+.canvasWrap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+/* ─── Toolbar — glass ─── */
+.toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--m-radius);
+  padding: 4px;
+  z-index: 10;
+  box-shadow: var(--glass-shadow);
+  max-width: calc(100% - 24px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.toolbar::-webkit-scrollbar { display: none; }
+.tbtn {
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  color: var(--m-text2);
+  font-size: calc(var(--m-body-size) * 0.86);
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: calc(var(--m-radius) - 4px);
+  font-family: var(--m-font);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+.tbtn:hover { background: var(--glass-tint-hover); color: var(--m-text); transform: translateY(-1px); }
+.tbtn:active { transform: scale(0.95); }
+.tbtnActive { background: var(--m-accent); color: var(--m-accent-contrast, #fff); box-shadow: 0 2px 8px rgba(var(--m-accent-rgb), 0.3); }
+.sep { width: 1px; background: var(--glass-border); margin: 4px 2px; }
+
+/* ─── Zoom controls ─── */
+.zoomControls {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 10;
+}
+.zbtn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  color: var(--m-text);
+  border-radius: var(--m-radius);
+  cursor: pointer;
+  font-size: var(--s-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: var(--glass-shadow);
+}
+.zbtn:hover { border-color: var(--m-accent); transform: scale(1.08); }
+.zbtn:active { transform: scale(0.92); }
+
+/* ─── Minimap — glass ─── */
+.minimap {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  width: 160px;
+  height: 110px;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--m-radius);
+  overflow: hidden;
+  z-index: 10;
+  box-shadow: var(--glass-shadow);
+}
+.minimap canvas { width: 100%; height: 100%; }
+
+/* ─── Context menu — glass ─── */
+.ctxMenu {
+  position: fixed;
+  z-index: 100;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--m-radius);
+  padding: 4px;
+  min-width: min(180px, calc(100vw - 16px));
+  box-shadow: var(--glass-shadow);
+  font-size: calc(var(--m-body-size) * 0.93);
+  font-family: var(--m-font);
+  animation: ctxMenuIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top left;
+}
+.ctxItem {
+  padding: 7px 12px;
+  border-radius: calc(var(--m-radius) - 4px);
+  cursor: pointer; color: var(--m-text);
+  display: flex; align-items: center; gap: 8px;
+  transition: background 0.15s cubic-bezier(0.16, 1, 0.3, 1), transform 0.1s;
+  position: relative;
+}
+.ctxItem:hover { background: var(--m-accent); }
+.ctxItem:active { transform: scale(0.98); }
+.ctxIcon { width: 16px; text-align: center; font-size: calc(var(--m-body-size) * 0.86); }
+.ctxSep { height: 1px; background: var(--glass-border); margin: 4px 8px; }
+.ctxArrow { font-size: 9px; color: var(--m-text2); margin-left: auto; }
+.ctxDisabled { opacity: 0.35; cursor: not-allowed; }
+.ctxDisabled:hover { background: none; }
+.ctxSubmenu {
+  position: fixed;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--m-radius);
+  padding: 4px;
+  min-width: 160px;
+  box-shadow: var(--glass-shadow);
+  z-index: 101;
+  font-size: calc(var(--m-body-size) * 0.93);
+  font-family: var(--m-font);
+  animation: ctxMenuIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top left;
+}
+
+/* ─── Annotation toolbar ─── */
+.annotationBar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--m-radius);
+  padding: 4px;
+  z-index: 10;
+  box-shadow: var(--glass-shadow);
+  max-width: calc(100% - 24px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.annotationBar::-webkit-scrollbar { display: none; }
+.annBtn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: var(--m-text2);
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: calc(var(--m-radius) - 4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.annBtn:hover { background: var(--glass-tint-hover); color: var(--m-text); transform: scale(1.1); }
+.annBtn:active { transform: scale(0.9); }
+.annBtnActive { background: var(--m-accent); color: var(--m-accent-contrast, #fff); box-shadow: 0 2px 6px rgba(var(--m-accent-rgb), 0.3); }
+.annColor {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s;
+}
+.annColor:hover { transform: scale(1.25); box-shadow: 0 0 8px currentColor; }
+.annColor:active { transform: scale(0.9); }
+
+/* ─── Blueprint panel — glass ─── */
+.bpPanel {
+  position: absolute;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(320px, calc(100vw - 24px));
+  max-height: 420px;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--m-radius);
+  box-shadow: var(--glass-shadow);
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--m-font);
+  animation: fadeInScale 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+.bpHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+.bpTitle {
+  font-size: calc(var(--m-body-size) * 0.93);
+  font-weight: 700;
+  color: var(--m-text);
+  flex: 1;
+}
+.bpCount {
+  font-size: var(--s-xs);
+  font-weight: 600;
+  color: var(--m-accent);
+  background: rgba(var(--m-accent-rgb), 0.12);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.bpClose {
+  background: none;
+  border: none;
+  color: var(--m-text2);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: calc(var(--m-radius) - 4px);
+  transition: all 0.15s;
+}
+.bpClose:hover { background: var(--glass-tint-hover); color: var(--m-text); }
+
+.bpBody {
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+.bpEmpty {
+  text-align: center;
+  padding: 24px 12px;
+  color: var(--m-text2);
+  font-size: var(--s-sm);
+  line-height: 1.6;
+}
+
+/* Blueprint card */
+.bpCard {
+  background: var(--glass-tint-subtle);
+  border: 1px solid var(--m-border);
+  border-radius: calc(var(--m-radius) - 2px);
+  padding: 10px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: cardStagger 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.bpCard:hover {
+  border-color: var(--m-accent);
+  background: var(--glass-tint);
+}
+.bpCardTop {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.bpName {
+  font-size: calc(var(--m-body-size) * 0.93);
+  font-weight: 600;
+  color: var(--m-text);
+  cursor: default;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bpNameInput {
+  flex: 1;
+  padding: 2px 6px;
+  border: 1px solid var(--m-accent);
+  border-radius: calc(var(--m-radius) - 6px);
+  background: var(--m-bg);
+  color: var(--m-text);
+  font-size: calc(var(--m-body-size) * 0.93);
+  font-family: var(--m-font);
+  outline: none;
+}
+.bpMeta {
+  display: flex;
+  gap: 10px;
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  margin-bottom: 6px;
+  font-family: var(--m-font-mono, monospace);
+}
+.bpActions {
+  display: flex;
+  gap: 4px;
+}
+.bpBtn {
+  padding: 3px 8px;
+  font-size: var(--s-xs);
+  border: 1px solid var(--m-border);
+  background: var(--glass-tint);
+  color: var(--m-text);
+  border-radius: calc(var(--m-radius) - 4px);
+  cursor: pointer;
+  font-family: var(--m-font);
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.bpBtn:hover {
+  background: var(--glass-tint-hover);
+  border-color: var(--m-accent);
+}
+.bpBtn:active { transform: scale(0.95); }
+.bpBtnDanger {
+  background: rgba(255, 55, 95, 0.15);
+  color: var(--c-error);
+  border-color: var(--c-error);
+  font-weight: 600;
+}
+.bpBtnDanger:hover {
+  background: rgba(255, 55, 95, 0.3);
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 768px) {
+  .toolbar { gap: 2px; padding: 2px; top: 8px; }
+  .tbtn { padding: 4px 8px; font-size: calc(var(--m-body-size) * 0.78); }
+  .zoomControls { bottom: 10px; right: 10px; }
+  .zbtn { width: 28px; height: 28px; font-size: var(--s-sm); }
+  .minimap { width: 120px; height: 80px; bottom: 10px; left: 10px; }
+  .bpPanel { width: min(320px, calc(100vw - 24px)); max-height: 360px; bottom: 50px; }
+  .annotationBar { bottom: 10px; gap: 2px; padding: 3px; }
+  .annBtn { width: 24px; height: 24px; font-size: 11px; }
+  .ctxMenu { min-width: min(180px, calc(100vw - 16px)); }
+  .ctxSubmenu { min-width: min(160px, calc(100vw - 16px)); }
+}
+@media (max-width: 480px) {
+  .toolbar { top: 6px; gap: 1px; }
+  .tbtn { padding: 3px 6px; font-size: 10px; }
+  .minimap { display: none; }
+  .zoomControls { bottom: 8px; right: 8px; }
+  .zbtn { width: 26px; height: 26px; }
+  .bpPanel { width: calc(100vw - 16px); max-height: 300px; bottom: 44px; }
+  .annotationBar { bottom: 8px; }
+}

@@ -1,0 +1,661 @@
+/* ═══════════════════════════════════════════════════════════════
+   Live Monitor — right sidebar (enhanced UX)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Header — glassmorphic ─── */
+.monHeader {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.monTitle {
+  font-size: calc(var(--m-body-size) * 0.93);
+  font-weight: 700;
+  color: var(--m-text);
+}
+
+/* ─── Connect row ─── */
+.connectRow {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--glass-border);
+  align-items: center;
+}
+.connectInput {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: calc(var(--m-radius) - 4px);
+  border: 1px solid var(--m-border);
+  background: var(--glass-tint);
+  color: var(--m-text);
+  font-size: var(--s-xs);
+  font-family: var(--m-font-mono, "SF Mono", "Fira Code", monospace);
+  outline: none;
+  min-width: 0;
+  transition: border-color 0.2s;
+}
+.connectInput:focus {
+  border-color: var(--m-accent);
+}
+.btn {
+  padding: 4px 8px;
+  font-size: var(--s-xs);
+  border-radius: calc(var(--m-radius) - 4px);
+  border: 1px solid var(--m-border);
+  background: var(--m-surface);
+  color: var(--m-text);
+  cursor: pointer;
+  font-family: var(--m-font);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn:hover {
+  background: var(--glass-tint-hover);
+  transform: translateY(-1px);
+}
+.btn:active {
+  transform: scale(0.96);
+}
+.btnPrimary {
+  background: var(--m-accent);
+  color: var(--m-accent-contrast, #fff);
+  border-color: transparent;
+}
+.btnPrimary:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 2px 8px rgba(var(--m-accent-rgb), 0.3);
+}
+.btnPrimary:active {
+  transform: scale(0.95);
+  filter: brightness(0.95);
+}
+
+/* ─── Status ─── */
+.monStatus {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  font-family: var(--m-font-mono, "SF Mono", "Fira Code", monospace);
+}
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+.statusDisconnected { background: var(--c-error); }
+.statusConnected { background: var(--c-success); }
+.statusReconnecting {
+  background: var(--c-warning);
+  animation: pulseDot 1s infinite;
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ─── Quick stats bar ─── */
+.quickStats {
+  display: flex;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--glass-border);
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  font-family: var(--m-font-mono, monospace);
+}
+.qsStat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.qsDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ─── Context banner (canvas ≠ selected exec) ─── */
+.ctxBanner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(255, 159, 10, 0.08);
+  border-bottom: 1px solid rgba(255, 159, 10, 0.2);
+  font-size: var(--s-xs);
+  color: var(--c-warning);
+  animation: fadeIn 0.2s;
+}
+.ctxBannerIcon {
+  font-size: var(--icon-sm, 12px);
+}
+.ctxBanner strong {
+  color: var(--m-text);
+}
+
+/* ─── Options row ─── */
+.monOpts {
+  display: flex;
+  gap: 8px;
+  padding: 6px 12px;
+  align-items: center;
+}
+.monCheck {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  cursor: pointer;
+}
+.monCheck input {
+  accent-color: var(--m-accent);
+  width: 12px;
+  height: 12px;
+}
+
+/* ─── Section title ─── */
+.sectionTitle {
+  font-size: var(--s-xs);
+  font-weight: 600;
+  color: var(--m-text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 12px 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sectionClearBtn {
+  margin-left: auto;
+  padding: 1px 6px;
+  font-size: 8px;
+  font-family: var(--m-font);
+  border: 1px solid var(--m-border);
+  border-radius: calc(var(--m-radius) - 6px);
+  background: transparent;
+  color: var(--m-text2);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.sectionClearBtn:hover {
+  background: rgba(255, 55, 95, 0.1);
+  border-color: var(--c-error);
+  color: var(--c-error);
+}
+.sectionClearBtn:active { transform: scale(0.95); }
+.sectionBadge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--m-accent);
+  background: rgba(var(--m-accent-rgb), 0.12);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-family: var(--m-font-mono, monospace);
+}
+
+/* ─── Execution list ─── */
+.execList {
+  overflow-y: auto;
+  padding: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 40vh;
+}
+.monEmpty {
+  padding: 16px;
+  text-align: center;
+  color: var(--m-text2);
+  font-size: calc(var(--m-body-size) * 0.86);
+}
+
+/* Exec card */
+.execCard {
+  background: var(--glass-tint-subtle);
+  border: 1px solid var(--m-border);
+  border-radius: var(--m-radius);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  font-size: var(--s-sm);
+  animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.execCard:hover {
+  border-color: var(--m-accent);
+  transform: translateX(2px);
+}
+.execCard:active { transform: scale(0.98); }
+.execCardActive {
+  border-color: var(--m-accent);
+  box-shadow: 0 0 0 1px var(--m-accent);
+}
+.execCardOnCanvas {
+  border-left: 3px solid var(--m-accent);
+}
+
+/* Exec header */
+.execHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.execName {
+  font-weight: 600;
+  color: var(--m-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.execBadge {
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+/* Exec tags */
+.execTags {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+.execTagCanvas {
+  font-size: 7px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(var(--m-accent-rgb), 0.15);
+  color: var(--m-accent);
+  letter-spacing: 0.5px;
+}
+.execTagPipeline {
+  font-size: 7px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(191, 90, 242, 0.15);
+  color: var(--c-purple);
+  letter-spacing: 0.5px;
+}
+.execTagChain {
+  font-size: 7px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(100, 210, 255, 0.12);
+  color: var(--c-info);
+  letter-spacing: 0.5px;
+}
+
+.execId {
+  font-family: var(--m-font-mono, "SF Mono", "Fira Code", monospace);
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.execSteps {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.execStep {
+  width: 20px;
+  height: 5px;
+  border-radius: 2px;
+  transition: background 0.3s;
+}
+
+/* Exec progress bar */
+.execProgress {
+  height: 2px;
+  background: var(--m-border);
+  border-radius: 1px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.execProgressFill {
+  height: 100%;
+  border-radius: 1px;
+  transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Exec footer */
+.execFooter {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  font-family: var(--m-font-mono, monospace);
+}
+.execStat {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.elapsedLive {
+  color: var(--m-accent);
+  font-weight: 600;
+  animation: pulseDot 2s infinite;
+}
+
+/* Legacy compat */
+.execStatus { display: none; }
+
+/* ─── Timeline ─── */
+.timeline {
+  flex: 0 0 auto;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px 12px 8px;
+}
+.tlHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--glass-tint);
+}
+.tlChainName {
+  font-size: var(--s-sm);
+  font-weight: 600;
+  color: var(--m-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tlStepCount {
+  font-size: var(--s-xs);
+  color: var(--m-accent);
+  font-family: var(--m-font-mono, monospace);
+  font-weight: 600;
+}
+.tlStep {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: var(--s-sm);
+  position: relative;
+}
+.tlStepClickable {
+  cursor: pointer;
+  border-radius: calc(var(--m-radius) - 6px);
+  padding: 5px 6px;
+  margin: 0 -6px;
+  transition: background 0.15s;
+}
+.tlStepClickable:hover {
+  background: var(--glass-tint);
+}
+.tlStepClickable:active {
+  transform: scale(0.99);
+}
+.tlStepRunning {
+  background: rgba(var(--m-accent-rgb), 0.06);
+}
+.tlConnector {
+  position: absolute;
+  left: 10px;
+  top: -4px;
+  width: 2px;
+  height: 10px;
+  border-radius: 1px;
+}
+.tlDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 2px;
+  border: 2px solid var(--m-border);
+  transition: all 0.3s;
+}
+.tlDotRunning {
+  border-color: var(--m-accent);
+  background: var(--m-accent);
+  animation: pulseDot 1s infinite;
+}
+.tlDotDone {
+  border-color: var(--c-success);
+  background: var(--c-success);
+}
+.tlDotError {
+  border-color: var(--c-error);
+  background: var(--c-error);
+}
+.tlDotPending {
+  border-color: var(--m-border);
+}
+.tlDotSkipped {
+  border-color: var(--m-text2);
+  background: var(--m-text2);
+  opacity: 0.4;
+}
+.tlDotWaiting {
+  border-color: var(--c-warning);
+  background: var(--c-warning);
+  animation: pulseDot 1s infinite;
+}
+.tlInfo {
+  flex: 1;
+  min-width: 0;
+}
+.tlLabel {
+  color: var(--m-text);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.tlNav {
+  font-size: 10px;
+  color: var(--m-accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.tlStepClickable:hover .tlNav {
+  opacity: 1;
+}
+.tlMeta {
+  color: var(--m-text2);
+  font-family: var(--m-font-mono, "SF Mono", "Fira Code", monospace);
+  font-size: var(--s-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Log filters ─── */
+.logFilters {
+  display: flex;
+  gap: 4px;
+  padding: 4px 12px 6px;
+  align-items: center;
+}
+.logFilterSelect {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px;
+  border: 1px solid var(--m-border);
+  border-radius: calc(var(--m-radius) - 6px);
+  background: var(--glass-tint);
+  color: var(--m-text);
+  font-size: 9px;
+  font-family: var(--m-font);
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+}
+.logFilterSelect:focus {
+  border-color: var(--m-accent);
+}
+.logSearch {
+  flex: 1;
+  min-width: 50px;
+  max-width: 120px;
+  padding: 3px 6px;
+  border: 1px solid var(--m-border);
+  border-radius: calc(var(--m-radius) - 6px);
+  background: var(--glass-tint);
+  color: var(--m-text);
+  font-size: 9px;
+  font-family: var(--m-font-mono, monospace);
+  outline: none;
+  transition: width 0.2s, border-color 0.2s;
+}
+.logSearch:focus {
+  border-color: var(--m-accent);
+  width: 100px;
+}
+
+/* ─── Log stream ─── */
+.logHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--m-border);
+  border-top: 1px solid var(--m-border);
+  flex-shrink: 0;
+}
+.eventCount {
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  font-family: var(--m-font-mono, "SF Mono", "Fira Code", monospace);
+}
+.log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+  font-family: var(--m-font-mono, "SF Mono", "Fira Code", monospace);
+  font-size: var(--s-xs);
+  line-height: 1.5;
+}
+.logEntry {
+  padding: 2px 6px;
+  border-radius: calc(var(--m-radius) - 8px);
+  border-left: 2px solid transparent;
+  margin-bottom: 1px;
+  word-break: break-all;
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  transition: background 0.1s;
+}
+.logEntry:hover {
+  background: var(--glass-tint-subtle);
+}
+.logEntryClickable {
+  cursor: pointer;
+}
+.logEntryClickable:hover {
+  background: var(--glass-tint);
+}
+.logEntryActive {
+  background: rgba(var(--m-accent-rgb), 0.04);
+}
+.logTime {
+  color: var(--m-text2);
+  margin-right: 4px;
+  font-size: var(--s-xs);
+  flex-shrink: 0;
+}
+.logType {
+  font-weight: 600;
+  margin-right: 3px;
+  font-size: var(--s-xs);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.logMsg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.logGoIcon {
+  font-size: 9px;
+  color: var(--m-accent);
+  opacity: 0;
+  flex-shrink: 0;
+  margin-left: 4px;
+  transition: opacity 0.15s;
+}
+.logEntryClickable:hover .logGoIcon {
+  opacity: 1;
+}
+.logExecBadge {
+  font-size: 8px;
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(var(--m-accent-rgb), 0.12);
+  color: var(--m-accent);
+  margin-right: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Log entry type colors via border-left */
+.logExecutionStarted { border-left-color: var(--m-accent); }
+.logExecutionDone { border-left-color: var(--c-success); }
+.logExecutionError {
+  border-left-color: var(--c-error);
+  background: rgba(255, 55, 95, 0.05);
+}
+.logStepStarted { border-left-color: var(--c-info); }
+.logStepDone { border-left-color: var(--c-success); }
+.logStepError {
+  border-left-color: var(--c-error);
+}
+.logStepOutput {
+  border-left-color: var(--c-warning);
+  color: var(--m-text2);
+}
+.logStepLog { border-left-color: var(--c-purple); }
+.logStepCacheHit {
+  border-left-color: var(--c-success);
+  opacity: 0.7;
+}
+.logStepWaitingApproval {
+  border-left-color: var(--c-orange);
+  background: rgba(255, 159, 10, 0.05);
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 768px) {
+  .connectInput { width: 100px; }
+  .monHeader { padding: 10px 12px 8px; }
+  .connectRow { padding: 6px 10px; }
+  .execList { max-height: 30vh; }
+  .timeline { max-height: 150px; }
+  .logEntry { font-size: 9px; }
+  .logFilters { flex-wrap: wrap; }
+  .logSearch { width: 100%; }
+}
+
+@media (max-width: 400px) {
+  .btn { padding: 3px 6px; font-size: 9px; }
+  .monOpts { gap: 4px; padding: 0 8px 6px; }
+  .quickStats { flex-wrap: wrap; gap: 6px; }
+}

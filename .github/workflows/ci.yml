@@ -7,7 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  backend:
+    name: Backend (mcp-server)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -34,10 +35,68 @@ jobs:
         env:
           npm_config_python: python3
 
+      - name: Security audit
+        working-directory: mcp-server
+        run: npm audit --audit-level=high
+
+      - name: Lint
+        working-directory: mcp-server
+        run: npm run lint
+
       - name: Type check
         working-directory: mcp-server
         run: npx tsc --noEmit
 
+      - name: Build
+        working-directory: mcp-server
+        run: npm run build
+
       - name: Run tests
         working-directory: mcp-server
         run: npm test
+
+      - name: Test coverage
+        working-directory: mcp-server
+        run: npm run test:coverage
+
+  frontend:
+    name: Frontend (React SPA)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install dependencies
+        working-directory: frontend-react
+        run: npm ci
+
+      - name: Security audit
+        working-directory: frontend-react
+        run: npm audit --audit-level=high
+
+      - name: Lint
+        working-directory: frontend-react
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Type check
+        working-directory: frontend-react
+        run: npx tsc -b --noEmit
+
+      - name: Build
+        working-directory: frontend-react
+        run: npm run build
+
+      - name: Build Storybook
+        working-directory: frontend-react
+        run: npm run build-storybook

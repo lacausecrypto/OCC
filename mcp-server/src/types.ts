@@ -54,7 +54,7 @@ export interface PreTool {
   to?: string;                // recipient email (supports {variables})
   subject?: string;           // email subject (supports {variables})
   from?: string;              // sender email
-  provider?: string;          // "smtp" | "sendgrid" (default: smtp)
+  provider?: string;          // "smtp" | "sendgrid" | "resend" (default: smtp)
   smtp_host?: string;         // SMTP server host
   smtp_port?: number;         // SMTP server port
   // pdf_generate
@@ -208,7 +208,10 @@ export interface ChainStep {
   debate_agents?: Array<{ prompt: string; model?: string }>;
   debate_rounds?: number;
   debate_decision?: "voting" | "consensus" | "last_round";
+  // Subchain
+  chain?: string;                    // subchain: chain name to execute (alias for subchain)
   // Webhook
+  url?: string;                      // webhook: URL (alias for webhook_url)
   webhook_url?: string;              // URL to POST to (supports {variables})
   webhook_method?: "POST" | "PUT" | "PATCH" | "GET" | "DELETE";  // default: POST
   webhook_headers?: Record<string, string>;  // custom headers (supports {variables})
@@ -320,17 +323,17 @@ export interface PipelineExecution {
 // ─── SSE events ───────────────────────────────────────────────────────────────
 
 export type ExecutionEvent =
-  | { type: "execution_started"; executionId: string; chainName: string }
-  | { type: "step_started"; executionId: string; stepId: string; label?: string }
-  | { type: "step_output"; executionId: string; stepId: string; chunk: string }
-  | { type: "step_done"; executionId: string; stepId: string; durationMs: number; inputTokens?: number; outputTokens?: number }
-  | { type: "step_error"; executionId: string; stepId: string; error: string }
-  | { type: "step_log"; executionId: string; stepId: string; message: string; level: "info" | "warn" | "error" }
-  | { type: "execution_done"; executionId: string; result: string; durationMs: number }
-  | { type: "step_waiting_approval"; executionId: string; stepId: string; prompt: string }
-  | { type: "execution_error"; executionId: string; error: string }
-  | { type: "step_cache_hit"; executionId: string; stepId: string }
-  | { type: "gate_action"; executionId: string; stepId: string; action: string; reason?: string };
+  | { type: "execution_started"; executionId: string; chainName: string; timestamp?: string }
+  | { type: "step_started"; executionId: string; stepId: string; label?: string; timestamp?: string }
+  | { type: "step_output"; executionId: string; stepId: string; chunk: string; timestamp?: string }
+  | { type: "step_done"; executionId: string; stepId: string; durationMs: number; inputTokens?: number; outputTokens?: number; timestamp?: string }
+  | { type: "step_error"; executionId: string; stepId: string; error: string; timestamp?: string }
+  | { type: "step_log"; executionId: string; stepId: string; message: string; level: "info" | "warn" | "error"; timestamp?: string }
+  | { type: "execution_done"; executionId: string; result: string; durationMs: number; timestamp?: string }
+  | { type: "step_waiting_approval"; executionId: string; stepId: string; prompt: string; timestamp?: string }
+  | { type: "execution_error"; executionId: string; error: string; timestamp?: string }
+  | { type: "step_cache_hit"; executionId: string; stepId: string; timestamp?: string }
+  | { type: "gate_action"; executionId: string; stepId: string; action: string; reason?: string; timestamp?: string };
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 

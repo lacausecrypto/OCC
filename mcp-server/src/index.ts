@@ -21,7 +21,11 @@ import { getChainStats } from "./storage.js";
 import { getQueueStats, listQueueJobs } from "./queue.js";
 
 // Also start REST server alongside MCP server
-import "./rest.js";
+try {
+  await import("./rest.js");
+} catch (err) {
+  console.error(`[occ] WARNING: REST server failed to start: ${err instanceof Error ? err.message : String(err)}`);
+}
 
 // ─── Server setup ─────────────────────────────────────────────────────────────
 
@@ -660,7 +664,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           try {
             const chain = loadChain(n);
             return `• ${n}: ${chain.description ?? "no description"} (${chain.steps.length} steps)`;
-          } catch {
+          } catch (err) {
+            console.error(`[occ] Failed to load chain "${n}":`, err);
             return `• ${n}: [invalid YAML]`;
           }
         });
@@ -1227,7 +1232,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           try {
             const p = loadPipeline(n);
             return `• ${n}: ${p.description ?? "no description"} (${p.chains.length} chains)`;
-          } catch {
+          } catch (err) {
+            console.error(`[occ] Failed to load pipeline "${n}":`, err);
             return `• ${n}: [invalid YAML]`;
           }
         });

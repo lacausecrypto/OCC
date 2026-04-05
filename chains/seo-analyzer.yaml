@@ -1,0 +1,371 @@
+name: seo-analyzer
+description: "Comprehensive SEO analysis — takes a screenshot of the target website, fetches and analyzes technical SEO (meta tags, structure, performance), content quality, competitor keyword positioning, generates an actionable optimization report, and sends the report via webhook. Demonstrates: browser (screenshot), pre_tools (web_search, http_fetch), parallel agents, transform (json_extract), merge, webhook."
+version: "1.0"
+
+inputs:
+  - name: url
+    description: "URL of the website or page to analyze"
+  - name: target_keywords
+    description: "Comma-separated target keywords to optimize for"
+    optional: true
+  - name: competitors
+    description: "Comma-separated competitor URLs for comparison"
+    optional: true
+
+steps:
+  # ── PHASE 0: Take a screenshot of the target URL ──────────────
+
+  - id: screenshot_page
+    type: browser
+    label: "Screenshot target URL"
+    model: claude-sonnet-4-6
+    url: "{input.url}"
+    action: screenshot
+    prompt: "Take a screenshot of the target URL to capture the visual layout, above-the-fold content, and overall design for SEO analysis."
+    output_var: page_screenshot
+    timeout_ms: 60000
+
+  # ── PHASE 1: Fetch and inspect the target page ─────────────────
+
+  - id: fetch_page
+    type: agent
+    label: "Fetch and parse target page"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: http_fetch
+        url: "{input.url}"
+        inject_as: page_html
+      - type: current_datetime
+        inject_as: today
+    prompt: |
+      Date: {today}
+      Target URL: {input.url}
+      Target keywords: {input.target_keywords}
+
+      Raw HTML of the page:
+      {page_html}
+
+      Extract and analyze the following technical SEO elements:
+
+      **Meta Information:**
+      - Title tag (exact text, character count)
+      - Meta description (exact text, character count)
+      - Canonical URL
+      - Robots meta tag
+      - Open Graph tags (og:title, og:description, og:image)
+      - Twitter Card tags
+
+      **Document Structure:**
+      - H1 tag(s) — should be exactly one
+      - H2-H6 hierarchy — are headings properly nested?
+      - Total word count of visible content
+      - Number of internal links vs external links
+      - Image count, how many have alt text, how many are missing alt text
+
+      **Technical Signals:**
+      - Schema.org structured data (JSON-LD or microdata)
+      - Hreflang tags (for international SEO)
+      - sitemap.xml reference
+      - robots.txt compliance
+
+      Output as structured JSON:
+      {
+        "meta": {"title": "...", "title_length": N, "description": "...", "desc_length": N, "canonical": "...", "robots": "...", "og_tags": {...}, "twitter_tags": {...}},
+        "structure": {"h1": ["..."], "heading_hierarchy": [...], "word_count": N, "internal_links": N, "external_links": N, "images_total": N, "images_with_alt": N},
+        "technical": {"schema_markup": true/false, "hreflang": [...], "structured_data_types": [...]},
+        "issues": ["list of immediate issues found"]
+      }
+    output_var: page_analysis
+    output_schema: json
+    timeout_ms: 120000
+
+  # ── PHASE 2: Extract structured data for downstream steps ──────
+
+  - id: extract_issues
+    type: transform
+    label: "Extract SEO issues list"
+    depends_on: [fetch_page]
+    operation: json_extract
+    json_path: "issues"
+    input_var: page_analysis
+    prompt: "Extract the issues array from page analysis"
+    output_var: seo_issues
+    timeout_ms: 10000
+
+  # ── PHASE 3: Parallel deep analyses ────────────────────────────
+
+  - id: content_quality
+    type: agent
+    label: "Content quality and relevance analysis"
+    depends_on: [fetch_page, screenshot_page]
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: http_fetch
+        url: "{input.url}"
+        inject_as: page_content
+    prompt: |
+      Analyze the content quality and keyword optimization of this page.
+
+      URL: {input.url}
+      Target keywords: {input.target_keywords}
+      Page analysis summary: {page_analysis}
+      Page content: {page_content}
+      Page screenshot: {page_screenshot}
+
+      **Keyword Analysis:**
+      1. Primary keyword presence: is the main keyword in the title, H1, first paragraph, URL?
+      2. Keyword density: calculate approximate density for each target keyword
+      3. Keyword placement: are keywords in strategic positions (title, headings, first/last paragraphs)?
+      4. LSI keywords: what semantically related terms are present or missing?
+      5. Keyword cannibalization risk: does this page compete with other pages on the same site?
+
+      **Content Quality:**
+      1. Content depth: is the topic covered comprehensively compared to top-ranking pages?
+      2. Readability: estimate Flesch reading score and grade level
+      3. Content freshness: are there date references suggesting current or outdated content?
+      4. E-E-A-T signals: does the content demonstrate Experience, Expertise, Authoritativeness, Trustworthiness?
+      5. Unique value: what does this page offer that competitors don't?
+
+      **Content Structure:**
+      1. Above-the-fold content: is there valuable content immediately visible?
+      2. Content formatting: proper use of lists, tables, bold, images
+      3. Internal linking: are there contextual internal links to related content?
+      4. Call-to-action: is there a clear CTA?
+
+      **Visual Assessment (from screenshot):**
+      1. Layout and design quality
+      2. Visual hierarchy and readability
+      3. Mobile-friendliness indicators
+
+      Score each category 1-10 and provide specific improvement recommendations.
+    output_var: content_analysis
+    timeout_ms: 180000
+
+  - id: competitor_analysis
+    type: agent
+    label: "Competitor keyword and SERP analysis"
+    depends_on: [fetch_page]
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.target_keywords} best practices guide"
+        inject_as: serp_results
+      - type: web_search
+        query: "site:{input.url} {input.target_keywords}"
+        inject_as: site_search
+    prompt: |
+      Analyze the competitive landscape for the target keywords.
+
+      Our URL: {input.url}
+      Target keywords: {input.target_keywords}
+      Competitor URLs: {input.competitors}
+      Our page analysis: {page_analysis}
+
+      SERP results for target keywords:
+      {serp_results}
+
+      Our site's existing coverage:
+      {site_search}
+
+      **SERP Analysis:**
+      1. What type of content ranks in top 10? (guides, listicles, tools, videos)
+      2. Average word count of top-ranking pages
+      3. Common elements in top results (tables, images, FAQs, videos)
+      4. Featured snippet opportunities — is there a featured snippet? What format?
+      5. People Also Ask questions related to the keywords
+
+      **Competitor Comparison:**
+      For each competitor (or top-ranking page if no competitors specified):
+      - Title tag and approach
+      - Content length and depth
+      - Unique features or content we're missing
+      - Backlink signals (domain authority cues from SERP position)
+
+      **Content Gap Analysis:**
+      - Topics covered by competitors but missing from our page
+      - Keywords competitors rank for that we don't target
+      - Structural elements competitors use (FAQ schema, how-to schema, tables)
+
+      **Keyword Opportunities:**
+      - Related keywords we should target
+      - Long-tail variations with likely lower competition
+      - Question-based keywords for FAQ sections
+    output_var: competitor_seo
+    timeout_ms: 180000
+
+  - id: performance_signals
+    type: agent
+    label: "Performance and technical SEO signals"
+    depends_on: [fetch_page]
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "site:{input.url} indexed pages"
+        inject_as: index_check
+      - type: http_fetch
+        url: "{input.url}/robots.txt"
+        inject_as: robots_txt
+      - type: http_fetch
+        url: "{input.url}/sitemap.xml"
+        inject_as: sitemap
+    prompt: |
+      Evaluate the technical SEO health of: {input.url}
+
+      Page analysis: {page_analysis}
+      Robots.txt: {robots_txt}
+      Sitemap: {sitemap}
+      Index check: {index_check}
+
+      **Crawlability:**
+      1. Robots.txt analysis: are important pages blocked? Are crawl budgets wasted?
+      2. Sitemap: does it exist? Is it properly formatted? Does it include the target page?
+      3. URL structure: is the URL clean, descriptive, and keyword-rich?
+      4. Internal link depth: how many clicks from homepage to this page?
+
+      **Indexability:**
+      1. Are there noindex tags preventing indexing?
+      2. Canonical tag: is it self-referencing or pointing elsewhere?
+      3. Are there duplicate content issues?
+      4. Is the page indexed (based on site: search results)?
+
+      **Page Speed Signals (from HTML analysis):**
+      1. Number of external scripts and stylesheets
+      2. Inline CSS/JS that could be deferred
+      3. Large images without lazy loading
+      4. Missing preconnect/preload hints
+      5. Render-blocking resources
+
+      **Mobile Friendliness (from HTML analysis):**
+      1. Viewport meta tag present?
+      2. Responsive design indicators (media queries, flexible layouts)
+      3. Touch-friendly elements (button sizes, tap targets)
+      4. Font size readability
+
+      **Security:**
+      1. HTTPS enforcement
+      2. Mixed content issues
+      3. Security headers present
+
+      Score overall technical SEO health 1-10 with specific issues to fix.
+    output_var: technical_seo
+    timeout_ms: 180000
+
+  # ── PHASE 4: Merge all analyses ────────────────────────────────
+
+  - id: merge_analyses
+    type: merge
+    label: "Consolidate all SEO analyses"
+    depends_on: [content_quality, competitor_analysis, performance_signals]
+    inputs: [page_analysis, content_analysis, competitor_seo, technical_seo, page_screenshot]
+    strategy: llm_summarize
+    prompt: |
+      Merge the following SEO analyses into a consolidated document:
+
+      ## Page Technical Analysis
+      {page_analysis}
+
+      ## Content Quality Analysis
+      {content_analysis}
+
+      ## Competitor & SERP Analysis
+      {competitor_seo}
+
+      ## Technical SEO Health
+      {technical_seo}
+
+      ## Visual Assessment
+      {page_screenshot}
+
+      Create a unified view that:
+      1. Eliminates duplicate findings across analyses
+      2. Ranks all issues by impact on rankings (high/medium/low)
+      3. Groups related issues together
+      4. Identifies the top 3 quick wins (high impact, low effort)
+    output_var: merged_seo
+    timeout_ms: 120000
+
+  # ── PHASE 5: Final optimization report ─────────────────────────
+
+  - id: optimization_report
+    type: agent
+    label: "SEO optimization report"
+    depends_on: [merge_analyses]
+    model: claude-opus-4-6
+    prompt: |
+      You are a senior SEO strategist. Generate the final SEO optimization report.
+
+      URL analyzed: {input.url}
+      Target keywords: {input.target_keywords}
+      Consolidated analysis: {merged_seo}
+
+      ## SEO Audit Report — {input.url}
+
+      ### Overall SEO Score
+      Score out of 100, broken down by:
+      - Technical SEO: X/25
+      - Content Quality: X/25
+      - On-Page Optimization: X/25
+      - Competitive Position: X/25
+
+      ### Executive Summary
+      3-5 sentences: current state, biggest opportunities, estimated impact of fixes.
+
+      ### Critical Issues (Fix Immediately)
+      Issues that are actively hurting rankings. For each:
+      - What's wrong
+      - Impact on rankings (HIGH/MEDIUM)
+      - Exact fix (provide code/text to implement)
+
+      ### Meta Tag Optimizations
+      Provide EXACT replacement text for:
+      - Title tag (50-60 characters, keyword-optimized)
+      - Meta description (150-160 characters, compelling with CTA)
+      - OG tags (title, description, image recommendations)
+
+      ### Content Improvements
+      - Sections to add or expand
+      - Keywords to naturally incorporate
+      - Structural improvements (FAQ schema, how-to markup, tables)
+      - Internal linking opportunities (suggest specific anchor text and target pages)
+
+      ### Technical Fixes
+      Prioritized list with implementation details:
+      - Schema markup to add (provide JSON-LD code)
+      - Page speed improvements
+      - Mobile optimization fixes
+      - Crawlability improvements
+
+      ### Keyword Strategy
+      - Primary keyword optimization status
+      - Secondary keywords to target
+      - Long-tail opportunities with suggested content sections
+      - Featured snippet optimization tactics
+
+      ### Competitor Advantages to Address
+      What competitors do better and how to close the gap.
+
+      ### 30-Day Action Plan
+      Week-by-week prioritized tasks:
+      - Week 1: Critical fixes (meta tags, technical issues)
+      - Week 2: Content improvements
+      - Week 3: Structural and schema enhancements
+      - Week 4: Competitive content gaps and link building opportunities
+
+      Every recommendation must be specific and immediately actionable. Include exact code snippets, meta tag text, and schema markup where applicable.
+    output_var: seo_report
+    timeout_ms: 300000
+
+  # ── PHASE 6: Send report via webhook ───────────────────────────
+
+  - id: webhook_notify
+    type: webhook
+    label: "Send SEO report notification"
+    depends_on: [optimization_report]
+    model: claude-sonnet-4-6
+    url: "https://hooks.example.com/occ"
+    method: POST
+    prompt: "Send the completed SEO optimization report to the notification endpoint for distribution."
+    output_var: webhook_response
+    timeout_ms: 30000
+
+output: seo_report

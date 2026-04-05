@@ -1,0 +1,430 @@
+name: startup-pitch
+description: "Startup pitch deck generator — takes a business idea, researches market size and competitive landscape, builds financial projections, validates the market via deep research subchain, iterates over pitch sections, facilitates a debate between optimistic founder and skeptical VC investor, evaluates pitch quality, and generates a complete investor-ready pitch deck. Demonstrates: parallel research agents, loop (iterate over sections), evaluator (quality check), merge, debate, subchain."
+version: "1.0"
+
+inputs:
+  - name: idea
+    description: "The startup business idea (1-3 sentences)"
+  - name: stage
+    description: "Funding stage: pre-seed, seed, series-a, series-b (default: seed)"
+    optional: true
+  - name: ask_amount
+    description: "Funding amount being raised (e.g., '$2M')"
+    optional: true
+  - name: founders
+    description: "Brief founder backgrounds (names, expertise, prior exits)"
+    optional: true
+
+steps:
+  # ── PHASE 1: Parallel market research ──────────────────────────
+
+  - id: market_research
+    type: agent
+    label: "Market size and TAM/SAM/SOM analysis"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.idea} market size TAM SAM forecast 2025 2030"
+        inject_as: market_data
+      - type: web_search
+        query: "{input.idea} industry growth rate trends report"
+        inject_as: growth_data
+      - type: current_datetime
+        inject_as: today
+    prompt: |
+      Date: {today}
+      Business idea: {input.idea}
+      Funding stage: {input.stage}
+
+      Market research data:
+      {market_data}
+
+      Growth data:
+      {growth_data}
+
+      Produce a rigorous market analysis:
+
+      **Total Addressable Market (TAM):**
+      - Global market size with source citation
+      - Growth rate (CAGR) with timeframe
+      - Key market drivers
+
+      **Serviceable Addressable Market (SAM):**
+      - Geographic/segment focus and why
+      - SAM calculation methodology
+      - Size estimate with reasoning
+
+      **Serviceable Obtainable Market (SOM):**
+      - Realistic year 1-3 capture rate
+      - Basis for capture rate assumption
+      - Revenue projection from SOM
+
+      **Market Timing:**
+      - Why NOW is the right time for this business
+      - Recent shifts enabling this opportunity (technology, regulation, behavior)
+      - What happens if you wait 2 years
+
+      Use REAL data where possible. When estimating, clearly state your assumptions.
+      Format all monetary values consistently. Cite sources for every claim.
+    output_var: market_analysis
+    timeout_ms: 180000
+
+  - id: competitive_landscape
+    type: agent
+    label: "Competitive landscape analysis"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.idea} competitors startups companies"
+        inject_as: competitor_data
+      - type: web_search
+        query: "{input.idea} startup funding raised venture capital"
+        inject_as: funding_data
+    prompt: |
+      Business idea: {input.idea}
+
+      Competitor research:
+      {competitor_data}
+
+      Funding landscape:
+      {funding_data}
+
+      Map the competitive landscape:
+
+      **Direct Competitors** (solving the same problem):
+      For each (identify 3-5):
+      - Name, URL, one-line description
+      - Funding raised and stage
+      - Key strengths and weaknesses
+      - How our approach differs
+
+      **Indirect Competitors** (alternative solutions):
+      For each (identify 2-3):
+      - What alternative they represent
+      - Why customers might choose them over us
+
+      **Competitive Advantages** (our moat):
+      - What can we do that competitors cannot easily replicate?
+      - Network effects, data advantages, technology, partnerships
+      - First-mover advantage or fast-follower advantage?
+
+      **Competitive Matrix:**
+      Create a feature comparison table:
+      | Feature | Us | Competitor A | Competitor B | Competitor C |
+      Rate each: Strong / Moderate / Weak / Missing
+
+      **Defensibility Timeline:**
+      - Month 1-6: what gives us a head start
+      - Month 6-18: what builds the moat
+      - Year 2+: what makes us hard to displace
+    output_var: competitive_analysis
+    timeout_ms: 180000
+
+  - id: financial_model
+    type: agent
+    label: "Financial projections"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: web_search
+        query: "{input.idea} SaaS business model pricing revenue benchmarks"
+        inject_as: pricing_benchmarks
+    prompt: |
+      Business idea: {input.idea}
+      Funding stage: {input.stage}
+      Raise amount: {input.ask_amount}
+
+      Pricing benchmarks:
+      {pricing_benchmarks}
+
+      Build a financial model for investor presentation:
+
+      **Revenue Model:**
+      - Primary revenue stream and pricing strategy
+      - Secondary revenue streams (if any)
+      - Unit economics: price per unit/user/transaction
+      - Billing model: subscription, usage-based, transaction fee, etc.
+
+      **Unit Economics:**
+      - Customer Acquisition Cost (CAC): estimated with channel breakdown
+      - Lifetime Value (LTV): calculation with assumptions
+      - LTV/CAC ratio: must be > 3x for healthy business
+      - Payback period: months to recover CAC
+      - Gross margin: percentage with cost breakdown
+
+      **3-Year Financial Projections:**
+
+      | Metric | Year 1 | Year 2 | Year 3 |
+      |--------|--------|--------|--------|
+      | Revenue | | | |
+      | Customers | | | |
+      | MRR | | | |
+      | ARR | | | |
+      | Gross Margin | | | |
+      | Burn Rate (monthly) | | | |
+      | Runway (months) | | | |
+
+      **Use of Funds** (how the {input.ask_amount} will be allocated):
+      - Engineering: X% — hire N engineers
+      - Sales & Marketing: X% — customer acquisition
+      - Operations: X% — infrastructure, legal, admin
+      - Reserve: X% — runway buffer
+
+      **Key Assumptions** (be explicit):
+      - Monthly growth rate: X%
+      - Churn rate: X%
+      - Conversion rate: X%
+      - Average deal size: $X
+
+      State every assumption clearly. Use conservative estimates — investors respect honesty.
+    output_var: financials
+    timeout_ms: 180000
+
+  # ── PHASE 1.5: Deep research market validation via subchain ────
+
+  - id: market_validation
+    type: subchain
+    label: "Deep research market validation"
+    depends_on: [market_research, competitive_landscape]
+    model: claude-sonnet-4-6
+    chain: deep-researcher
+    inputs:
+      query: "Validate market opportunity for: {input.idea}. Verify TAM/SAM/SOM claims from market research: {market_analysis}. Cross-reference competitive landscape: {competitive_analysis}. Focus on real customer demand signals, recent funding in the space, and market timing evidence."
+    prompt: "Run deep-researcher subchain to validate the market opportunity and cross-check research findings."
+    output_var: market_validation_result
+    timeout_ms: 600000
+
+  # ── PHASE 2: Iterate over pitch deck sections ─────────────────
+
+  - id: build_sections
+    type: loop
+    label: "Build pitch deck sections"
+    depends_on: [market_validation, financial_model]
+    items_var: "pitch_sections"
+    items_static:
+      - "cover_and_hook"
+      - "problem"
+      - "solution"
+      - "market_opportunity"
+      - "business_model"
+      - "traction"
+      - "competition"
+      - "team"
+      - "financials_and_ask"
+      - "vision"
+    max_parallel: 3
+    step_template:
+      type: agent
+      label: "Write section: {item}"
+      model: claude-sonnet-4-6
+      prompt: |
+        You are a pitch deck specialist who has helped raise over $500M in venture funding.
+
+        Business idea: {input.idea}
+        Funding stage: {input.stage}
+        Ask amount: {input.ask_amount}
+        Founders: {input.founders}
+
+        Market analysis: {market_analysis}
+        Competitive analysis: {competitive_analysis}
+        Financial model: {financials}
+        Market validation: {market_validation_result}
+
+        Write the **{item}** section of the pitch deck.
+
+        Section guidelines by type:
+
+        **cover_and_hook**: Company name suggestion, one-line tagline (max 10 words), the single most compelling hook stat or statement. This should make investors lean forward.
+
+        **problem**: Describe the problem in human terms. Use a specific story or scenario. Quantify the pain (cost, time wasted, opportunity lost). Make investors FEEL the problem. Max 3 bullet points on the slide, with speaker notes.
+
+        **solution**: How the product solves the problem. Demo-ready description. What's the "aha moment"? Before/after comparison. Show don't tell. Max 3 bullet points with speaker notes.
+
+        **market_opportunity**: TAM/SAM/SOM visual breakdown. Key stat: market size and growth. Why NOW (timing catalyst). Use data from market analysis and market validation. Max 4 data points with speaker notes.
+
+        **business_model**: How you make money. Pricing tiers. Unit economics summary. Path to profitability. Use data from financial model. Max 4 bullet points with speaker notes.
+
+        **traction**: If pre-revenue, show leading indicators (waitlist, LOIs, pilot customers, partnerships). If revenue, show MRR/ARR growth. Key metrics and milestones. Max 5 metrics with speaker notes.
+
+        **competition**: 2x2 competitive matrix positioning. Why existing solutions fall short. Our unique advantage. Use data from competitive analysis. Max 1 matrix + 3 differentiators.
+
+        **team**: Why THIS team can win. Relevant experience, domain expertise, prior exits. Key hires planned with raise. Max 4 team highlights with speaker notes.
+
+        **financials_and_ask**: 3-year projections summary. Funding ask with specific use of funds. Key milestones this funding will achieve. Expected runway. Max 1 table + 3 milestones.
+
+        **vision**: Where this goes in 5-10 years. Expansion opportunities. Potential exit scenarios. The big dream that makes this a venture-scale opportunity. Max 3 bullet points.
+
+        Format each section as:
+        ## Slide: {item}
+        **Headline**: [bold statement for the slide]
+        **Visual**: [describe what should be on the slide visually]
+        **Bullet Points**: [3-5 concise points]
+        **Speaker Notes**: [what the presenter should say — 100-200 words]
+      tools: []
+    prompt: "Build each section of the pitch deck"
+    output_var: pitch_sections
+    timeout_ms: 600000
+
+  # ── PHASE 2.5: Debate pitch from founder vs investor perspectives ──
+
+  - id: pitch_debate
+    type: debate
+    label: "Debate: Optimistic Founder vs Skeptical VC Investor"
+    depends_on: [build_sections]
+    model: claude-sonnet-4-6
+    agents:
+      - role: "Optimistic Founder"
+        prompt: |
+          You are a passionate, optimistic startup founder defending your pitch. Argue for the
+          strength of the business idea, the market opportunity, the team's ability to execute,
+          and why this is a compelling investment. Use data from the market research and financials
+          to back up your claims. Address skepticism with concrete evidence and vision.
+
+          Business idea: {input.idea}
+          Pitch sections: {pitch_sections}
+          Market analysis: {market_analysis}
+          Financial model: {financials}
+          Market validation: {market_validation_result}
+      - role: "Skeptical VC Investor"
+        prompt: |
+          You are a skeptical VC investor who has seen thousands of pitches. Challenge every
+          assumption in this pitch. Question the market size claims, the financial projections,
+          the competitive moat, and the team's ability to execute. Push back on what seems too
+          optimistic. Identify the biggest risks and why this investment might fail. Be tough
+          but fair — if something is genuinely strong, acknowledge it.
+
+          Business idea: {input.idea}
+          Pitch sections: {pitch_sections}
+          Market analysis: {market_analysis}
+          Competitive analysis: {competitive_analysis}
+          Financial model: {financials}
+    rounds: 2
+    strategy: consensus
+    prompt: "Simulate a pitch meeting where an optimistic founder defends the pitch against a skeptical VC investor to stress-test the business case."
+    output_var: pitch_debate_result
+    timeout_ms: 300000
+
+  # ── PHASE 3: Evaluate pitch quality ────────────────────────────
+
+  - id: evaluate_pitch
+    type: evaluator
+    label: "Pitch quality evaluation"
+    depends_on: [pitch_debate]
+    model: claude-opus-4-6
+    eval_scoring: true
+    eval_threshold: 7
+    input_var: pitch_sections
+    criteria: |
+      Evaluate this pitch deck as a Series Seed/A investor would. Score 1-10:
+
+      **Story Arc (weight: 25%)**
+      - Is there a clear narrative thread from problem to solution to opportunity?
+      - Does it build tension and release?
+      - Is the opening hook compelling enough to keep reading?
+
+      **Credibility (weight: 25%)**
+      - Are market claims backed by real data and sources?
+      - Are financial projections reasonable (not hockey-stick fantasy)?
+      - Does the team section inspire confidence?
+
+      **Differentiation (weight: 25%)**
+      - Is it clear why this team, this approach, this timing?
+      - Is the competitive moat well-articulated?
+      - Would an investor say "I've seen this before" or "this is new"?
+
+      **Investability (weight: 25%)**
+      - Is the ask reasonable for the stage?
+      - Is there a clear path to 10x return?
+      - Are the milestones for this round well-defined?
+
+      PASS if score >= 7. FAIL if the pitch wouldn't get a second meeting.
+    on_fail: retry
+    max_retries: 1
+    retry_target: build_sections
+    prompt: "Evaluate pitch deck quality for investor readiness"
+    output_var: pitch_score
+    timeout_ms: 120000
+
+  # ── PHASE 4: Merge into final deck ─────────────────────────────
+
+  - id: merge_deck
+    type: merge
+    label: "Assemble final pitch deck"
+    depends_on: [evaluate_pitch]
+    inputs: [pitch_sections, market_analysis, competitive_analysis, financials, market_validation_result, pitch_debate_result]
+    strategy: llm_summarize
+    prompt: |
+      Assemble the final pitch deck from these sections:
+
+      {pitch_sections}
+
+      Supporting data:
+      - Market analysis: {market_analysis}
+      - Competitive analysis: {competitive_analysis}
+      - Financial model: {financials}
+      - Market validation: {market_validation_result}
+      - Pitch debate insights: {pitch_debate_result}
+
+      Create a polished, investor-ready pitch deck document. Ensure:
+      1. Consistent formatting across all slides
+      2. Smooth narrative flow from section to section
+      3. No redundant information between slides
+      4. Speaker notes complement (not repeat) the slide content
+      5. All data points are consistent across sections
+      6. Insights from the founder vs investor debate are incorporated to strengthen weak points
+    output_var: assembled_deck
+    timeout_ms: 120000
+
+  # ── PHASE 5: Final polish and appendix ─────────────────────────
+
+  - id: final_deck
+    type: agent
+    label: "Final pitch deck with appendix"
+    depends_on: [merge_deck]
+    model: claude-opus-4-6
+    prompt: |
+      You are a world-class pitch coach. Finalize this investor pitch deck.
+
+      Assembled deck:
+      {assembled_deck}
+
+      Pitch quality score: {pitch_score}
+
+      Pitch debate insights (founder vs investor):
+      {pitch_debate_result}
+
+      **Polish the deck:**
+      1. Sharpen every headline — make each one a standalone statement that conveys value
+      2. Ensure the first slide hook would stop a busy investor from checking their phone
+      3. Check that numbers are consistent across all slides
+      4. Verify the narrative builds logically
+      5. Address any weaknesses identified during the founder vs investor debate
+
+      **Add an Appendix with:**
+      - Detailed financial model assumptions
+      - Full competitive matrix
+      - Product roadmap (6-month and 18-month)
+      - Risk factors and mitigation strategies
+      - Key metrics definitions
+      - Market validation findings
+
+      **Add a "FAQ — Tough Questions" section:**
+      Anticipate and answer the 10 hardest questions an investor will ask:
+      1. Why will you win? (not just why you're good, but why competitors will lose)
+      2. What if [Big Tech] enters this market?
+      3. Why can't this be a feature of [Existing Product]?
+      4. What's your unfair advantage?
+      5. Why is this a venture-scale business (not a lifestyle business)?
+      6. What's the biggest risk?
+      7. How did you arrive at these projections?
+      8. What happens if you don't hit your targets?
+      9. Why this team?
+      10. Why raise now vs. bootstrap further?
+
+      For each tough question, provide a crisp 3-4 sentence answer that a founder could memorize.
+
+      Output the complete, polished pitch deck.
+    output_var: final_pitch
+    output_must_not_contain: ["TBD", "TODO", "[placeholder]", "lorem ipsum"]
+    timeout_ms: 300000
+
+output: final_pitch

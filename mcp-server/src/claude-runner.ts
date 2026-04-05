@@ -7,20 +7,39 @@
 
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { z } from "zod";
 import type { ChainStep } from "./types.js";
 import { resolveVariables } from "./utils.js";
+import { resolveProvider, runLLMHTTP } from "./providers.js";
 
 // ─── Claude CLI version check ──────────────────────────────────────────────
 
 let claudeVersion = "";
 
+// SECURITY: Validate CLAUDE_CLI/CLAUDE_BIN to prevent arbitrary binary execution
+function sanitizeClaudeBinPath(binPath: string): string {
+  // Only allow "claude" (default) or absolute paths to real binaries
+  if (binPath === "claude") return binPath;
+  // Allow absolute paths only (no relative paths that could be manipulated)
+  if (!binPath.startsWith("/") && !binPath.match(/^[A-Z]:\\/)) {
+    process.stderr.write(`[occ] WARNING: CLAUDE_CLI must be "claude" or an absolute path. Got: "${binPath}" — using "claude"\n`);
+    return "claude";
+  }
+  // Block paths containing suspicious patterns
+  if (/[;&|`$(){}]/.test(binPath) || binPath.includes("..")) {
+    process.stderr.write(`[occ] WARNING: CLAUDE_CLI contains suspicious characters — using "claude"\n`);
+    return "claude";
+  }
+  return binPath;
+}
+
 function checkClaudeVersion(): void {
   if (claudeVersion) return;
   try {
-    const claudeBin = process.env.CLAUDE_CLI ?? process.env.CLAUDE_BIN ?? "claude";
-    claudeVersion = execSync(`${claudeBin} --version`, { encoding: "utf-8", timeout: 5000 }).trim();
+    const rawBin = process.env.CLAUDE_CLI ?? process.env.CLAUDE_BIN ?? "claude";
+    const claudeBin = sanitizeClaudeBinPath(rawBin);
+    claudeVersion = execFileSync(claudeBin, ["--version"], { encoding: "utf-8", timeout: 5000 }).trim();
     process.stderr.write(`[occ] Claude CLI version: ${claudeVersion}\n`);
   } catch {
     process.stderr.write(`[occ] WARNING: Could not determine Claude CLI version\n`);
@@ -106,10 +125,11 @@ let claudeBinPath = "";
  * `runClaude()` calls can skip re-validation.
  */
 export function validateClaudeBinary(): void {
-  const claudeBin = process.env.CLAUDE_CLI ?? process.env.CLAUDE_BIN ?? "claude";
+  const claudeBin = sanitizeClaudeBinPath(process.env.CLAUDE_CLI ?? process.env.CLAUDE_BIN ?? "claude");
   const whichCmd = process.platform === "win32" ? "where" : "which";
   try {
-    execSync(`${whichCmd} "${claudeBin}"`, { encoding: "utf-8", timeout: 5000 });
+    // Use execFileSync to avoid shell injection via CLAUDE_CLI env var
+    execFileSync(whichCmd, [claudeBin], { encoding: "utf-8", timeout: 5000 });
     claudeBinPath = claudeBin;
     claudeBinValidated = true;
     process.stderr.write(`[occ] Claude binary verified: ${claudeBin}\n`);
@@ -150,7 +170,7 @@ export function incrementRunningCount(): void {
  * Decrements the running execution counter. Call when an execution finishes.
  */
 export function decrementRunningCount(): void {
-  runningExecutionCount--;
+  runningExecutionCount = Math.max(0, runningExecutionCount - 1);
 }
 
 // ─── Process tracker interface ───────────────────────────────────────────────
@@ -234,11 +254,12 @@ export function runClaude(
 
     // Timeout: kill process if it runs too long
     const effectiveTimeout = timeoutMs ?? CLAUDE_TIMEOUT_MS;
+    let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
         try { child.kill("SIGTERM"); } catch (e) { process.stderr.write(`[occ] timeout kill SIGTERM failed: ${e}\n`); }
-        setTimeout(() => { try { child.kill("SIGKILL"); } catch (e) { process.stderr.write(`[occ] timeout kill SIGKILL failed: ${e}\n`); } }, 3000);
+        sigkillTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch (e) { process.stderr.write(`[occ] timeout kill SIGKILL failed: ${e}\n`); } }, 3000);
         if (executionId && processTracker) { processTracker.unregister(executionId, child); }
         reject(new Error(`claude timed out after ${effectiveTimeout / 1000}s for step "${step.id}"`));
       }
@@ -248,24 +269,25 @@ export function runClaude(
     const heartbeat = setInterval(() => {
       if (settled) { clearInterval(heartbeat); return; }
       try {
-        // kill(0) checks if process exists without actually killing it
         process.kill(child.pid!, 0);
       } catch {
-        // Process is dead but 'close' event never fired
         clearInterval(heartbeat);
         clearTimeout(timeout);
-        if (!settled) {
-          settled = true;
-          if (executionId && processTracker) { processTracker.unregister(executionId, child); }
-          const durationMs = Date.now() - startTime;
-          if (fullText.trim()) {
-            resolve({ stdout: fullText.trim(), durationMs, inputTokens, outputTokens });
-          } else {
-            reject(new Error(`claude process died silently (pid ${child.pid}) for step "${step.id}" after ${(durationMs / 1000).toFixed(0)}s`));
-          }
+        if (sigkillTimer) { clearTimeout(sigkillTimer); sigkillTimer = undefined; }
+        if (settled) return;
+        settled = true;
+        if (executionId && processTracker) { processTracker.unregister(executionId, child); }
+        const durationMs = Date.now() - startTime;
+        const snapshot = fullTextParts.join("").trim();
+        const snapInput = inputTokens;
+        const snapOutput = outputTokens;
+        if (snapshot) {
+          resolve({ stdout: snapshot, durationMs, inputTokens: snapInput, outputTokens: snapOutput });
+        } else {
+          reject(new Error(`claude process died silently (pid ${child.pid}) for step "${step.id}" after ${(durationMs / 1000).toFixed(0)}s`));
         }
       }
-    }, 30000);
+    }, 10000);
 
     // Register for cancellation (supports multiple parallel processes per execution)
     if (executionId && processTracker) {
@@ -278,7 +300,8 @@ export function runClaude(
     }
 
     let lineBuffer = "";
-    let fullText = "";
+    const fullTextParts: string[] = [];
+    let fullTextLen = 0;
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
     let stderr = "";
@@ -298,7 +321,7 @@ export function runClaude(
           if (cbd.success) {
             const text = cbd.data.delta.text ?? "";
             if (text) {
-              if (fullText.length < MAX_OUTPUT) { fullText += text; }
+              if (fullTextLen < MAX_OUTPUT) { fullTextParts.push(text); fullTextLen += text.length; }
               onChunk(text);
             }
             continue;
@@ -308,7 +331,7 @@ export function runClaude(
           if (asst.success) {
             for (const block of asst.data.message.content ?? []) {
               if (block.type === "text" && block.text) {
-                if (fullText.length < MAX_OUTPUT) { fullText += block.text; }
+                if (fullTextLen < MAX_OUTPUT) { fullTextParts.push(block.text); fullTextLen += block.text.length; }
                 onChunk(block.text);
               }
             }
@@ -327,10 +350,12 @@ export function runClaude(
             }
             if (res.data.result) {
               const resultText = res.data.result;
-              if (resultText.length > fullText.length) {
-                const diff = resultText.slice(fullText.length);
+              if (resultText.length > fullTextLen) {
+                const diff = resultText.slice(fullTextLen);
                 if (diff) onChunk(diff);
-                fullText = resultText;
+                fullTextParts.length = 0;
+                fullTextParts.push(resultText);
+                fullTextLen = resultText.length;
               }
             }
             continue;
@@ -346,7 +371,7 @@ export function runClaude(
           if (msg.success) {
             for (const block of msg.data.message.content ?? []) {
               if (block.type === "text" && block.text) {
-                if (fullText.length < MAX_OUTPUT) { fullText += block.text; }
+                if (fullTextLen < MAX_OUTPUT) { fullTextParts.push(block.text); fullTextLen += block.text.length; }
                 onChunk(block.text);
               }
             }
@@ -367,21 +392,29 @@ export function runClaude(
           const isErrorLine = ERROR_LINE_PATTERNS.some(p => p.test(trimmedLine));
           if (isErrorLine) {
             stderr += line + "\n";
-          } else if (trimmedLine && fullText.length < MAX_OUTPUT) {
-            fullText += line + "\n";
+          } else if (trimmedLine && fullTextLen < MAX_OUTPUT) {
+            fullTextParts.push(line + "\n");
+            fullTextLen += line.length + 1;
             onChunk(line + "\n");
           }
         }
       }
     });
 
+    const MAX_STDERR = 100_000; // 100KB cap
     child.stderr!.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf-8");
+      if (stderr.length < MAX_STDERR) {
+        stderr += chunk.toString("utf-8");
+        if (stderr.length > MAX_STDERR) {
+          stderr = stderr.slice(0, MAX_STDERR);
+        }
+      }
     });
 
     child.on("error", (err) => {
       clearTimeout(timeout);
       clearInterval(heartbeat);
+      if (sigkillTimer) { clearTimeout(sigkillTimer); sigkillTimer = undefined; }
       if (settled) return;
       settled = true;
       if (executionId && processTracker) { processTracker.unregister(executionId, child); }
@@ -391,6 +424,7 @@ export function runClaude(
     child.on("close", (code) => {
       clearTimeout(timeout);
       clearInterval(heartbeat);
+      if (sigkillTimer) { clearTimeout(sigkillTimer); sigkillTimer = undefined; }
       if (settled) return;
       settled = true;
       if (executionId && processTracker) { processTracker.unregister(executionId, child); }
@@ -406,8 +440,10 @@ export function runClaude(
             }
             if (event.result) {
               const resultText = event.result as string;
-              if (resultText.length > fullText.length) {
-                fullText = resultText;
+              if (resultText.length > fullTextLen) {
+                fullTextParts.length = 0;
+                fullTextParts.push(resultText);
+                fullTextLen = resultText.length;
               }
             }
           }
@@ -415,6 +451,7 @@ export function runClaude(
       }
 
       const durationMs = Date.now() - startTime;
+      const fullText = fullTextParts.join("");
       if (code === 0 || (code !== null && fullText)) {
         resolve({ stdout: fullText.trim(), durationMs, inputTokens, outputTokens });
       } else {
@@ -464,6 +501,33 @@ export async function runStepWithRetry(
         if (attempt > 1 || (model && model !== (step.model ?? models[0]))) {
           onLog(`Attempt ${attempt}${model ? ` with ${model}` : ''}`, "warn");
         }
+
+        // ─── Multi-provider routing ─────────────────────────────
+        // Check if this model should be routed to an HTTP provider
+        // instead of the Claude CLI.
+        const resolved = resolveProvider(stepWithModel.model ?? "", (stepWithModel as unknown as Record<string, unknown>).provider as string | undefined);
+        if (resolved && resolved.provider.type !== "claude" && resolved.provider.apiKey) {
+          // Non-Claude provider → use HTTP adapter
+          onLog(`Using provider: ${resolved.provider.name} (${resolved.model})`, "info");
+          const result = await runLLMHTTP(
+            {
+              provider: resolved.provider.id,
+              model: resolved.model,
+              prompt: resolvedPrompt,
+              maxTokens: 8192,
+              stream: true,
+            },
+            onChunk,
+          );
+          return {
+            stdout: result.text,
+            durationMs: result.durationMs,
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+          };
+        }
+
+        // Default: Claude CLI
         return await runClaude(resolvedPrompt, stepWithModel, onChunk, executionId, step.timeout_ms, processTracker);
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));

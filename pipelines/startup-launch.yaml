@@ -1,0 +1,49 @@
+name: startup-launch
+description: "End-to-end startup launch pipeline: performs deep market research, generates an investor-ready pitch deck, then produces marketing content (articles + social media). Chains deep-researcher into startup-pitch into content-engine for a complete go-to-market package."
+version: "1.0"
+
+inputs:
+  - name: idea
+    description: "The startup business idea (1-3 sentences)"
+  - name: stage
+    description: "Funding stage: pre-seed, seed, series-a (default: seed)"
+    optional: true
+  - name: ask_amount
+    description: "Funding amount being raised (e.g., '$2M')"
+    optional: true
+  - name: founders
+    description: "Brief founder backgrounds"
+    optional: true
+  - name: audience
+    description: "Target audience for marketing content (e.g., 'developers', 'enterprise CTOs')"
+    optional: true
+
+chains:
+  - id: research
+    chain: deep-researcher
+    label: "Deep market research"
+    inputs:
+      topic: "{input.idea}"
+      depth: "deep"
+
+  - id: pitch
+    chain: startup-pitch
+    label: "Investor pitch deck generation"
+    depends_on: [research]
+    inputs:
+      idea: "{input.idea}"
+      stage: "{input.stage}"
+      ask_amount: "{input.ask_amount}"
+      founders: "{input.founders}"
+
+  - id: marketing
+    chain: content-engine
+    label: "Marketing content creation"
+    depends_on: [pitch]
+    inputs:
+      topic: "{input.idea}"
+      audience: "{input.audience}"
+      tone: "professional"
+      word_count: "2000"
+
+output: pitch

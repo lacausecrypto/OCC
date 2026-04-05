@@ -126,12 +126,12 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
     }
 
     // 4g. Webhook: check url is provided
-    if (step.type === "webhook" && !step.webhook_url) {
-      issues.push({ level: "error", stepId: step.id, message: `Webhook step missing "webhook_url"` });
+    if (step.type === "webhook" && !step.webhook_url && !step.url) {
+      issues.push({ level: "error", stepId: step.id, message: `Webhook step missing "webhook_url" or "url"` });
     }
 
     // 4h. Subchain: check subchain name is provided
-    if (step.type === "subchain" && !step.subchain) {
+    if (step.type === "subchain" && !step.subchain && !step.chain) {
       issues.push({
         level: "error",
         stepId: step.id,
@@ -342,6 +342,21 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
         stepId: step.id,
         message: `output_var "${step.output_var}" is never referenced by other steps`,
       });
+    }
+  }
+
+  // ─── Security warnings: dangerous pre-tools ─────────────────────────────
+  const DANGEROUS_PRETOOLS = new Set(["bash", "write_file", "db_query", "sandbox_exec"]);
+  for (const step of chain.steps) {
+    for (const pt of step.pre_tools ?? []) {
+      if (DANGEROUS_PRETOOLS.has(pt.type)) {
+        issues.push({ level: "warning", stepId: step.id, message: `Pre-tool "${pt.type}" can execute arbitrary commands/queries. Ensure this chain is from a trusted source.` });
+        // Check if user input flows into dangerous pre-tool
+        const dangerousFields = pt.type === "bash" ? (pt.command ?? "") : pt.type === "db_query" ? (pt.sql ?? "") : pt.type === "write_file" ? (pt.content ?? "") : "";
+        if (typeof dangerousFields === "string" && dangerousFields.includes("{input.")) {
+          issues.push({ level: "warning", stepId: step.id, message: `Pre-tool "${pt.type}" uses {input.*} interpolation — risk of injection. Sanitize inputs or avoid passing user data to "${pt.type}".` });
+        }
+      }
     }
   }
 

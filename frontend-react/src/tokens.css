@@ -1,0 +1,162 @@
+/* ═══════════════════════════════════════════════════════════════
+   OCC CHIMERA — Design tokens & global reset
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg: #0d0d0d;
+  --surface: #1a1a1a;
+  --surface2: #222;
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+  --text: #f5f5f7;
+  --text2: #86868b;
+  --text3: #6e6e73;
+  --border: #2d2d2d;
+  --radius: 12px;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI",
+    Helvetica, Arial, sans-serif;
+  --mono: "SF Mono", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+
+  /* Morphable design tokens */
+  --m-bg: #0d0d0d;
+  --m-surface: #1a1a1a;
+  --m-accent: #0a84ff;
+  --m-text: #f5f5f7;
+  --m-text2: #86868b;
+  --m-border: #2d2d2d;
+  --m-radius: 12px;
+  --m-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  --m-heading-size: 20px;
+  --m-heading-weight: 600;
+  --m-body-size: 14px;
+  --m-body-weight: 400;
+  --m-line-height: 1.5;
+  --m-grid-cols: 3;
+  --m-gap: 16px;
+  --m-padding: 20px;
+  --m-border-width: 1px;
+  --m-font: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui,
+    sans-serif;
+  --m-font-mono: "SF Mono", "Fira Code", "JetBrains Mono", "Consolas",
+    monospace;
+
+  /* Semantic size scale */
+  --s-xs: calc(var(--m-body-size) * 0.7);
+  --s-sm: calc(var(--m-body-size) * 0.78);
+  --s-md: var(--m-body-size);
+  --s-lg: calc(var(--m-body-size) * 1.15);
+
+  /* Semantic status colors */
+  --c-success: #30d158;
+  --c-error: #ff375f;
+  --c-warning: #ff9f0a;
+  --c-info: #64d2ff;
+  --c-purple: #bf5af2;
+  --c-orange: #ff9f0a;
+  --c-pink: #ff6482;
+
+  /* ─── Glass tokens (crenspire/glass-ui Apple standard) ─── */
+  --glass-bg: linear-gradient(135deg,
+    rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.06) 25%,
+    rgba(240,248,255,0.07) 50%, rgba(255,255,255,0.05) 75%,
+    rgba(230,240,255,0.06) 100%);
+  --glass-border: rgba(255, 255, 255, 0.15);
+  --glass-shadow: 0 4px 16px rgba(0,0,0,0.3), 0 1px 4px rgba(0,0,0,0.15), 0 0 0 0.5px rgba(255,255,255,0.1);
+  --glass-blur: blur(10px);
+  --glass-tint: rgba(255, 255, 255, 0.06);
+  --glass-tint-hover: rgba(255, 255, 255, 0.1);
+  --glass-tint-subtle: rgba(255, 255, 255, 0.03);
+}
+
+/* Global reset */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--m-bg);
+  color: var(--m-text);
+  font-family: var(--m-font);
+  font-size: var(--m-body-size);
+  line-height: var(--m-line-height);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.2s, color 0.2s;
+}
+
+#root {
+  height: 100%;
+}
+
+/* ─── Design Space morphing transitions ─── */
+/* Only apply to content elements, NOT layout structure.
+   Layout (sidebars, tabs) handles its own transitions explicitly. */
+
+/* ─── Apple-like animation keyframes ─── */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes overlayFadeIn {
+  from { opacity: 0; backdrop-filter: blur(0); }
+  to   { opacity: 1; backdrop-filter: blur(6px); }
+}
+@keyframes ctxMenuIn {
+  from { opacity: 0; transform: scale(0.95) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes cardStagger {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes tabFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ─── Scrollbar styling (cross-platform, theme-adaptive) ─── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
+}
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, rgba(255, 255, 255, 0.15));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover, rgba(255, 255, 255, 0.25));
+}

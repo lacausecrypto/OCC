@@ -15,6 +15,14 @@ import type { ChainExecution, StepResult, ExecutionStatus } from "./types.js";
 
 let db: Database.Database;
 
+function safeParse(raw: string | null | undefined): Record<string, string> {
+  try {
+    return JSON.parse(raw || "{}");
+  } catch {
+    return {};
+  }
+}
+
 // ─── Init ───────────────────────────────────────────────────────────────────
 
 function getDbPath(): string {
@@ -73,7 +81,12 @@ export function initStorage(): void {
   // Migration: add chain_snapshot column if missing (safe for existing DBs)
   try {
     db.exec(`ALTER TABLE executions ADD COLUMN chain_snapshot TEXT`);
-  } catch { /* column already exists */ }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("duplicate column")) {
+      throw err;
+    }
+  }
 
   // Migrate: fix orphaned running executions from previous crash
   db.prepare(`
@@ -204,7 +217,7 @@ export function loadExecution(id: string): ChainExecution | null {
     id: row.id,
     chainName: row.chain_name,
     status: row.status as ExecutionStatus,
-    input: JSON.parse(row.input || "{}"),
+    input: safeParse(row.input),
     steps,
     result: row.result ?? undefined,
     error: row.error ?? undefined,
@@ -236,7 +249,7 @@ export function listExecutions(limit = 50, offset = 0): ChainExecution[] {
       id: row.id,
       chainName: row.chain_name,
       status: row.status as ExecutionStatus,
-      input: JSON.parse(row.input || "{}"),
+      input: safeParse(row.input),
       steps,
       result: row.result ?? undefined,
       error: row.error ?? undefined,
@@ -304,5 +317,8 @@ export function getChainStats(chainName: string): {
 
 export function closeStorage(): void {
   _stmts = null;
-  if (db) db.close();
+  if (db) {
+    try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch {}
+    db.close();
+  }
 }

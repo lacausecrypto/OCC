@@ -6,6 +6,7 @@ import * as path from "node:path";
 import yaml from "js-yaml";
 import { z } from "zod";
 import type { PipelineDefinition } from "./types.js";
+import { sanitizeName } from "./loader.js";
 
 // ─── Schema ──────────────────────────────────────────────────────────────────
 
@@ -52,9 +53,10 @@ export function listPipelines(): string[] {
 }
 
 export function loadPipeline(name: string): PipelineDefinition {
+  const safeName = sanitizeName(name);
   const dir = getPipelinesDir();
-  const yamlPath = path.join(dir, `${name}.yaml`);
-  const ymlPath = path.join(dir, `${name}.yml`);
+  const yamlPath = path.join(dir, `${safeName}.yaml`);
+  const ymlPath = path.join(dir, `${safeName}.yml`);
   const filePath = fs.existsSync(yamlPath) ? yamlPath : ymlPath;
 
   if (!fs.existsSync(filePath)) {
@@ -74,9 +76,10 @@ export function loadPipeline(name: string): PipelineDefinition {
 }
 
 export function loadPipelineRaw(name: string): string {
+  const safeName = sanitizeName(name);
   const dir = getPipelinesDir();
-  const yamlPath = path.join(dir, `${name}.yaml`);
-  const ymlPath = path.join(dir, `${name}.yml`);
+  const yamlPath = path.join(dir, `${safeName}.yaml`);
+  const ymlPath = path.join(dir, `${safeName}.yml`);
   const filePath = fs.existsSync(yamlPath) ? yamlPath : ymlPath;
 
   if (!fs.existsSync(filePath)) {
@@ -87,17 +90,19 @@ export function loadPipelineRaw(name: string): string {
 }
 
 export function savePipeline(name: string, pipeline: PipelineDefinition): void {
+  const safeName = sanitizeName(name);
   const dir = getPipelinesDir();
   fs.mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, `${name}.yaml`);
+  const filePath = path.join(dir, `${safeName}.yaml`);
   const content = yaml.dump(pipeline, { lineWidth: 200, noRefs: true, sortKeys: false });
   fs.writeFileSync(filePath, content, "utf-8");
 }
 
 export function deletePipeline(name: string): void {
+  const safeName = sanitizeName(name);
   const dir = getPipelinesDir();
-  const yamlPath = path.join(dir, `${name}.yaml`);
-  const ymlPath = path.join(dir, `${name}.yml`);
+  const yamlPath = path.join(dir, `${safeName}.yaml`);
+  const ymlPath = path.join(dir, `${safeName}.yml`);
   const filePath = fs.existsSync(yamlPath) ? yamlPath : ymlPath;
 
   if (!fs.existsSync(filePath)) {
@@ -146,7 +151,7 @@ export function buildPipelineGraph(pipeline: PipelineDefinition): PipelineGraph 
   }
 
   const waves: string[][] = [];
-  let remaining = new Set(pipeline.chains.map(c => c.id));
+  const remaining = new Set(pipeline.chains.map(c => c.id));
 
   while (remaining.size > 0) {
     const wave = [...remaining].filter(id => (inDegree.get(id) ?? 0) === 0);

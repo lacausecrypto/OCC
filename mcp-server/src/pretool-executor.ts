@@ -1,5 +1,7 @@
 import * as crypto from "node:crypto";
+import * as dns from "node:dns";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execSync, execFileSync } from "node:child_process";
@@ -9,6 +11,112 @@ import type {
   PreTool,
 } from "./types.js";
 import { resolveVariables } from "./utils.js";
+
+// ─── Shell argument sanitizer — escape metacharacters for safe use in sh -c ─
+function sanitizeShellArg(s: string): string {
+  // Escape shell metacharacters for safe use in sh -c
+  return s.replace(/\0/g, '').replace(/\n/g, ' ').replace(/\r/g, '').replace(/([`$\\!#&|;(){}<>"'])/g, '\\$1');
+}
+
+// ─── SQL security — strict read-only validation + parameterized queries ──────
+const SQL_BLOCKED_KEYWORDS = /\b(DROP|DELETE|ALTER|TRUNCATE|EXEC|EXECUTE|INSERT|UPDATE|CREATE|GRANT|REVOKE|ATTACH|DETACH|PRAGMA|LOAD_EXTENSION)\b/gi;
+
+function validateReadOnlySQL(sql: string): void {
+  // Strip comments and string literals before checking keywords
+  const stripped = sql.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
+  const match = stripped.match(SQL_BLOCKED_KEYWORDS);
+  if (match) {
+    throw new Error(`db_query: blocked SQL keyword "${match[0]}" — only SELECT queries are allowed`);
+  }
+  // Must start with SELECT or WITH (CTEs)
+  const trimmed = stripped.trim().toUpperCase();
+  if (!trimmed.startsWith("SELECT") && !trimmed.startsWith("WITH")) {
+    throw new Error("db_query: only SELECT/WITH queries are allowed");
+  }
+}
+
+// ─── SSRF protection — block requests to private/internal networks ──────────
+const BLOCKED_CIDRS = [
+  '127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
+  '169.254.0.0/16', '0.0.0.0/8', '100.64.0.0/10', '198.18.0.0/15',
+];
+const BLOCKED_IPV6 = [
+  '::1',             // localhost
+  '::ffff:127.0.0.1', // IPv4-mapped localhost
+];
+const BLOCKED_IPV6_PREFIXES = [
+  { prefix: 'fe80:', bits: 10 },  // link-local fe80::/10
+  { prefix: 'fc',   bits: 7 },   // ULA fc00::/7 (fc00:: - fdff::)
+  { prefix: 'fd',   bits: 7 },   // ULA fc00::/7 (fc00:: - fdff::)
+];
+function isBlockedIPv6(addr: string): boolean {
+  const normalized = addr.toLowerCase();
+  if (BLOCKED_IPV6.includes(normalized)) return true;
+  for (const { prefix } of BLOCKED_IPV6_PREFIXES) {
+    if (normalized.startsWith(prefix)) return true;
+  }
+  // Also catch IPv4-mapped IPv6 addresses pointing to private ranges (::ffff:10.x.x.x etc.)
+  const v4Mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4Mapped) {
+    for (const cidr of BLOCKED_CIDRS) {
+      if (ipInCidr(v4Mapped[1], cidr)) return true;
+    }
+  }
+  return false;
+}
+function ipInCidr(ip: string, cidr: string): boolean {
+  const [base, bits] = cidr.split('/');
+  const mask = ~((1 << (32 - parseInt(bits))) - 1) >>> 0;
+  const ipNum = ip.split('.').reduce((n, o) => (n << 8) + parseInt(o), 0) >>> 0;
+  const baseNum = base.split('.').reduce((n, o) => (n << 8) + parseInt(o), 0) >>> 0;
+  return (ipNum & mask) === (baseNum & mask);
+}
+export async function checkSSRF(urlStr: string): Promise<void> {
+  const parsed = new URL(urlStr);
+  const hostname = parsed.hostname;
+  // Block file:// and other non-http schemes
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`SSRF blocked: scheme ${parsed.protocol} not allowed`);
+  }
+  // Resolve hostname to IPv4 and check against blocked ranges (5s timeout)
+  const DNS_TIMEOUT = 5000;
+  const addrs4 = await new Promise<string[]>((resolve) => {
+    const timer = setTimeout(() => resolve(net.isIPv4(hostname) ? [hostname] : []), DNS_TIMEOUT);
+    dns.resolve4(hostname, (err, addresses) => {
+      clearTimeout(timer);
+      if (err) {
+        if (net.isIPv4(hostname)) resolve([hostname]);
+        else resolve([]);
+      } else resolve(addresses);
+    });
+  });
+  // Resolve hostname to IPv6 and check against blocked prefixes (5s timeout)
+  const addrs6 = await new Promise<string[]>((resolve) => {
+    const timer = setTimeout(() => resolve(net.isIPv6(hostname) ? [hostname] : []), DNS_TIMEOUT);
+    dns.resolve6(hostname, (err, addresses) => {
+      clearTimeout(timer);
+      if (err) {
+        if (net.isIPv6(hostname)) resolve([hostname]);
+        else resolve([]);
+      } else resolve(addresses);
+    });
+  });
+  if (addrs4.length === 0 && addrs6.length === 0) {
+    throw new Error(`Cannot resolve ${hostname}`);
+  }
+  for (const addr of addrs4) {
+    for (const cidr of BLOCKED_CIDRS) {
+      if (ipInCidr(addr, cidr)) {
+        throw new Error(`SSRF blocked: ${hostname} resolves to private IP ${addr}`);
+      }
+    }
+  }
+  for (const addr of addrs6) {
+    if (isBlockedIPv6(addr)) {
+      throw new Error(`SSRF blocked: ${hostname} resolves to private IPv6 ${addr}`);
+    }
+  }
+}
 
 // ─── ClaudeResult type (matches executor.ts) ────────────────────────────────
 
@@ -50,7 +158,23 @@ export async function executeSinglePreTool(
   claudeRunner?: ClaudeRunner,
 ): Promise<string> {
   // Check cache
+  const MAX_CACHE_SIZE = 1000;
+
   if (tool.cache_ttl_minutes && tool.cache_ttl_minutes > 0) {
+    // Before cache lookup - evict if over limit
+    if (preToolCache.size > MAX_CACHE_SIZE) {
+      const now = Date.now();
+      // First pass: remove expired
+      preToolCache.forEach((entry, key) => {
+        if (entry.expiresAt <= now) preToolCache.delete(key);
+      });
+      // Second pass: if still over limit, remove oldest entries
+      if (preToolCache.size > MAX_CACHE_SIZE) {
+        const sorted = [...preToolCache.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+        const toRemove = sorted.slice(0, sorted.length - MAX_CACHE_SIZE + 100);
+        for (const [key] of toRemove) preToolCache.delete(key);
+      }
+    }
     const cacheKey = getPreToolCacheKey(tool, vars);
     const cached = preToolCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -80,7 +204,9 @@ export async function executeSinglePreTool(
       const url = resolveVariables(tool.url ?? "", vars);
       const method = tool.method ?? "GET";
 
-      // Resolve headers
+      // SSRF protection — block requests to private networks
+      await checkSSRF(url);
+
       const headers: Record<string, string> = {};
       if (tool.headers) {
         for (const [k, v] of Object.entries(tool.headers)) {
@@ -88,7 +214,6 @@ export async function executeSinglePreTool(
         }
       }
 
-      // Resolve body
       let body: string | undefined;
       if (tool.body && method !== "GET" && method !== "DELETE") {
         body = resolveVariables(tool.body, vars);
@@ -103,7 +228,17 @@ export async function executeSinglePreTool(
           body,
           signal: controller.signal,
         });
+        // Cap response size to prevent OOM on large responses (10MB)
+        const MAX_FETCH_SIZE = 10 * 1024 * 1024;
+        const contentLength = parseInt(resp.headers.get("content-length") ?? "0");
+        if (contentLength > MAX_FETCH_SIZE) {
+          throw new Error(`http_fetch: response too large (${(contentLength / 1024 / 1024).toFixed(1)}MB > 10MB)`);
+        }
         result = await resp.text();
+        if (result.length > MAX_FETCH_SIZE) {
+          result = result.slice(0, MAX_FETCH_SIZE);
+          onLog(`http_fetch: response truncated to 10MB`, "warn");
+        }
       } finally {
         clearTimeout(timer);
       }
@@ -139,11 +274,15 @@ export async function executeSinglePreTool(
       const filePath = path.resolve(resolveVariables(tool.path ?? "", vars));
       // Path traversal protection: restrict to WORKSPACE_DIR or cwd
       const safeRoot = path.resolve(process.env.WORKSPACE_DIR ?? process.cwd());
-      if (!filePath.startsWith(safeRoot) && !filePath.startsWith(os.tmpdir())) {
+      // Resolve symlinks to prevent traversal via symlink chains
+      const realFilePath = fs.realpathSync(filePath);
+      const realSafeRoot = fs.realpathSync(safeRoot);
+      const realTmpDir = fs.realpathSync(os.tmpdir());
+      if (!realFilePath.startsWith(realSafeRoot) && !realFilePath.startsWith(realTmpDir)) {
         throw new Error(`read_file: path "${filePath}" outside allowed directory "${safeRoot}"`);
       }
       const encoding = (tool.encoding ?? "utf-8") as BufferEncoding;
-      result = fs.readFileSync(filePath, encoding);
+      result = fs.readFileSync(realFilePath, encoding);
       if (result.length > 50000) {
         result = result.slice(0, 50000) + "\n[truncated]";
         onLog(`read_file truncated to 50KB for ${filePath}`, "warn");
@@ -153,19 +292,40 @@ export async function executeSinglePreTool(
 
     case "write_file": {
       const filePath = path.resolve(resolveVariables(tool.path ?? "", vars));
-      // Path traversal protection
+      // Path traversal protection — validate BEFORE creating directories (prevent TOCTOU)
       const safeWriteRoot = path.resolve(process.env.WORKSPACE_DIR ?? process.cwd());
-      if (!filePath.startsWith(safeWriteRoot) && !filePath.startsWith(os.tmpdir())) {
-        throw new Error(`write_file: path "${filePath}" outside allowed directory "${safeWriteRoot}"`);
+      const realSafeWriteRoot = fs.realpathSync(safeWriteRoot);
+      const realTmpDir = fs.realpathSync(os.tmpdir());
+      // Check the canonical parent path resolves inside allowed roots BEFORE mkdir
+      // Use path.resolve to normalize without requiring existence
+      const normalizedPath = path.resolve(filePath);
+      const normalizedParent = path.dirname(normalizedPath);
+      // Walk up to find the first existing ancestor to verify it's within bounds
+      let checkDir = normalizedParent;
+      while (!fs.existsSync(checkDir) && checkDir !== path.dirname(checkDir)) {
+        checkDir = path.dirname(checkDir);
+      }
+      if (fs.existsSync(checkDir)) {
+        const realCheckDir = fs.realpathSync(checkDir);
+        if (!realCheckDir.startsWith(realSafeWriteRoot) && !realCheckDir.startsWith(realTmpDir)) {
+          throw new Error(`write_file: path "${filePath}" outside allowed directory "${safeWriteRoot}"`);
+        }
+      }
+      // Now safe to create parent directories
+      const parentDir = path.dirname(filePath);
+      fs.mkdirSync(parentDir, { recursive: true });
+      // Final validation after mkdir — resolve symlinks on the actual parent
+      const realParentDir = fs.realpathSync(parentDir);
+      const realWritePath = path.join(realParentDir, path.basename(filePath));
+      if (!realWritePath.startsWith(realSafeWriteRoot) && !realWritePath.startsWith(realTmpDir)) {
+        throw new Error(`write_file: resolved path "${realWritePath}" outside allowed directory "${safeWriteRoot}"`);
       }
       const fileContent = resolveVariables(tool.content ?? "", vars);
       const encoding = (tool.encoding ?? "utf-8") as BufferEncoding;
-      const dir = path.dirname(filePath);
-      if (dir) fs.mkdirSync(dir, { recursive: true });
       if (tool.append) {
-        fs.appendFileSync(filePath, fileContent, encoding);
+        fs.appendFileSync(realWritePath, fileContent, encoding);
       } else {
-        fs.writeFileSync(filePath, fileContent, encoding);
+        fs.writeFileSync(realWritePath, fileContent, encoding);
       }
       result = filePath;
       onLog(`write_file${tool.append ? " (append)" : ""} → ${filePath} (${fileContent.length} chars)`, "info");
@@ -173,7 +333,13 @@ export async function executeSinglePreTool(
     }
 
     case "bash": {
-      const command = resolveVariables(tool.command ?? "", vars);
+      const rawCmd = tool.command ?? "";
+      // Security: sanitize ALL variable values before shell interpolation
+      const sanitizedVars = { ...vars };
+      for (const key of Object.keys(sanitizedVars)) {
+        sanitizedVars[key] = sanitizeShellArg(sanitizedVars[key]);
+      }
+      const command = resolveVariables(rawCmd, sanitizedVars);
       if (tool.stderr) {
         // Capture both stdout + stderr
         try {
@@ -185,14 +351,40 @@ export async function executeSinglePreTool(
           result = String(e);
         }
       } else {
-        result = execSync(command, { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+        result = execFileSync("sh", ["-c", command], { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
       }
       break;
     }
 
-    case "env_var":
-      result = process.env[tool.var_name ?? ""] ?? tool.default_value ?? "";
+    case "env_var": {
+      // SECURITY: Only allow access to explicitly safe environment variables.
+      // Blocks access to secrets (API keys, passwords, tokens, credentials).
+      const ENV_VAR_BLOCKED_PATTERNS = [
+        /KEY/i, /SECRET/i, /TOKEN/i, /PASSWORD/i, /PASSWD/i, /CREDENTIAL/i,
+        /AUTH/i, /PRIVATE/i, /^AWS_/i, /^GCP_/i, /^AZURE_/i, /^GITHUB_/i,
+        /^NPM_/i, /^DOCKER_/i, /^CI_/i, /^SSH_/i, /^GPG_/i,
+        /^DATABASE_URL$/i, /^REDIS_URL$/i, /^MONGO/i,
+        /^LD_PRELOAD$/i, /^NODE_OPTIONS$/i, /^PATH$/i,
+      ];
+      const ENV_VAR_ALLOWLIST = new Set([
+        "NODE_ENV", "TZ", "LANG", "LC_ALL", "HOME", "USER", "HOSTNAME",
+        "WORKSPACE_DIR", "OCC_CHAIN_DIR", "REST_PORT", "REST_HOST",
+        "CORS_ORIGIN", "RATE_LIMIT_EXEC", "RATE_LIMIT_GEN",
+      ]);
+      const varName = tool.var_name ?? "";
+      if (!varName) {
+        result = tool.default_value ?? "";
+      } else if (ENV_VAR_ALLOWLIST.has(varName)) {
+        result = process.env[varName] ?? tool.default_value ?? "";
+      } else if (ENV_VAR_BLOCKED_PATTERNS.some(p => p.test(varName))) {
+        onLog(`env_var: access to "${varName}" blocked — matches sensitive pattern`, "warn");
+        result = tool.default_value ?? "";
+      } else {
+        // Allow non-sensitive, non-blocked vars (user-defined vars like MY_APP_NAME)
+        result = process.env[varName] ?? tool.default_value ?? "";
+      }
       break;
+    }
 
     case "mcp_call": {
       const { mcpCall } = await import("./mcp-client.js");
@@ -358,25 +550,61 @@ export async function executeSinglePreTool(
     }
 
     case "db_query": {
-      // Database query — uses execFileSync to prevent shell injection
+      // SECURITY: db_query now uses parameterized queries for SQLite (via better-sqlite3)
+      // and strict read-only validation for all backends.
+      // User input is NEVER interpolated into SQL — it's passed as bound parameters.
       const connStr = resolveVariables(tool.connection ?? "", vars);
-      const sqlQuery = resolveVariables(tool.sql ?? "", vars);
+      const sqlTemplate = tool.sql ?? "";
+      if (!connStr || !sqlTemplate) throw new Error("db_query requires connection and sql");
 
-      if (!connStr || !sqlQuery) throw new Error("db_query requires connection and sql");
+      // Extract user-input placeholders from SQL template and replace with positional params
+      // e.g. "SELECT * FROM users WHERE id = {input.user_id}" → "SELECT * FROM users WHERE id = ?"
+      const paramValues: string[] = [];
+      const parameterizedSQL = sqlTemplate.replace(/\{([^}]+)\}/g, (_match, varName: string) => {
+        const value = vars[varName] ?? "";
+        paramValues.push(value);
+        return "?";
+      });
+
+      // Validate: only read-only queries allowed
+      validateReadOnlySQL(parameterizedSQL);
 
       try {
-        if (connStr.startsWith("postgres")) {
-          result = execFileSync("psql", [connStr, "-t", "-A", "-c", sqlQuery], { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
-        } else if (connStr.startsWith("mysql")) {
-          result = execFileSync("mysql", ["--batch", "--raw", "-e", sqlQuery, connStr], { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
-        } else if (connStr.endsWith(".db") || connStr.endsWith(".sqlite") || connStr.startsWith("sqlite:")) {
+        if (connStr.endsWith(".db") || connStr.endsWith(".sqlite") || connStr.startsWith("sqlite:")) {
+          // Use better-sqlite3 with parameterized queries (already a project dependency)
+          const Database = (await import("better-sqlite3")).default;
           const dbPath = connStr.replace("sqlite:", "");
-          result = execFileSync("sqlite3", [dbPath, sqlQuery], { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+          const db = new Database(dbPath, { readonly: true, timeout: timeoutMs });
+          try {
+            const stmt = db.prepare(parameterizedSQL);
+            const rows = stmt.all(...paramValues);
+            result = JSON.stringify(rows);
+          } finally {
+            db.close();
+          }
+        } else if (connStr.startsWith("postgres")) {
+          // PostgreSQL: use positional $1, $2, ... params via psql is not possible
+          // Fallback to CLI but ONLY with validated read-only SQL and escaped params
+          const escapedSQL = parameterizedSQL.replace(/\?/g, () => {
+            const val = paramValues.shift() ?? "";
+            // Escape single quotes for PostgreSQL string literals
+            return "'" + val.replace(/'/g, "''") + "'";
+          });
+          result = execFileSync("psql", [connStr, "-t", "-A", "-c", escapedSQL], { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+        } else if (connStr.startsWith("mysql")) {
+          const escapedSQL = parameterizedSQL.replace(/\?/g, () => {
+            const val = paramValues.shift() ?? "";
+            return "'" + val.replace(/'/g, "''").replace(/\\/g, "\\\\") + "'";
+          });
+          result = execFileSync("mysql", ["--batch", "--raw", "-e", escapedSQL, connStr], { timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
         } else {
-          throw new Error(`db_query: unsupported connection. Use postgres://, mysql://, or path.db`);
+          throw new Error(`db_query: unsupported connection. Use postgres://, mysql://, or path.db/sqlite:`);
         }
       } catch (e) {
-        throw new Error(`db_query failed: ${e instanceof Error ? e.message : String(e)}`);
+        const msg = e instanceof Error ? e.message : String(e);
+        // Never leak SQL details to caller — only generic message
+        if (msg.includes("blocked SQL keyword") || msg.includes("only SELECT")) throw e;
+        throw new Error(`db_query failed: query execution error`);
       }
       break;
     }
@@ -388,6 +616,7 @@ export async function executeSinglePreTool(
       const provider = tool.provider ?? "smtp";
 
       if (!to || !subject) throw new Error("email requires to and subject");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new Error(`email: invalid recipient address "${to}"`);
 
       if (provider === "sendgrid") {
         const apiKey = process.env.SENDGRID_API_KEY ?? "";
@@ -404,7 +633,23 @@ export async function executeSinglePreTool(
           headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: payload,
         });
-        result = resp.ok ? `Email sent to ${to} (${resp.status})` : `Email failed: ${resp.status} ${await resp.text()}`;
+        result = resp.ok ? `Email sent to ${to} (${resp.status})` : `Email failed: ${resp.status}`;
+      } else if (provider === "resend") {
+        const apiKey = process.env.RESEND_API_KEY ?? "";
+        if (!apiKey) throw new Error("email (resend): RESEND_API_KEY env var required");
+        const from = tool.from ?? process.env.RESEND_FROM ?? "onboarding@resend.dev";
+        const payload = JSON.stringify({
+          from,
+          to: [to],
+          subject,
+          text: emailBody,
+        });
+        const resp = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: payload,
+        });
+        result = resp.ok ? `Email sent to ${to} via Resend (${resp.status})` : `Email failed: ${resp.status}`;
       } else {
         // SMTP via sendmail — use execFileSync to prevent injection
         try {

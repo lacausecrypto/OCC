@@ -1,0 +1,32 @@
+name: full-security-review
+description: "Comprehensive security pipeline: runs a full security audit (OWASP, dependencies, secrets, configuration), then performs a security-focused code review, and finally generates a combined executive report with prioritized remediation roadmap."
+version: "1.0"
+
+inputs:
+  - name: path
+    description: "Path to the codebase or repository to review"
+  - name: severity_threshold
+    description: "Minimum severity to flag: critical, high, medium, low (default: medium)"
+    optional: true
+  - name: compliance_framework
+    description: "Compliance framework: owasp, pci-dss, soc2, hipaa, none (default: owasp)"
+    optional: true
+
+chains:
+  - id: audit
+    chain: security-audit
+    label: "Full security audit"
+    inputs:
+      path: "{input.path}"
+      severity_threshold: "{input.severity_threshold}"
+      compliance_framework: "{input.compliance_framework}"
+
+  - id: review
+    chain: code-review
+    label: "Security-focused code review"
+    depends_on: [audit]
+    inputs:
+      path: "{input.path}"
+      focus: "security"
+
+output: audit

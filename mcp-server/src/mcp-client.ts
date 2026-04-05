@@ -81,10 +81,36 @@ async function getClient(serverName: string): Promise<Client> {
 
   // Create connection promise and cache it to prevent duplicates
   const connectionPromise = (async (): Promise<Client> => {
+    // Validate command against whitelist to prevent command injection
+    const ALLOWED_COMMANDS = new Set(["node", "npx", "python", "python3", "uvx", "uv", "deno", "bun", "docker"]);
+    const commandBase = path.basename(config.command);
+    if (!ALLOWED_COMMANDS.has(commandBase)) {
+      throw new Error(`MCP server "${serverName}" uses disallowed command "${config.command}". Allowed: ${[...ALLOWED_COMMANDS].join(", ")}`);
+    }
+
+    // Sanitize env: filter out keys that could override critical env vars
+    const BLOCKED_ENV_KEYS = new Set(["PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES"]);
+    const safeEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(config.env ?? {})) {
+      if (BLOCKED_ENV_KEYS.has(key.toUpperCase())) {
+        process.stderr.write(`[occ-mcp] WARNING: Ignoring blocked env var "${key}" for server "${serverName}"\n`);
+        continue;
+      }
+      safeEnv[key] = value;
+    }
+
+    // Validate args: reject dangerous flags that could enable code execution
+    const DANGEROUS_ARG_PATTERNS = [/^--eval\b/, /^-e$/, /^--exec\b/, /^-c$/, /^--import\b/];
+    for (const arg of config.args ?? []) {
+      if (DANGEROUS_ARG_PATTERNS.some(p => p.test(arg))) {
+        throw new Error(`MCP server "${serverName}" uses dangerous arg "${arg}". Remove it from config.`);
+      }
+    }
+
     const transport = new StdioClientTransport({
       command: config.command,
       args: config.args ?? [],
-      env: { ...process.env, ...(config.env ?? {}) } as Record<string, string>,
+      env: { ...process.env, ...safeEnv } as Record<string, string>,
     });
 
     const client = new Client(
@@ -185,6 +211,57 @@ export async function discoverTools(): Promise<Record<string, string[]>> {
 /** Get list of configured server names. */
 export function getConfiguredServers(): string[] {
   return [...serverConfigs.keys()];
+}
+
+/** Get the config file path (resolved, consistent). */
+function getConfigFilePath(): string {
+  if (process.env.MCP_SERVERS_CONFIG) return process.env.MCP_SERVERS_CONFIG;
+  const chainsParent = path.join(process.env.CHAINS_DIR ?? ".", "..");
+  return path.join(chainsParent, "occ-mcp-servers.json");
+}
+
+/** Get current MCP server configs as a plain object. */
+export function getMcpConfig(): Record<string, McpServerConfig> {
+  const result: Record<string, McpServerConfig> = {};
+  for (const [name, cfg] of serverConfigs) result[name] = cfg;
+  return result;
+}
+
+/** Save MCP server config to disk AND reload in-memory. */
+export async function saveMcpConfig(config: Record<string, McpServerConfig>): Promise<void> {
+  const configPath = getConfigFilePath();
+
+  // Write to disk
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  process.stderr.write(`[occ-mcp] Saved ${Object.keys(config).length} MCP server(s) to ${configPath}\n`);
+
+  // Close existing clients for removed servers
+  for (const [name, client] of activeClients) {
+    if (!config[name]) {
+      try { await client.close(); } catch { /* ignore */ }
+      activeClients.delete(name);
+      connectingClients.delete(name);
+      serverTools.delete(name);
+    }
+  }
+
+  // Update in-memory registry
+  serverConfigs.clear();
+  for (const [name, cfg] of Object.entries(config)) {
+    serverConfigs.set(name, cfg);
+  }
+
+  // Close clients whose config changed (force reconnect on next call)
+  for (const [name] of activeClients) {
+    const oldCfg = serverConfigs.get(name);
+    const newCfg = config[name];
+    if (oldCfg && newCfg && JSON.stringify(oldCfg) !== JSON.stringify(newCfg)) {
+      try { const c = activeClients.get(name); if (c) await c.close(); } catch { /* ignore */ }
+      activeClients.delete(name);
+      connectingClients.delete(name);
+      serverTools.delete(name);
+    }
+  }
 }
 
 /** Shutdown all active MCP clients. */

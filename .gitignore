@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+*.js.map
 
 # Runtime data
 executions.json
@@ -11,10 +12,17 @@ schedules.json
 *.db-wal
 *.db-shm
 output/
+blobs/
+knowledge.json
+llm-providers.json
 
 # Local config (contains absolute paths)
 .mcp.json
 occ-mcp-servers.json
+
+# Claude Code local settings (machine-specific paths)
+.claude/settings.local.json
+.claude/worktrees/
 
 # OS files
 .DS_Store
@@ -35,3 +43,9 @@ Thumbs.db
 # Temp
 /tmp/
 *.tmp
+
+# Coverage
+coverage/
+
+# Storybook build
+storybook-static/

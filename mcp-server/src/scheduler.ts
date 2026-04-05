@@ -52,13 +52,17 @@ function loadSchedules(): Schedule[] {
 }
 
 function saveSchedules(schedules: Schedule[]): void {
-  fs.writeFileSync(schedulesFile(), JSON.stringify(schedules, null, 2), "utf-8");
+  const target = schedulesFile();
+  const tmp = `${target}.tmp.${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(schedules, null, 2), "utf-8");
+  fs.renameSync(tmp, target);
 }
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
 let schedules: Schedule[] = [];
 const tasks = new Map<string, cron.ScheduledTask>();
+const runningSchedules = new Set<string>();
 
 // Emitter callback so SSE works for scheduled runs
 import type { ExecutionEvent } from "./types.js";
@@ -147,35 +151,42 @@ function matchField(value: number, expr: string, min: number, max: number): bool
 // ── Schedule a single job ─────────────────────────────────────────────────────
 
 async function runScheduleTask(s: Schedule): Promise<void> {
-  s.lastRunAt = new Date().toISOString();
-  saveSchedules(schedules);
-
-  let executionId = "";
-  const emitter = (event: ExecutionEvent) => {
-    if ("executionId" in event && event.type === "execution_started") {
-      executionId = event.executionId;
-      s.lastRunId = executionId;
-    }
-    if (executionId && sseEmitter) {
-      sseEmitter(executionId, event);
-    }
-  };
+  if (runningSchedules.has(s.id)) return; // already executing — skip
+  runningSchedules.add(s.id);
 
   try {
-    if (s.type === "pipeline") {
-      const pipeline = loadPipeline(s.chainName);
-      await executePipeline(pipeline, s.input, emitter);
-    } else {
-      const chain = loadChain(s.chainName);
-      await executeChain(chain, s.input, emitter);
-    }
-    s.lastRunStatus = "done";
-  } catch {
-    s.lastRunStatus = "error";
-  }
+    s.lastRunAt = new Date().toISOString();
+    saveSchedules(schedules);
 
-  s.lastRunAt = new Date().toISOString();
-  saveSchedules(schedules);
+    let executionId = "";
+    const emitter = (event: ExecutionEvent) => {
+      if ("executionId" in event && event.type === "execution_started") {
+        executionId = event.executionId;
+        s.lastRunId = executionId;
+      }
+      if (executionId && sseEmitter) {
+        sseEmitter(executionId, event);
+      }
+    };
+
+    try {
+      if (s.type === "pipeline") {
+        const pipeline = loadPipeline(s.chainName);
+        await executePipeline(pipeline, s.input, emitter);
+      } else {
+        const chain = loadChain(s.chainName);
+        await executeChain(chain, s.input, emitter);
+      }
+      s.lastRunStatus = "done";
+    } catch {
+      s.lastRunStatus = "error";
+    }
+
+    s.lastRunAt = new Date().toISOString();
+    saveSchedules(schedules);
+  } finally {
+    runningSchedules.delete(s.id);
+  }
 }
 
 function startTask(schedule: Schedule): void {

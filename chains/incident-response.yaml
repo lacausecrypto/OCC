@@ -1,0 +1,433 @@
+name: incident-response
+description: "Incident response and postmortem generator — analyzes logs and error data, identifies root cause through systematic investigation, facilitates a debate between SRE and developer perspectives, assesses severity and impact, generates a structured postmortem document, creates prioritized action items, and sends notifications via webhook."
+version: "1.0"
+
+inputs:
+  - name: description
+    description: "Brief description of the incident (what happened, when, impact)"
+  - name: log_path
+    description: "Path to log files or error output to analyze"
+    optional: true
+  - name: service
+    description: "Name of the affected service or system"
+    optional: true
+  - name: start_time
+    description: "When the incident was first detected (ISO 8601 or human-readable)"
+    optional: true
+  - name: environment
+    description: "Environment: production, staging, development (default: production)"
+    optional: true
+
+steps:
+  # ── PHASE 1: Gather evidence ───────────────────────────────────
+
+  - id: collect_logs
+    type: agent
+    label: "Collect and parse log evidence"
+    model: claude-sonnet-4-6
+    tools: [Read, Grep, Glob, Bash]
+    pre_tools:
+      - type: bash
+        command: "if [ -n '{input.log_path}' ] && [ -e '{input.log_path}' ]; then tail -500 '{input.log_path}' 2>/dev/null; else echo 'No log file provided or file not found'; fi"
+        inject_as: recent_logs
+      - type: bash
+        command: "if [ -n '{input.log_path}' ] && [ -e '{input.log_path}' ]; then grep -iE '(error|exception|fatal|panic|critical|fail|timeout|refused|denied|crash|oom|kill)' '{input.log_path}' 2>/dev/null | tail -100; else echo 'No log file to grep'; fi"
+        inject_as: error_lines
+      - type: current_datetime
+        inject_as: now
+    prompt: |
+      Timestamp: {now}
+      Incident description: {input.description}
+      Affected service: {input.service}
+      Environment: {input.environment}
+      Incident start time: {input.start_time}
+
+      Recent logs (last 500 lines):
+      {recent_logs}
+
+      Error/exception lines:
+      {error_lines}
+
+      You are an SRE performing initial incident triage. Analyze the available evidence:
+
+      **Log Analysis:**
+      1. Identify the FIRST error in the timeline — this is likely closest to root cause
+      2. Trace the error propagation — how did it cascade?
+      3. Extract key error messages, stack traces, and error codes
+      4. Identify any patterns (repeating errors, increasing frequency)
+      5. Note timestamps for each significant event
+
+      **Timeline Construction:**
+      Build a minute-by-minute timeline of events:
+      - [TIME] First anomaly detected
+      - [TIME] Error cascade begins
+      - [TIME] Service degradation observable
+      - [TIME] Complete failure (if applicable)
+
+      **Initial Indicators:**
+      - Error type: application error, infrastructure, dependency, data corruption, security
+      - Blast radius: single user, subset of users, all users, multiple services
+      - Data integrity: any risk of data loss or corruption?
+      - Is the issue ongoing or resolved?
+
+      **Evidence Gaps:**
+      List what additional logs or data would help complete the picture.
+    output_var: log_evidence
+    timeout_ms: 180000
+
+  - id: system_context
+    type: agent
+    label: "Gather system context"
+    model: claude-sonnet-4-6
+    tools: [Bash, Read, Glob]
+    pre_tools:
+      - type: bash
+        command: "uptime 2>/dev/null; echo '---'; df -h 2>/dev/null | head -10; echo '---'; free -h 2>/dev/null || vm_stat 2>/dev/null; echo '---'; ps aux --sort=-%mem 2>/dev/null | head -10 || ps aux -m 2>/dev/null | head -10"
+        inject_as: system_stats
+      - type: bash
+        command: "if command -v docker &>/dev/null; then docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | head -20; else echo 'Docker not available'; fi"
+        inject_as: container_status
+    prompt: |
+      Incident: {input.description}
+      Service: {input.service}
+      Environment: {input.environment}
+
+      System statistics:
+      {system_stats}
+
+      Container status:
+      {container_status}
+
+      Gather additional system context:
+
+      **Resource Utilization:**
+      - CPU, memory, disk usage — any resource exhaustion?
+      - Process status — any zombie processes, OOM kills, restarts?
+
+      **Infrastructure State:**
+      - Container health — any containers restarting or unhealthy?
+      - Recent deployments — was there a code deployment near the incident start time?
+      - Configuration changes — any recent config modifications?
+
+      **Dependency Health:**
+      - Database connectivity and performance
+      - External API dependencies
+      - Message queues, caches, load balancers
+
+      Summarize what system-level factors might have contributed to the incident.
+    output_var: system_context
+    timeout_ms: 120000
+
+  # ── PHASE 2: Root cause analysis ───────────────────────────────
+
+  - id: root_cause_analysis
+    type: agent
+    label: "Root cause analysis"
+    depends_on: [collect_logs, system_context]
+    model: claude-opus-4-6
+    prompt: |
+      You are a principal SRE conducting a root cause analysis. Be thorough and methodical.
+
+      Incident: {input.description}
+      Service: {input.service}
+      Environment: {input.environment}
+
+      Log evidence:
+      {log_evidence}
+
+      System context:
+      {system_context}
+
+      Perform a structured root cause analysis:
+
+      **The 5 Whys:**
+      Work backwards from the symptom to the root cause:
+      1. Why did [symptom] occur? → Because [direct cause]
+      2. Why did [direct cause] happen? → Because [contributing factor]
+      3. Why did [contributing factor] exist? → Because [deeper cause]
+      4. Why did [deeper cause] persist? → Because [systemic issue]
+      5. Why did [systemic issue] go unaddressed? → Because [root cause]
+
+      **Contributing Factors:**
+      Identify ALL factors that contributed (there's rarely a single cause):
+      - **Triggering event**: what initiated the incident
+      - **Latent conditions**: pre-existing issues that made the system vulnerable
+      - **Detection gap**: why wasn't this caught earlier (monitoring, testing, review)
+      - **Response gap**: was the response delayed? Why?
+
+      **Root Cause Classification:**
+      - Category: code bug / configuration error / infrastructure failure / dependency outage / capacity issue / security incident / human error / process gap
+      - Confidence level: HIGH / MEDIUM / LOW
+      - If LOW confidence, what additional investigation is needed?
+
+      **Impact Assessment:**
+      - Users affected: number or percentage
+      - Duration: time from start to detection to resolution
+      - Data impact: any data loss, corruption, or inconsistency
+      - Revenue impact: estimated if applicable
+      - Reputation impact: customer-facing error pages, social media mentions
+
+      **What Went Right:**
+      Identify things that HELPED during the incident:
+      - Monitoring that fired correctly
+      - Runbooks that were followed
+      - Quick response from team members
+      - Failover mechanisms that worked
+
+      **What Went Wrong:**
+      Beyond the incident itself:
+      - Missing monitoring or alerting
+      - Unclear ownership or escalation paths
+      - Missing documentation or runbooks
+      - Insufficient testing
+    output_var: root_cause
+    timeout_ms: 300000
+
+  # ── PHASE 2.5: Debate root cause from SRE vs Developer perspectives ──
+
+  - id: root_cause_debate
+    type: debate
+    label: "Debate root cause: SRE vs Developer perspectives"
+    depends_on: [root_cause_analysis]
+    model: claude-sonnet-4-6
+    agents:
+      - role: "SRE Engineer"
+        prompt: |
+          You are a senior SRE. Analyze the root cause from an infrastructure and operations perspective.
+          Focus on: monitoring gaps, capacity planning failures, deployment process issues, runbook adequacy,
+          infrastructure reliability, and operational readiness. Challenge any conclusions that blame
+          application code without considering the operational environment.
+
+          Root cause analysis: {root_cause}
+          Incident: {input.description}
+          System context: {system_context}
+      - role: "Senior Developer"
+        prompt: |
+          You are a senior software developer. Analyze the root cause from an application and code perspective.
+          Focus on: code quality issues, missing error handling, inadequate testing, technical debt,
+          architectural weaknesses, and dependency management. Challenge any conclusions that blame
+          infrastructure without considering application-level resilience.
+
+          Root cause analysis: {root_cause}
+          Incident: {input.description}
+          Log evidence: {log_evidence}
+    rounds: 2
+    strategy: consensus
+    prompt: "Debate the root cause of the incident from SRE and developer perspectives to reach a more complete understanding."
+    output_var: root_cause_debate_result
+    timeout_ms: 300000
+
+  # ── PHASE 3: Severity assessment ───────────────────────────────
+
+  - id: severity_assessment
+    type: evaluator
+    label: "Severity classification"
+    depends_on: [root_cause_debate]
+    model: claude-sonnet-4-6
+    eval_scoring: true
+    eval_threshold: 3
+    input_var: root_cause
+    criteria: |
+      Classify the incident severity on a scale of 1-5:
+
+      **SEV-1 (Critical)** — Score 1-2:
+      - Complete service outage affecting all users
+      - Data loss or corruption
+      - Security breach with data exposure
+      - Revenue-impacting for > 1 hour
+
+      **SEV-2 (Major)** — Score 3:
+      - Partial outage affecting significant portion of users
+      - Core functionality degraded
+      - Revenue-impacting for < 1 hour
+
+      **SEV-3 (Moderate)** — Score 4:
+      - Non-core functionality affected
+      - Workaround available
+      - Limited user impact
+
+      **SEV-4 (Minor)** — Score 5:
+      - Cosmetic issues
+      - Edge case affecting very few users
+      - No revenue or data impact
+
+      Score 1-2 should trigger immediate executive notification.
+      Score 3 should trigger team lead notification.
+    on_fail: continue
+    prompt: "Classify incident severity"
+    output_var: severity_level
+    timeout_ms: 60000
+
+  # ── PHASE 4: Generate postmortem document ──────────────────────
+
+  - id: generate_postmortem
+    type: agent
+    label: "Generate postmortem document"
+    depends_on: [severity_assessment]
+    model: claude-opus-4-6
+    pre_tools:
+      - type: current_datetime
+        inject_as: report_date
+    prompt: |
+      You are writing a blameless postmortem. This document will be shared with engineering leadership, the team, and potentially stakeholders.
+
+      Report date: {report_date}
+      Incident: {input.description}
+      Service: {input.service}
+      Environment: {input.environment}
+      Severity: {severity_level}
+
+      Root cause analysis:
+      {root_cause}
+
+      Root cause debate (SRE vs Developer perspectives):
+      {root_cause_debate_result}
+
+      Write a comprehensive, blameless postmortem following industry best practices:
+
+      # Incident Postmortem
+
+      ## Incident Summary
+      | Field | Value |
+      |-------|-------|
+      | Date | {input.start_time} |
+      | Duration | [calculated from evidence] |
+      | Severity | SEV-{severity_level} |
+      | Service | {input.service} |
+      | Environment | {input.environment} |
+      | Status | [resolved / monitoring / ongoing] |
+      | Authors | [AI-generated, requires human review] |
+
+      ## Executive Summary
+      3-4 sentences that a VP of Engineering can read in 30 seconds and understand the incident, its impact, and what we're doing about it.
+
+      ## Timeline
+      All times in UTC. Be precise:
+      | Time | Event |
+      |------|-------|
+      | HH:MM | First anomaly |
+      | HH:MM | Alert fired |
+      | ... | ... |
+
+      ## Root Cause
+      Clear, technical explanation. Use the 5 Whys analysis. No blame — focus on systems and processes, not individuals.
+
+      ## Impact
+      - **Users affected**: X users / X% of traffic
+      - **Duration**: X minutes / hours
+      - **Data impact**: describe any data implications
+      - **Revenue impact**: estimate if quantifiable
+      - **SLA impact**: did we breach any SLAs?
+
+      ## Detection
+      - How was the incident detected?
+      - How long between occurrence and detection?
+      - What monitoring existed? What was missing?
+
+      ## Response
+      - Who responded and when?
+      - What steps were taken to mitigate?
+      - Was the response effective? What could be faster?
+
+      ## Lessons Learned
+      ### What went well
+      - Bullet points
+
+      ### What went poorly
+      - Bullet points
+
+      ### Where we got lucky
+      - Bullet points (things that could have been worse)
+
+      ## Action Items
+      EVERY action item must be specific, assigned (role, not person name), and have a priority:
+
+      | Priority | Action Item | Owner (Role) | Due Date | Status |
+      |----------|-------------|--------------|----------|--------|
+      | P0 | [immediate fix] | [role] | This week | Open |
+      | P1 | [prevent recurrence] | [role] | This sprint | Open |
+      | P2 | [improve detection] | [role] | This quarter | Open |
+
+      Categories of action items:
+      - **Immediate**: fix the specific bug/config/issue
+      - **Prevention**: make this class of incident impossible
+      - **Detection**: ensure faster detection next time
+      - **Response**: improve incident response process
+      - **Documentation**: update runbooks, architecture docs
+
+      ## Appendix
+      - Relevant log excerpts
+      - System metrics during the incident
+      - Links to related tickets/PRs
+
+      IMPORTANT: This is a BLAMELESS postmortem. Never name individuals as responsible. Focus on systemic improvements. The goal is learning, not punishment.
+    output_var: postmortem
+    timeout_ms: 300000
+
+  # ── PHASE 5: Generate action items as structured data ──────────
+
+  - id: extract_actions
+    type: agent
+    label: "Extract structured action items"
+    depends_on: [generate_postmortem]
+    model: claude-sonnet-4-6
+    prompt: |
+      From this postmortem, extract action items as a structured, trackable format:
+
+      Postmortem:
+      {postmortem}
+
+      Output as a structured list:
+
+      ## Action Items
+
+      For each action item:
+
+      ```
+      - ID: INC-{input.service}-XXX
+        Title: [clear, specific title]
+        Priority: P0 / P1 / P2 / P3
+        Category: immediate-fix / prevent-recurrence / improve-detection / improve-response / documentation
+        Description: [detailed description of what needs to be done]
+        Acceptance Criteria: [how we know this is done]
+        Owner Role: [SRE / Backend Engineer / DevOps / Engineering Manager / etc.]
+        Estimated Effort: [hours or story points]
+        Due: [relative date: this week / this sprint / this quarter]
+        Depends On: [other action item IDs if any]
+      ```
+
+      Also produce:
+      - **Risk if not addressed**: what happens if we skip each action item
+      - **Verification plan**: how to test that each fix actually works
+      - **Monitoring to add**: specific alerts or dashboards for each action
+
+      Order by priority (P0 first), then by estimated effort (quick wins first within same priority).
+    output_var: action_items
+    timeout_ms: 180000
+
+  # ── PHASE 6: Final output ──────────────────────────────────────
+
+  - id: final_output
+    type: merge
+    label: "Combine postmortem and action items"
+    depends_on: [extract_actions]
+    inputs: [postmortem, action_items]
+    strategy: concatenate
+    prompt: "Combine the postmortem document and structured action items into a single deliverable"
+    output_var: incident_report
+    timeout_ms: 10000
+
+  # ── PHASE 7: Notify via webhook ────────────────────────────────
+
+  - id: webhook_notify
+    type: webhook
+    label: "Send incident report notification"
+    depends_on: [final_output]
+    model: claude-sonnet-4-6
+    url: "https://hooks.example.com/occ"
+    method: POST
+    prompt: "Send the completed incident report to the notification endpoint for distribution to stakeholders."
+    output_var: webhook_response
+    timeout_ms: 30000
+
+output: incident_report

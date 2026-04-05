@@ -36,6 +36,15 @@ export interface QueueJob {
 type JobRunner = (job: QueueJob) => Promise<string>; // Returns executionId
 
 let db: Database.Database;
+
+function safeParse(raw: string | null | undefined): Record<string, string> {
+  try {
+    return JSON.parse(raw || "{}");
+  } catch {
+    return {};
+  }
+}
+
 let _runner: JobRunner | null = null;
 let _processing = false;
 let _interval: ReturnType<typeof setInterval> | null = null;
@@ -185,9 +194,14 @@ async function processQueue(): Promise<void> {
       const job = stmts().nextJob.get() as any;
       if (!job) break; // No more jobs
 
-      // Claim it (atomic)
-      const claimed = stmts().claimJob.run(job.id);
-      if (claimed.changes === 0) continue; // Someone else got it
+      // Claim it (atomic) — only increment activeWorkers AFTER successful claim
+      try {
+        const claimed = stmts().claimJob.run(job.id);
+        if (claimed.changes === 0) continue; // Someone else got it
+      } catch (claimErr) {
+        process.stderr.write(`[occ-queue] Failed to claim job ${job.id}: ${claimErr}\n`);
+        continue;
+      }
 
       activeWorkers++;
       // Run async — don't await (allows parallel workers)
@@ -205,7 +219,7 @@ async function runJob(row: any): Promise<void> {
       id: jobId,
       type: row.type,
       name: row.name,
-      input: JSON.parse(row.input || "{}"),
+      input: safeParse(row.input),
       priority: row.priority,
       status: "running",
       createdAt: row.created_at,
@@ -231,12 +245,20 @@ async function runJob(row: any): Promise<void> {
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
+const MAX_QUEUE_DEPTH = parseInt(process.env.MAX_QUEUE_DEPTH ?? "5000");
+
 export function enqueue(
   type: "chain" | "pipeline",
   name: string,
   input: Record<string, string>,
   options: { priority?: number; maxRetries?: number } = {},
 ): QueueJob {
+  // Prevent queue flooding
+  const stats = getQueueStats();
+  if ((stats.queued ?? 0) + (stats.running ?? 0) >= MAX_QUEUE_DEPTH) {
+    throw new Error(`Queue depth limit reached (${MAX_QUEUE_DEPTH}). Wait for jobs to complete or purge old jobs.`);
+  }
+
   const id = `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
   const priority = options.priority ?? 5;
   const maxRetries = options.maxRetries ?? 1;
@@ -314,7 +336,7 @@ function rowToJob(row: any): QueueJob {
     id: row.id,
     type: row.type,
     name: row.name,
-    input: JSON.parse(row.input || "{}"),
+    input: safeParse(row.input),
     priority: row.priority,
     status: row.status,
     executionId: row.execution_id ?? undefined,
@@ -334,5 +356,8 @@ export function closeQueue(): void {
   _runner = null;
   _processing = false;
   activeWorkers = 0;
-  if (db?.open) db.close();
+  if (db?.open) {
+    try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch {}
+    db.close();
+  }
 }

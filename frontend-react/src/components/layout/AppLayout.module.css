@@ -1,0 +1,186 @@
+/* ═══════════════════════════════════════════════════════════════
+   AppLayout — push-based layout (sidebars push content, no overlay).
+   ═══════════════════════════════════════════════════════════════ */
+
+.app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: clip;
+  background: var(--m-bg);
+  display: flex;
+}
+
+/* ─── Sidebar (left) ─── */
+.sidebar {
+  width: var(--sidebar-width, 320px);
+  min-width: var(--sidebar-width, 320px);
+  height: 100vh;
+  background: var(--m-bg);
+  border-right: 1px solid var(--glass-border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--m-font);
+  color: var(--m-text);
+  flex-shrink: 0;
+  transition: margin-left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  margin-left: 0;
+}
+.leftCollapsed .sidebar {
+  margin-left: calc(-1 * var(--sidebar-width, 320px));
+}
+
+/* ─── Center: tabs + content ─── */
+.content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--m-bg);
+  position: relative;
+}
+
+/* ─── Tab bar ─── */
+.mainTabs {
+  display: flex;
+  background: var(--m-bg);
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  z-index: 2;
+}
+.tabSpacer { display: none; }
+.mainTab {
+  flex: 1;
+  padding: 11px 16px;
+  border: none;
+  background: none;
+  color: var(--m-text2);
+  font-size: calc(var(--m-body-size) * 0.93);
+  font-weight: 500;
+  cursor: pointer;
+  font-family: var(--m-font);
+  border-bottom: 2px solid transparent;
+  transition: color 0.2s, background 0.2s, border-color 0.3s;
+  position: relative;
+}
+.mainTab:hover { color: var(--m-text); background: var(--glass-tint); }
+.mainTab:active { transform: scale(0.98); }
+.mainTabActive { color: var(--m-text); border-bottom-color: var(--m-accent); font-weight: 600; }
+.tabSessionName { font-weight: 400; font-size: calc(var(--m-body-size) * 0.78); opacity: 0.6; }
+.tabBadgeExp {
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  padding: 1px 5px;
+  margin-left: 5px;
+  border-radius: 3px;
+  vertical-align: middle;
+  color: #000;
+  background: repeating-linear-gradient(
+    -45deg,
+    #ffd60a, #ffd60a 3px,
+    #1a1a1a 3px, #1a1a1a 6px
+  );
+  background-size: 8.5px 8.5px;
+  text-shadow: 0 0 2px rgba(255, 214, 10, 0.6);
+}
+
+/* ─── Tab content ─── */
+.tabContent { flex: 1; overflow: hidden; min-width: 0; display: none; }
+.tabContentActive { display: flex; flex-direction: column; }
+
+/* ─── Monitor sidebar (right) ─── */
+.monitorSidebar {
+  width: var(--monitor-width, 340px);
+  min-width: var(--monitor-width, 340px);
+  height: 100vh;
+  background: var(--m-bg);
+  border-left: 1px solid var(--glass-border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--m-font);
+  color: var(--m-text);
+  flex-shrink: 0;
+  transition: margin-right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  margin-right: 0;
+}
+.rightCollapsed .monitorSidebar {
+  margin-right: calc(-1 * var(--monitor-width, 340px));
+}
+
+/* ─── Resize handles ─── */
+.resizeHandle {
+  position: absolute; top: 0; bottom: 0;
+  width: 4px; z-index: 25;
+  background: transparent; cursor: col-resize;
+  transition: background 0.15s;
+}
+.resizeHandle::after { content: ""; position: absolute; inset: -4px -6px; }
+.resizeHandle:hover, .resizeHandle.active { background: var(--m-accent); }
+.resizeHandleLeft { left: var(--sidebar-width, 320px); }
+.resizeHandleRight { right: var(--monitor-width, 340px); }
+.leftCollapsed .resizeHandleLeft { display: none; }
+.rightCollapsed .resizeHandleRight { display: none; }
+
+/* ─── Collapse buttons ─── */
+.collapseBtn {
+  position: absolute;
+  top: 50%; z-index: 30;
+  width: 24px; height: 64px;
+  border: 1px solid var(--glass-border);
+  background: var(--m-bg);
+  color: var(--m-text2);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translateY(-50%);
+  padding: 0; outline: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.collapseBtn svg {
+  width: 12px; height: 12px;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.collapseBtn:hover { color: var(--m-text); border-color: var(--m-accent); }
+.collapseBtn:active { transform: translateY(-50%) scale(0.9); }
+.collapseBtnLeft { left: 0; border-radius: 0 var(--m-radius) var(--m-radius) 0; border-left: none; }
+.collapseBtnRight { right: 0; border-radius: var(--m-radius) 0 0 var(--m-radius); border-right: none; }
+.collapsedChevron svg { transform: rotate(180deg); }
+
+/* ─── Sidebar header ─── */
+.sidebarHeader {
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+.logo { font-size: calc(var(--m-body-size) * 1.1); font-weight: 700; letter-spacing: -0.3px; }
+.logoGradient { background: linear-gradient(135deg, var(--m-accent), var(--c-purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.logoSub { font-size: var(--s-xs); color: var(--m-text2); margin-top: 1px; }
+
+/* ─── Mobile overlay ─── */
+.mobileOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 15; animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* ═══ Responsive ═══ */
+@media (max-width: 1200px) { .app { --sidebar-width: 280px; --monitor-width: 280px; } }
+@media (max-width: 1024px) {
+  .sidebar { width: min(300px, 40vw); min-width: min(300px, 40vw); }
+  .monitorSidebar { width: min(300px, 35vw); min-width: min(300px, 35vw); }
+  .resizeHandle { display: none; }
+  .collapseBtn { z-index: 60; }
+  .collapseBtnLeft { left: 0; border-radius: 0 var(--m-radius) var(--m-radius) 0; }
+  .collapseBtnRight { right: 0; border-radius: var(--m-radius) 0 0 var(--m-radius); }
+}
+@media (max-width: 768px) {
+  .mainTab { padding: 9px 10px; font-size: calc(var(--m-body-size) * 0.85); }
+  .sidebarHeader { padding: 8px 12px 6px; }
+}
+@media (max-width: 400px) {
+  .mainTab { padding: 8px 6px; font-size: calc(var(--m-body-size) * 0.78); }
+  .collapseBtn { width: 20px; height: 48px; }
+}
+@media (max-height: 700px) { .sidebarHeader { padding: 6px 12px 4px; } }

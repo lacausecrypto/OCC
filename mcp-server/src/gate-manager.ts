@@ -10,6 +10,7 @@ const pendingApprovals = new Map<string, { resolve: (value: string) => void }>()
 // Gate results for suspend/resume pattern (non-blocking gates)
 const gateResults = new Map<string, string>(); // executionId:stepId → "approved"|"rejected"|"skipped"
 const gateTimers = new Map<string, ReturnType<typeof setTimeout>>(); // executionId:stepId → timeout handle
+const gateTimestamps = new Map<string, number>(); // executionId:stepId → creation epoch ms
 
 // ─── GateSuspendError ───────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ export function approveGate(executionId: string, stepId: string, approved: boole
 
   // New suspend/resume pattern: store result for when execution resumes
   gateResults.set(key, approved ? "approved" : "rejected");
+  gateTimestamps.set(key, Date.now());
 
   // Legacy Promise-based pattern (backwards compat)
   const pending = pendingApprovals.get(key);
@@ -86,7 +88,7 @@ export function waitForApproval(
         else if (onTimeout === "skip") resolve("skipped");
         else resolve("rejected");
       }
-    }, timeoutHours * 60 * 60 * 1000);
+    }, Math.min(timeoutHours * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000));
   });
 }
 
@@ -102,6 +104,7 @@ export function deleteGateResult(key: string): void {
 
 export function setGateResult(key: string, value: string): void {
   gateResults.set(key, value);
+  gateTimestamps.set(key, Date.now());
 }
 
 export function hasGateResult(key: string): boolean {
@@ -110,4 +113,36 @@ export function hasGateResult(key: string): boolean {
 
 export function setGateTimer(key: string, timer: ReturnType<typeof setTimeout>): void {
   gateTimers.set(key, timer);
+}
+
+// ─── Cleanup helpers (prevent unbounded Map growth) ────────────────────────
+
+/** Remove all gate entries whose key starts with the given executionId. */
+export function cleanupGates(executionId: string): void {
+  const prefix = `${executionId}:`;
+  for (const key of [...gateResults.keys()]) {
+    if (key.startsWith(prefix)) {
+      gateResults.delete(key);
+      gateTimestamps.delete(key);
+    }
+  }
+  for (const key of [...gateTimers.keys()]) {
+    if (key.startsWith(prefix)) {
+      clearTimeout(gateTimers.get(key)!);
+      gateTimers.delete(key);
+    }
+  }
+}
+
+/** Purge gate entries older than 1 hour. */
+export function purgeExpiredGates(): void {
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  for (const [key, ts] of [...gateTimestamps.entries()]) {
+    if (ts < oneHourAgo) {
+      gateResults.delete(key);
+      gateTimestamps.delete(key);
+      const timer = gateTimers.get(key);
+      if (timer) { clearTimeout(timer); gateTimers.delete(key); }
+    }
+  }
 }

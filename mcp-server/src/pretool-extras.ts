@@ -146,23 +146,27 @@ export async function vectorQuery(collection: string, query: string, topK: numbe
   const db = getVectorDb();
 
   // Try real embedding similarity if available
-  const queryEmbed = await embed(query);
-  if (queryEmbed) {
-    // Fetch all chunks for this collection and rank by cosine similarity
-    const rows = db.prepare(`SELECT rowid, chunk FROM vectors WHERE collection = ?`).all(collection) as any[];
-    if (rows.length === 0) return "(no results)";
+  try {
+    const queryEmbed = await embed(query);
+    if (queryEmbed) {
+      // Fetch all chunks for this collection and rank by cosine similarity
+      const rows = db.prepare(`SELECT rowid, chunk FROM vectors WHERE collection = ?`).all(collection) as any[];
+      if (rows.length === 0) return "(no results)";
 
-    const scored: { chunk: string; score: number }[] = [];
-    for (const row of rows) {
-      const chunkEmbed = await embed(row.chunk);
-      if (chunkEmbed) {
-        scored.push({ chunk: row.chunk, score: cosineSimilarity(queryEmbed, chunkEmbed) });
+      const scored: { chunk: string; score: number }[] = [];
+      for (const row of rows) {
+        const chunkEmbed = await embed(row.chunk);
+        if (chunkEmbed) {
+          scored.push({ chunk: row.chunk, score: cosineSimilarity(queryEmbed, chunkEmbed) });
+        }
       }
+      scored.sort((a, b) => b.score - a.score);
+      const top = scored.slice(0, topK);
+      if (top.length === 0) return "(no results)";
+      return top.map((r, i) => `[${i + 1}] (similarity: ${r.score.toFixed(3)}) ${r.chunk}`).join("\n\n");
     }
-    scored.sort((a, b) => b.score - a.score);
-    const top = scored.slice(0, topK);
-    if (top.length === 0) return "(no results)";
-    return top.map((r, i) => `[${i + 1}] (similarity: ${r.score.toFixed(3)}) ${r.chunk}`).join("\n\n");
+  } catch (err) {
+    process.stderr.write(`[occ-vector] Embedding failed, falling back to FTS5: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 
   // Fallback: FTS5 keyword matching
@@ -217,8 +221,8 @@ export function diffInject(repoPath: string, base: string, head: string, maxToke
   validateGitRef(head);
 
   try {
-    const stat = execFileSync("git", ["-C", repoPath, "diff", "--stat", `${base}...${head}`], { encoding: "utf-8", timeout: 15000 });
-    const diff = execFileSync("git", ["-C", repoPath, "diff", `${base}...${head}`], { encoding: "utf-8", timeout: 15000 });
+    const stat = execFileSync("git", ["-C", repoPath, "diff", "--stat", `${base}...${head}`], { encoding: "utf-8", timeout: 15000, maxBuffer: 10 * 1024 * 1024 });
+    const diff = execFileSync("git", ["-C", repoPath, "diff", `${base}...${head}`], { encoding: "utf-8", timeout: 15000, maxBuffer: 10 * 1024 * 1024 });
 
     const lines: string[] = [];
     lines.push("## Changed Files");
@@ -313,6 +317,7 @@ export async function semanticCacheLookup(query: string, ttlMinutes: number, thr
       SELECT sc.query, sc.result, scm.created_at, scm.ttl_minutes FROM sem_cache sc
       JOIN sem_cache_meta scm ON scm.rowid = sc.rowid
       WHERE datetime(scm.created_at, '+' || scm.ttl_minutes || ' minutes') > datetime('now')
+      ORDER BY scm.created_at DESC LIMIT 100
     `).all() as any[];
 
     let bestScore = 0;
@@ -695,3 +700,8 @@ export function closeExtraDbs(): void {
   semanticCacheDb = null;
   graphDb = null;
 }
+
+// Register shutdown handlers to close DB connections gracefully
+process.on("exit", closeExtraDbs);
+process.on("SIGINT", () => { closeExtraDbs(); process.exit(0); });
+process.on("SIGTERM", () => { closeExtraDbs(); process.exit(0); });

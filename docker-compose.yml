@@ -4,11 +4,21 @@ services:
     ports:
       - "4242:4242"
     volumes:
-      - ./chains:/app/chains
-      - ./pipelines:/app/pipelines
+      - ./chains:/app/chains:ro
+      - ./pipelines:/app/pipelines:ro
+    env_file: .env
     environment:
       - REST_PORT=4242
+      - REST_HOST=0.0.0.0
       - CHAINS_DIR=/app/chains
       - PIPELINES_DIR=/app/pipelines
       - CLAUDE_CLI=claude
+      # - OCC_API_KEY=your-secret-key-here
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
     restart: unless-stopped

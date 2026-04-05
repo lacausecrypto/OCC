@@ -5,15 +5,15 @@
 [![Node.js](https://img.shields.io/badge/Node.js-20%20%7C%2022-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
 [![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
-[![Pre--tools](https://img.shields.io/badge/Pre--tools-27%20types-orange)](#pre-tools)
-[![REST](https://img.shields.io/badge/REST%20API-40%2B%20endpoints-green)](#rest-api)
-[![Tests](https://img.shields.io/badge/Tests-553%20passed-brightgreen)](#tests)
+[![Pre--tools](https://img.shields.io/badge/Pre--tools-29%20types-orange)](#pre-tools)
+[![REST](https://img.shields.io/badge/REST%20API-83%20endpoints-green)](#rest-api)
+[![Tests](https://img.shields.io/badge/Tests-1691%20passed-brightgreen)](#tests)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](#)
 [![Claude](https://img.shields.io/badge/Powered%20by-Claude-cc785c?logo=anthropic&logoColor=white)](https://claude.ai)
 
-Workflow orchestrator for Claude subscribe. Define multi-step chains in YAML, run them with parallel execution and dependency resolution, access via MCP or REST API.
+Multi-step workflow orchestrator for Claude. Define chains in YAML, run them with parallel execution and dependency resolution, build visually in the React canvas editor, access via MCP, REST API, or CLI.
 
 ```
 $ occ run deep-researcher --input topic="quantum computing"
@@ -32,56 +32,165 @@ Done in 47s — 6 steps, 3 parallel
 
 ## What is OCC?
 
-OCC is a **Claude-specific** workflow engine. It takes a YAML file describing a multi-step task, figures out which steps can run in parallel based on dependencies, spawns `claude --print` processes for each step, and streams results back via SSE.
+OCC is a **Claude-focused** workflow engine. It takes a YAML file describing a multi-step task, figures out which steps can run in parallel based on dependencies, runs LLM calls (via `claude --print` or HTTP providers), and streams results back via SSE.
 
-It is **not** a general-purpose agent framework like LangChain or CrewAI. It doesn't support OpenAI, Gemini, or local models. It's built specifically for people already using Claude who want to orchestrate complex multi-step workflows.
+It also supports **non-Claude providers** (OpenRouter, OpenAI, Groq, Mistral, Together AI, any OpenAI-compatible API) via the built-in provider system, making it usable with 200+ models while keeping Claude as the primary engine.
 
-**What it does well:**
+**What it does:**
 - Declarative YAML chains — no Python, no code to write
 - Automatic parallel execution from dependency graph
-- 11 step types (router, evaluator, gate, transform, loop, merge, browser, subchain, debate, webhook)
-- 27 pre-tool types inject data before LLM calls (HTTP, MCP, SQL, files, git diff, OCR, notifications, state, vectors...)
-- Per-step model selection, caching, retry with fallback, output validation
+- 11 step types (agent, router, evaluator, gate, transform, loop, merge, browser, subchain, debate, webhook)
+- 29 pre-tool types inject data before LLM calls (HTTP, MCP, SQL, files, git diff, OCR, vector search, knowledge graph...)
+- Per-step model selection, caching, retry with fallback, output validation, guardrails
 - SQLite persistence with per-step checkpointing and crash recovery
-- Persistent job queue with priority
+- Priority job queue with configurable worker pool
 - 17-command CLI with dry-run (cost estimate, 0 tokens) and chain linting
 - MCP bidirectional: exposes 28 tools AND consumes external MCP servers
+- React frontend (Chimera) with canvas chain editor, live execution monitor, BLOB sessions
+- Workflow Chat: conversational chain builder with configurable LLM prompts
+- Knowledge graph with concept extraction and cross-session memory
+- Scheduled execution via cron expressions
+- Multi-chain pipelines with inter-chain dependency resolution
+- Gate/approval system for human-in-the-loop workflows
+- Multi-provider LLM support (Claude, OpenRouter, OpenAI, custom endpoints)
 
-**What it doesn't do (yet):**
-- No web UI / visual canvas for chain editing
-- No multi-model support (Claude only — by design, not a bug)
-- No distributed execution across multiple machines (single-process, single-machine)
-- No built-in RAG / vector store / knowledge base
-- No authentication on the REST API (designed for local use, add a reverse proxy for production)
+**What it doesn't do:**
+- No distributed execution across multiple machines (single-process, single-node)
+- No built-in user management or multi-tenant isolation
 - No OpenAPI/Swagger auto-generated docs
+- No built-in TLS (use a reverse proxy for HTTPS)
 
-## Quick Start
+## Quick Start (Local)
+
+### Prerequisites
+- **Node.js 20+** (22 recommended)
+- **Claude CLI** installed and authenticated (`claude --version`)
+- npm 9+
+
+### Install & Run
 
 ```bash
 git clone https://github.com/lacausecrypto/OCC.git
 cd OCC/mcp-server
 npm install && npm run build
 npm run rest
-# Server on http://localhost:4242
+# Server on http://127.0.0.1:4242
 ```
 
-Or with Docker:
+The server binds to **127.0.0.1 by default** (localhost only). This is safe for local use without authentication.
+
+### Run the Frontend
+
 ```bash
+cd frontend-react
+npm install
+npm run dev
+# Vite dev server on http://localhost:5173
+```
+
+### Docker
+
+```bash
+cp .env.example .env
+# Edit .env — set OCC_API_KEY for authentication
 docker compose up
 ```
 
-Or for Claude Code / Claude Desktop (MCP):
+> The Docker container runs as non-root with `cap_drop: ALL`, `no-new-privileges`, and read-only filesystem.
+
+### MCP Setup (Claude Code / Claude Desktop)
+
 ```bash
 cp .mcp.json.example .mcp.json  # edit paths
 cd mcp-server && npm start
 ```
 
-Execute a chain:
+### First Execution
+
 ```bash
+# Via CLI
+occ run deep-researcher --input topic="quantum computing"
+
+# Via REST API
 curl -X POST http://localhost:4242/execute/deep-researcher \
   -H "Content-Type: application/json" \
   -d '{"input": {"topic": "quantum computing"}}'
 ```
+
+## Deployment on a VPS
+
+> OCC is designed for local or single-user deployment. It is **not** a multi-tenant SaaS.
+
+### Minimum Requirements
+- 1 vCPU, 1 GB RAM (2 GB recommended for concurrent executions)
+- Node.js 20+, Claude CLI authenticated
+- Reverse proxy (nginx/Caddy) for TLS
+
+### Step-by-Step
+
+```bash
+# 1. Clone and build
+git clone https://github.com/lacausecrypto/OCC.git
+cd OCC/mcp-server
+npm ci && npm run build
+
+# 2. Configure
+cp ../.env.example ../.env
+```
+
+Edit `.env` with **mandatory production settings**:
+
+```env
+# REQUIRED in production (server refuses to start without these)
+NODE_ENV=production
+OCC_API_KEY=your-secret-api-key-here
+
+# REQUIRED for API key encryption
+OCC_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+
+# Network — 0.0.0.0 ONLY behind a reverse proxy
+REST_HOST=0.0.0.0
+REST_PORT=4242
+CORS_ORIGIN=https://yourdomain.com
+```
+
+```bash
+# 3. Reverse proxy (nginx example)
+# /etc/nginx/sites-available/occ
+server {
+    listen 443 ssl;
+    server_name occ.yourdomain.com;
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:4242;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        # SSE support
+        proxy_buffering off;
+        proxy_cache off;
+    }
+}
+
+# 4. Start
+NODE_ENV=production node dist/rest.js
+
+# Or with systemd, PM2, Docker, etc.
+```
+
+### Production Security Checklist
+
+- [ ] `OCC_API_KEY` is set (server exits without it in production)
+- [ ] `OCC_ENCRYPTION_KEY` is set (unique per installation, for LLM provider API key encryption)
+- [ ] `REST_HOST=0.0.0.0` only behind a reverse proxy with TLS
+- [ ] `CORS_ORIGIN` set to your exact domain (not `*`)
+- [ ] Reverse proxy handles TLS (OCC has no built-in HTTPS)
+- [ ] Firewall blocks port 4242 from public access (only proxy connects)
+- [ ] `LOG_LEVEL=info` (not `debug` in production)
+- [ ] Review chain YAML files for `bash` and `db_query` pre-tools — they execute commands
 
 ## Chain Format
 
@@ -127,111 +236,300 @@ Steps without shared `depends_on` run in parallel automatically.
 | **agent** | LLM call (default) |
 | **router** | Branch to different steps based on LLM classification |
 | **evaluator** | Score output (1-10 or PASS/FAIL), trigger retries |
-| **gate** | Pause for human approval via API (non-blocking, frees worker) |
-| **transform** | Data manipulation without LLM (json_extract, regex, truncate, etc.) |
-| **loop** | Iterate over items with parallel execution |
-| **merge** | Combine parallel outputs (concatenate, summarize, pick_best) |
-| **browser** | Web automation via Playwright |
-| **subchain** | Execute another chain as a step |
-| **debate** | Multi-agent discussion with voting/consensus |
+| **gate** | Pause for human approval via API (configurable timeout, auto-approve conditions) |
+| **transform** | Data manipulation without LLM (json_extract, regex, truncate, template, split, merge, etc.) |
+| **loop** | Iterate over items with parallel execution and exit conditions |
+| **merge** | Combine parallel outputs (concatenate, json_array, llm_summarize, pick_best) |
+| **browser** | Web automation via Playwright (navigate, click, extract, screenshot) |
+| **subchain** | Execute another chain as a step with input mapping |
+| **debate** | Multi-agent discussion with voting, consensus, or last-round decision |
 | **webhook** | HTTP callback with configurable method, headers, body, retry, status codes |
 
 ### Pre-Tools
 
-27 pre-tool types inject data before LLM calls. All support `{variable}` interpolation, `on_error` (inject/skip/fail), `timeout_ms`, `retry`, `cache_ttl_minutes`, and `parallel` execution.
+29 pre-tool types inject data before LLM calls. All support `{variable}` interpolation, `on_error` (inject/skip/fail), `timeout_ms`, `retry`, `cache_ttl_minutes`, and `parallel` execution.
 
 **Data fetching:**
 ```yaml
 pre_tools:
-  - type: http_fetch           # Full HTTP client (GET/POST/PUT, headers, auth, json_path)
+  - type: http_fetch           # Full HTTP client (GET/POST/PUT/DELETE, headers, auth, json_path extraction)
   - type: web_search           # Claude web search
   - type: mcp_call             # External MCP server (GitHub, Slack, PostgreSQL...)
-  - type: db_query             # SQL queries (PostgreSQL, MySQL, SQLite)
+  - type: db_query             # SQL queries (SQLite via parameterized queries, PostgreSQL, MySQL)
   - type: parallel_fetch       # Batch URLs with rate limiting
 ```
 
 **Files & code:**
 ```yaml
-  - type: read_file            # Read file (configurable encoding)
-  - type: write_file           # Write file (append mode, encoding)
-  - type: bash                 # Shell command (stderr capture, timeout)
+  - type: read_file            # Read file (symlink-safe, path traversal protected)
+  - type: write_file           # Write file (append mode, encoding, path validated)
+  - type: bash                 # Shell command (variable sanitization, stderr capture, timeout)
   - type: diff_inject          # Git diff — structured, LLM-optimized
   - type: ast_parse            # Code structure extraction (functions, classes, imports)
-  - type: ocr                  # Image → text (Tesseract)
-  - type: screenshot           # URL → screenshot (Playwright)
-  - type: pdf_generate         # HTML → PDF (wkhtmltopdf/Chrome)
+  - type: ocr                  # Image to text (Tesseract)
+  - type: screenshot           # URL to screenshot (Playwright)
+  - type: pdf_generate         # HTML to PDF (wkhtmltopdf/Chrome)
 ```
 
 **State & memory:**
 ```yaml
   - type: state_load           # Load persistent state from previous runs
   - type: state_save           # Save state for future runs
-  - type: vector_query         # Semantic search (SQLite FTS5)
+  - type: vector_query         # Semantic search (SQLite FTS5 with real embeddings)
   - type: vector_index         # Index text into vector store
   - type: semantic_cache       # Cache by semantic similarity, not exact match
-  - type: graph_query          # Knowledge graph (triples: subject→predicate→object)
+  - type: graph_query          # Knowledge graph (triples: subject, predicate, object)
 ```
 
 **Data processing:**
 ```yaml
   - type: json_parse           # Extract JSON path from LLM output
-  - type: template_render      # Handlebars-style templates (each, if/else)
-  - type: embed_compare        # Compare two texts — similarity + drift detection
-  - type: cost_gate            # Check token budget, skip/warn if over
+  - type: template_render      # Handlebars-style templates (each, if/else, helpers)
+  - type: embed_compare        # Compare two texts — cosine similarity + drift detection
+  - type: cost_gate            # Check token budget, skip/warn/downgrade if over
+  - type: current_datetime     # Timestamp (configurable timezone + format)
 ```
 
-**Notifications:**
+**Notifications & human-in-the-loop:**
 ```yaml
   - type: notify               # Slack, Discord, Telegram, or generic webhook
-  - type: email                # SMTP or SendGrid
-  - type: approval_request     # Generate approval URL for human-in-the-loop
+  - type: email                # SMTP, SendGrid, or Resend
+  - type: approval_request     # Generate approval gate for human review
 ```
 
 **System:**
 ```yaml
-  - type: env_var              # Environment variable (with default_value)
-  - type: current_datetime     # Timestamp (configurable timezone + format)
-  - type: sandbox_exec         # Docker container execution (isolated)
+  - type: env_var              # Environment variable (with allowlist — sensitive vars blocked)
+  - type: sandbox_exec         # Docker container execution (isolated, mount optional)
 ```
 
-### Advanced
+### Advanced Step Configuration
 
 ```yaml
-# Retry with model fallback
+# Retry with exponential backoff and model fallback
 retry: { max: 3, delay_ms: 2000, backoff: 2 }
-fallback_models: ["claude-opus-4-6"]
+fallback_models: ["claude-opus-4-6", "claude-haiku-4-5"]
+
+# Per-step timeout
+timeout_ms: 60000
 
 # Output validation
+output_schema: json
+output_must_contain: ["conclusion", "sources"]
+output_must_not_contain: ["I don't know"]
+output_max_length: 5000
+
+# Guardrails
 guardrails:
   - type: min_length
     value: 500
-  - type: must_not_contain
-    value: "I don't know"
+  - type: json_valid
 
-# Caching (skip LLM if same prompt)
+# Caching (skip LLM if same prompt seen recently)
 cache: { enabled: true, ttl_minutes: 60 }
 
 # Conditional execution
 condition: '{type} == "frontend"'
 
-# Early exit
+# Early exit — stop chain if condition met
 early_exit_if: '{done} == "true"'
+
+# Working directory for file operations
+cwd: /path/to/project
 ```
+
+## Frontend (Chimera)
+
+OCC includes a React frontend with:
+
+- **Dashboard** — chain/pipeline list, execution history, token usage charts
+- **Canvas Editor** — visual DAG editor for chains (drag, connect, double-click to edit)
+  - Step configuration: model, tools, pre-tools, prompt, type-specific fields
+  - Advanced config: retry, fallback models, timeout, caching, output validation, guardrails
+  - Type-specific panels for gate, router, evaluator, transform, loop, merge, browser, subchain, debate, webhook
+- **Workflow Chat** — conversational chain builder (describe what you want, AI creates the nodes)
+  - Configurable chat and planner prompts
+  - Configurable LLM models per stage
+  - Animated Unicode loader with 15 thinking phases
+- **Live Monitor** — SSE-powered execution tracking with step timeline, log viewer
+  - Gate approval panel — approve/reject pending gates directly from the UI
+- **BLOB Sessions** — autonomous multi-model planning canvas with knowledge graph (see below)
+- **Settings** — LLM providers, MCP servers, schedules, queue stats, server config
+- **Blueprints** — save and reuse step groups across chains
+
+## Pipeline Format
+
+Pipelines orchestrate multiple chains with their own dependency graph:
+
+```yaml
+name: full-security-review
+description: "Multi-chain security audit pipeline"
+version: "1.0"
+
+inputs:
+  - name: repo_path
+    description: "Path to the repository to audit"
+
+chains:
+  - id: static-analysis
+    chain: security-audit
+    inputs:
+      path: "{input.repo_path}"
+
+  - id: dependency-check
+    chain: dependency-scanner
+    inputs:
+      path: "{input.repo_path}"
+
+  - id: final-report
+    chain: report-generator
+    depends_on: [static-analysis, dependency-check]
+    inputs:
+      audit_result: "{static-analysis}"
+      deps_result: "{dependency-check}"
+
+output: final-report
+```
+
+Chains without shared `depends_on` run in parallel. Each chain is an independent execution with its own steps, pre-tools, and error handling.
+
+```bash
+# Run a pipeline
+occ run-pipeline full-security-review --input repo_path=/my/project
+
+# Or via REST
+curl -X POST http://localhost:4242/pipelines/full-security-review/execute \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"repo_path": "/my/project"}}'
+```
+
+## BLOB Sessions
+
+BLOB (Branch-Linked Organic Builder) is an autonomous canvas for exploratory AI workflows. Unlike chains (which are predefined), BLOB sessions grow organically from conversations.
+
+**How it works:**
+1. You chat with the BLOB — describe what you want to explore
+2. The **planner** (Sonnet) analyzes your request and generates a graph plan: new branches, steps, knowledge updates
+3. Each step is **executed** (Sonnet) with streaming output
+4. **Knowledge extraction** automatically captures concepts, facts, and relationships into a persistent knowledge graph
+5. The knowledge graph feeds back into future planning — the BLOB learns across sessions
+
+**Architecture (3 models, 3 stages):**
+
+| Stage | Model | Purpose |
+|-------|-------|---------|
+| Chat | Haiku (fast) | Understand user intent, ask clarifications, respond conversationally |
+| Plan | Sonnet (smart) | Generate graph structure: branches, steps, knowledge updates, reuse decisions |
+| Execute | Sonnet | Run each step with tools, produce output, extract knowledge |
+
+**Key features:**
+- **Branching** — topics spawn branches with multiple steps (research, analysis, synthesis)
+- **Reuse** — the planner detects when a new request relates to an existing branch and forks it instead of creating a duplicate
+- **Knowledge graph** — concepts and facts are extracted from every step output, linked together, and injected into future prompts
+- **Autonomous mode** — the BLOB can self-trigger planning and execution on a configurable interval (budget-guarded)
+- **Custom prompts** — both the chat and planner system prompts are fully editable per session
+
+**REST API:**
+```bash
+# Create a session
+curl -X POST http://localhost:4242/blobs -H "Content-Type: application/json" \
+  -d '{"name": "My Research"}'
+
+# Chat
+curl -X POST http://localhost:4242/blobs/{id}/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Research quantum computing advances in 2026"}'
+
+# Plan (generates graph nodes)
+curl -X POST http://localhost:4242/blobs/{id}/plan \
+  -H "Content-Type: application/json" \
+  -d '{"sessionId": "...", "userMessage": "...", "existingBranches": [], "knownConcepts": []}'
+
+# Execute a step (SSE stream)
+curl -X POST http://localhost:4242/blobs/{id}/execute-step \
+  -H "Content-Type: application/json" \
+  -d '{"stepType": "agent", "prompt": "...", "tools": ["WebSearch"]}'
+```
+
+**Configuration:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BLOB_PLANNING_MODEL` | `claude-sonnet-4-6` | Model for graph planning |
+| `BLOB_CHAT_MODEL` | `claude-haiku-4-5` | Model for conversational chat |
+| `BLOB_STEP_MODEL` | `claude-sonnet-4-6` | Model for step execution |
+| `BLOB_AUTO_CHECK_SEC` | `60` | Autonomous mode check interval |
+
+## Scheduled Execution
+
+Chains and pipelines can be scheduled with cron expressions:
+
+```bash
+# Via REST API
+curl -X POST http://localhost:4242/schedules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chainName": "daily-monitor",
+    "cron": "0 9 * * *",
+    "label": "Morning check",
+    "enabled": true,
+    "input": {"topic": "market trends"}
+  }'
+```
+
+**Cron format:** `minute hour day month weekday` (standard 5-field cron)
+
+| Example | Schedule |
+|---------|----------|
+| `0 9 * * *` | Daily at 9:00 AM |
+| `*/15 * * * *` | Every 15 minutes |
+| `0 9 * * 1-5` | Weekdays at 9:00 AM |
+| `0 9,18 * * *` | Daily at 9:00 AM and 6:00 PM |
+| `0 0 1 * *` | First of every month |
+
+The frontend Settings page includes a visual schedule builder with presets.
+
+**REST endpoints:** `GET /schedules`, `POST /schedules`, `PUT /schedules/:id`, `PATCH /schedules/:id/toggle`, `POST /schedules/:id/run` (trigger now), `DELETE /schedules/:id`
+
+## Knowledge Graph
+
+OCC maintains a persistent knowledge graph that stores concepts, facts, and relationships extracted from chain and BLOB executions.
+
+```bash
+# Search knowledge
+curl http://localhost:4242/knowledge?q=quantum
+
+# Add a concept
+curl -X POST http://localhost:4242/knowledge \
+  -H "Content-Type: application/json" \
+  -d '{"concept": "Quantum Computing", "facts": ["Uses qubits", "Exponential speedup for specific problems"]}'
+
+# Link two concepts
+curl -X POST http://localhost:4242/knowledge/link \
+  -H "Content-Type: application/json" \
+  -d '{"fromId": "abc", "toId": "def", "relation": "related_to"}'
+
+# Auto-extract concepts from text
+curl -X POST http://localhost:4242/knowledge/extract \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Quantum computing uses qubits to...", "sessionId": "..."}'
+```
+
+Knowledge entries are automatically injected into BLOB planning prompts via keyword matching and graph traversal (BFS, depth 2, top 10 entries by relevance score).
 
 ## CLI
 
 17 commands, offline and online:
 
 ```bash
-# Offline (no server)
-occ validate ./chains                    # Lint chains
+# Offline (no server needed)
+occ validate ./chains                    # Lint all chains
 occ dry-run deep-researcher -i topic=AI  # Execution plan + cost estimate (0 tokens)
 
 # Execution
 occ run deep-researcher -i topic=AI      # Run + stream logs
 occ run deep-researcher -i topic=AI -p 10  # With priority
 occ run-pipeline research-to-content -i topic=AI
-occ generate "Monitor BTC, alert if >5% change"  # NL → chain YAML
+occ generate "Monitor BTC, alert if >5% change"  # NL to chain YAML
 
 # Monitoring
 occ list | status | logs | timeline | stats | queue
@@ -242,16 +540,16 @@ occ cancel | approve | reject
 # All commands support --json for scripting
 ```
 
-## REST API (40+ endpoints)
+## REST API (83 endpoints)
 
 <details>
 <summary>Full endpoint list</summary>
 
 **Chains:** `GET /chains`, `GET /chains/:name`, `GET /chains/:name/stats`, `POST /chains/:name`, `DELETE /chains/:name`
 
-**Execution:** `POST /execute/:name`, `GET /executions/:id`, `GET /executions/:id/stream` (SSE), `GET /executions/:id/timeline`, `GET /executions`, `DELETE /executions/:id`, `POST /executions/:id/resume`
+**Execution:** `POST /execute/:name`, `GET /executions`, `GET /executions/:id`, `GET /executions/:id/stream` (SSE), `GET /executions/:id/timeline`, `GET /executions/token-usage`, `DELETE /executions`, `DELETE /executions/:id`, `POST /executions/:id/resume`
 
-**Queue:** `GET /queue`, `GET /queue/jobs`, `GET /queue/jobs/:id`, `DELETE /queue/jobs/:id`, `DELETE /queue/purge`
+**Queue:** `GET /queue`, `GET /queue/jobs`, `GET /queue/jobs/:id`, `DELETE /queue`, `DELETE /queue/jobs/:id`, `DELETE /queue/purge`
 
 **Gates:** `GET /approvals`, `POST /executions/:id/approve/:stepId`
 
@@ -259,41 +557,71 @@ occ cancel | approve | reject
 
 **Pipelines:** `GET /pipelines`, `GET /pipelines/:name`, `GET /pipelines/:name/json`, `POST /pipelines/:name`, `DELETE /pipelines/:name`, `POST /pipelines/:name/execute`, `GET /pipeline-executions`, `GET /pipeline-executions/:id`
 
+**LLM Providers:** `GET /providers`, `GET /providers/models`, `GET /providers/:id`, `POST /providers`, `PUT /providers/:id`, `DELETE /providers/:id`, `POST /providers/:id/test`
+
+**MCP Servers:** `GET /mcp-servers`, `PUT /mcp-servers`
+
+**BLOB Sessions:** `GET /blobs`, `POST /blobs`, `GET /blobs/:id`, `PUT /blobs/:id`, `DELETE /blobs/:id`, `PATCH /blobs/:id/autonomous`, `GET /blobs/:id/graph`, `PUT /blobs/:id/graph`, `POST /blobs/:id/message`, `GET /blobs/:id/stats`, `POST /blobs/:id/execute-branch`, `GET /blobs/:id/knowledge`, `POST /blobs/:id/plan`, `POST /blobs/:id/chat`, `POST /blobs/:id/execute-step`, `GET /blobs/:id/auto-plan`, `POST /blobs/:id/test-plan`
+
+**Knowledge Graph:** `GET /knowledge`, `POST /knowledge`, `PUT /knowledge/:id`, `DELETE /knowledge`, `DELETE /knowledge/:id`, `POST /knowledge/link`, `POST /knowledge/extract`
+
+**Workflow Chat:** `POST /workflow-chat`
+
 **Generation:** `POST /generate-chain`, `POST /generate-chain/stream`, `GET /generate-chain/stream/:sessionId`
 
-**Utilities:** `GET /health`, `GET /mcp-servers`, `GET /download?path=...`
+**Configuration:** `GET /config`, `PUT /config`, `GET /health`
+
+**Utilities:** `GET /events` (global SSE), `GET /proxy`, `GET /yaml-to-json`, `GET /extract-style`, `GET /download`
 
 </details>
+
+### Rate Limiting
+
+| Endpoint | Limit | Key |
+|----------|-------|-----|
+| `POST /execute/*` | 20/min | API key or IP |
+| `POST /generate-chain` | 5/min | API key or IP |
+| `GET/PUT /config` | 30/min | API key or IP |
+| `*/providers/*` | 30/min | API key or IP |
+
+Rate limits are configurable via `RATE_LIMIT_EXEC` and `RATE_LIMIT_GEN` environment variables.
+
+### Authentication
+
+All endpoints (except `GET /health` and static files) require a Bearer token when `OCC_API_KEY` is set:
+
+```bash
+curl -H "Authorization: Bearer your-api-key" http://localhost:4242/chains
+```
+
+In production (`NODE_ENV=production`), the server **refuses to start** without `OCC_API_KEY`.
 
 ## Architecture
 
 ```
-Claude Code ──MCP──▶ MCP Server (28 tools) ──▶ Executor ──▶ claude --print
-curl/browser ──HTTP──▶ REST+SSE (:4242)   ──▶ Queue ──▶ SQLite (checkpoints)
+Claude Code ──MCP──> MCP Server (28 tools) ──> Executor ──> claude --print / HTTP providers
+Browser     ──HTTP──> REST+SSE (:4242)      ──> Queue    ──> SQLite (checkpoints, state, vectors)
+React UI    ──HTTP──> 83 endpoints          ──> Scheduler ──> Cron jobs
+                                            ──> BLOB     ──> Knowledge Graph
+                                            ──> Providers ──> OpenRouter / OpenAI / Custom
 ```
 
-18 TypeScript modules: executor, claude-runner, pretool-executor, gate-manager, rest, loader, queue, storage, scheduler, linter, utils, mcp-client, pretool-extras, pipeline-executor, pipeline-loader, types, index (MCP), CLI.
+20 TypeScript modules: executor, executor-steps, executor-utils, claude-runner, pretool-executor, pretool-extras, gate-manager, rest, loader, pipeline-loader, queue, storage, scheduler, linter, utils, mcp-client, providers, blob, logger, types.
 
 ## How OCC Compares
 
-OCC is **not** a direct competitor to LangChain, CrewAI, or AutoGen. Those are general-purpose multi-model agent frameworks with large ecosystems. OCC is a focused workflow orchestrator for Claude.
-
 | | OCC | LangChain / CrewAI / AutoGen |
 |---|---|---|
-| **Scope** | Claude workflow orchestrator | General-purpose agent frameworks |
-| **Models** | Claude only | Any LLM provider |
+| **Scope** | Claude-focused workflow orchestrator | General-purpose agent frameworks |
+| **Models** | Claude primary + OpenRouter/OpenAI via providers | Any LLM provider |
 | **Language** | YAML (no code) | Python (code required) |
-| **Ecosystem** | MCP native | Hundreds of integrations |
+| **Frontend** | Built-in React canvas editor + monitor | Separate tools needed |
+| **Ecosystem** | MCP native (28 tools + external servers) | Hundreds of integrations |
+| **State** | SQLite WAL + knowledge graph + vector store | Varies by tool |
 | **Community** | New project | Large established communities |
-| **Best for** | Claude power users who want declarative multi-step workflows | Teams needing model-agnostic agent frameworks |
-
-**Where OCC makes sense:** you're already using Claude, you want to define repeatable workflows in YAML (not Python), and you value dependency-aware parallel execution, per-step caching, and MCP integration.
-
-**Where it doesn't:** you need multi-model support, a visual editor, distributed execution, or a large ecosystem of pre-built integrations.
+| **Best for** | Claude users wanting declarative multi-step workflows | Teams needing model-agnostic frameworks |
 
 ### Token Efficiency
-
-OCC's architecture reduces token usage compared to single-prompt or conversation-based approaches:
 
 - **Step isolation** — each step gets only its dependencies, not the full conversation history
 - **Transform steps** — `json_extract`, `truncate`, `regex` between steps cost 0 tokens
@@ -306,63 +634,58 @@ A 6-step research chain typically uses ~15K tokens vs ~40K+ in a single-prompt a
 
 ## Tests
 
-553 tests across 18 files:
+1691 tests across 47 files:
 
-| File | Tests | Coverage |
-|------|-------|----------|
-| `loader.test.ts` | 97 | YAML parsing, Zod validation, dependency graph |
-| `rest.test.ts` | 78 | REST endpoints, input validation, SSE |
-| `chains.test.ts` | 48 | All 6 demo chains YAML validation |
-| `types.test.ts` | 47 | Zod schema edge cases |
-| `cli.test.ts` | 44 | CLI end-to-end (17 commands) |
-| `utils.test.ts` | 37 | evaluateCondition, resolveVariables |
-| `linter.test.ts` | 32 | Variable detection, dependency checks, dry-run |
-| `storage.test.ts` | 27 | SQLite CRUD, checkpointing, crash recovery, stats |
-| `pretool-tier1.test.ts` | 20 | State, vector, JSON parse, diff, notify |
-| `pretool-tier3.test.ts` | 19 | Embed compare, graph, parallel fetch, template, approval |
-| `pretools-new.test.ts` | 17 | MCP call, db_query, email, pdf, ocr pre-tools |
-| `queue.test.ts` | 16 | Enqueue, priority, cancellation, retry |
-| `webhook.test.ts` | 15 | Webhook step execution, retry, status codes |
-| `pretool-tier2.test.ts` | 13 | Semantic cache, screenshot, sandbox, cost gate, AST |
-| `concurrency.test.ts` | 12 | Parallel SQLite writes, queue contention, isolation |
-| `pretools.test.ts` | 12 | Core pre-tool execution |
-| `mcp-client.test.ts` | 11 | Config loading, registration, error handling |
-| `scheduler.test.ts` | 8 | Cron scheduling |
+```bash
+cd mcp-server && npm test
+```
 
-Run: `cd mcp-server && npm test`
+Coverage areas: REST security (auth, CORS, rate limiting, error sanitization), pre-tool execution (SSRF, SQL injection, path traversal, shell escaping), executor (parallel execution, retry, fallback), gate manager (timeout, approval), queue (priority, concurrency), storage (SQLite CRUD, checkpoints), loader (YAML validation, dependency graph), linter, CLI, types, providers, blob, scheduler, MCP client, pipeline loader/executor.
 
-## Limitations
+## Limitations (honest assessment)
 
-- **Claude only** — uses `claude --print` subprocess. No OpenAI, no local models.
-- **Single machine** — no distributed execution. Queue is SQLite, not Redis.
-- **No web UI** — chains are YAML files. No drag-and-drop editor.
-- **No authentication** — REST API has no auth layer. Use behind a reverse proxy in production.
-- **No RAG** — no built-in vector store or knowledge base. Use pre-tools for data injection.
-- **Memory** — in-memory execution store + SQLite. Large outputs (>5MB per step) can increase memory usage.
+- **Claude primary** — uses `claude --print` subprocess for Claude models. Non-Claude models work via HTTP providers but don't get MCP tool access.
+- **Single machine** — no distributed execution. Queue is SQLite, not Redis. Fine for personal/small team use.
+- **No multi-tenant** — single API key, no per-user isolation. Not designed for SaaS deployment.
+- **No built-in TLS** — use nginx/Caddy as reverse proxy for HTTPS.
+- **Memory** — in-memory execution store + SQLite. Large outputs (>5MB per step) can increase memory usage. Execution history auto-purges after `EXECUTION_MAX_AGE_DAYS`.
+- **Frontend is alpha** — the React canvas editor works but is not feature-complete. Some operations still require YAML editing.
+- **No undo for executions** — once a chain runs, its side effects (file writes, webhooks, emails) cannot be reversed.
+- **Bash pre-tool is powerful** — chains with `bash` pre-tools can execute arbitrary shell commands. Review chain YAML before running untrusted chains.
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REST_PORT` | `4242` | HTTP server port |
-| `REST_HOST` | `0.0.0.0` | Bind address |
-| `CORS_ORIGIN` | `*` | Allowed CORS origin (`https://yourdomain.com` for prod) |
-| `CHAINS_DIR` | `../chains` | Chain YAML files directory |
-| `PIPELINES_DIR` | `../pipelines` | Pipeline YAML files directory |
-| `CLAUDE_CLI` | `claude` | Claude CLI binary path |
-| `CLAUDE_TIMEOUT_MS` | `1800000` | Per-step timeout (30 min) |
-| `MAX_CONCURRENT_EXECUTIONS` | `5` | Worker pool size |
-| `EXECUTION_MAX_AGE_DAYS` | `7` | Auto-purge old executions |
-| `OCC_DB` | `<auto>` | SQLite path (executions + checkpoints) |
-| `OCC_QUEUE_DB` | `<auto>` | SQLite path (job queue) |
-| `MCP_SERVERS_CONFIG` | `<auto>` | External MCP server config |
-| `NO_COLOR` | — | Disable ANSI colors |
+| `OCC_API_KEY` | — | **Required in production.** API key for Bearer auth. |
+| `OCC_ENCRYPTION_KEY` | — | **Required in production.** Encryption key for stored LLM provider API keys. |
+| `NODE_ENV` | — | Set to `production` to enforce auth and encryption key requirements. |
+| `REST_PORT` | `4242` | HTTP server port. |
+| `REST_HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` only behind a reverse proxy. |
+| `CORS_ORIGIN` | localhost devs | Allowed CORS origin. Set to your domain in production. |
+| `LOG_LEVEL` | `info` | Log level: debug, info, warn, error. |
+| `LOG_FORMAT` | `text` | Log format: text (colored) or json (structured). |
+| `CHAINS_DIR` | `../chains` | Chain YAML files directory. |
+| `PIPELINES_DIR` | `../pipelines` | Pipeline YAML files directory. |
+| `CLAUDE_CLI` | `claude` | Claude CLI binary path (absolute path or `claude`). |
+| `CLAUDE_TIMEOUT_MS` | `1800000` | Per-step timeout (30 min default). |
+| `MAX_CONCURRENT_EXECUTIONS` | `5` | Worker pool size for parallel step execution. |
+| `EXECUTION_MAX_AGE_DAYS` | `7` | Auto-purge old executions from SQLite. |
+| `RATE_LIMIT_EXEC` | `20` | Max execution requests per minute. |
+| `RATE_LIMIT_GEN` | `5` | Max chain generation requests per minute. |
+| `OCC_DB` | `<auto>` | SQLite path for executions + checkpoints. |
+| `OCC_QUEUE_DB` | `<auto>` | SQLite path for job queue. |
+| `MCP_SERVERS_CONFIG` | `<auto>` | External MCP server config file. |
+| `BLOB_PLANNING_MODEL` | `claude-sonnet-4-6` | Model for BLOB planning stage. |
+| `BLOB_CHAT_MODEL` | `claude-haiku-4-5` | Model for BLOB chat stage. |
+| `BLOB_STEP_MODEL` | `claude-sonnet-4-6` | Model for BLOB step execution. |
 
 ## Contributing
 
 Contributions welcome. Open an issue first to discuss.
 
-1. Fork → branch → `cd mcp-server && npm test` → PR
+1. Fork, branch, `cd mcp-server && npm test`, PR.
+2. See [CONTRIBUTING.md](CONTRIBUTING.md) for code style and guidelines.
 
 ## License
 

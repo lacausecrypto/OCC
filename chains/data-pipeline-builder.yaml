@@ -1,0 +1,592 @@
+name: data-pipeline-builder
+description: "ETL pipeline code generator — analyzes data sources, designs optimal schemas, generates extraction/transformation/loading code with error handling, writes comprehensive tests, debates architecture choices (batch vs streaming, SQL vs NoSQL), reviews generated code via subchain, and produces deployment configuration. Demonstrates: parallel agents, transform steps, pre_tools (bash, read_file), debate, subchain."
+version: "1.0"
+
+inputs:
+  - name: sources
+    description: "Comma-separated data source descriptions (e.g., 'PostgreSQL users table, REST API /orders endpoint, CSV files in S3 bucket')"
+  - name: destination
+    description: "Target data warehouse or storage (e.g., 'BigQuery', 'Snowflake', 'PostgreSQL analytics DB', 'S3 parquet')"
+  - name: schedule
+    description: "Pipeline schedule: realtime, hourly, daily, weekly (default: daily)"
+    optional: true
+  - name: language
+    description: "Implementation language: python, typescript, sql (default: python)"
+    optional: true
+  - name: framework
+    description: "ETL framework preference: airflow, dagster, prefect, dbt, custom (default: custom)"
+    optional: true
+
+steps:
+  # ── PHASE 1: Analyze data sources in parallel ──────────────────
+
+  - id: analyze_sources
+    type: agent
+    label: "Analyze and profile data sources"
+    model: claude-sonnet-4-6
+    pre_tools:
+      - type: current_datetime
+        inject_as: today
+    prompt: |
+      Date: {today}
+      Data sources: {input.sources}
+      Destination: {input.destination}
+      Schedule: {input.schedule}
+      Language: {input.language}
+      Framework: {input.framework}
+
+      You are a senior data engineer. Analyze each data source and produce a detailed profile:
+
+      For EACH data source:
+
+      **Source Profile:**
+      - Name: descriptive identifier
+      - Type: database / API / file / stream / webhook
+      - Connection: how to connect (protocol, authentication method)
+      - Schema: inferred fields with data types
+      - Volume estimate: rows per day, data size
+      - Update pattern: append-only, full refresh, CDC (change data capture)
+      - Freshness requirement: based on the schedule ({input.schedule})
+
+      **Extraction Strategy:**
+      - Method: full extract, incremental (timestamp-based), CDC, API pagination
+      - Watermark column: which field tracks changes (updated_at, id, etc.)
+      - Rate limits or API constraints
+      - Error scenarios: connection timeout, schema changes, missing data
+      - Retry strategy: exponential backoff, dead letter queue
+
+      **Data Quality Assessment:**
+      - Expected nullability for each field
+      - Potential data quality issues (duplicates, encoding, timezone, format inconsistencies)
+      - Validation rules to apply during extraction
+      - Schema evolution risk (fields added/removed over time)
+
+      Output as structured JSON:
+      {
+        "sources": [
+          {
+            "name": "...",
+            "type": "...",
+            "connection_type": "...",
+            "schema": [{"field": "...", "type": "...", "nullable": true/false}],
+            "volume_daily_rows": N,
+            "extraction_method": "...",
+            "watermark_column": "...",
+            "quality_rules": ["..."]
+          }
+        ]
+      }
+    output_var: source_profiles
+    output_schema: json
+    timeout_ms: 180000
+
+  - id: design_destination
+    type: agent
+    label: "Design destination schema"
+    model: claude-sonnet-4-6
+    prompt: |
+      Destination: {input.destination}
+      Data sources: {input.sources}
+
+      Design the destination schema for the data warehouse / target:
+
+      **Schema Design Principles:**
+      - Follow the destination's best practices ({input.destination})
+      - Use dimensional modeling where appropriate (star schema or snowflake)
+      - Design for query performance, not just storage
+
+      **For each target table:**
+      1. Table name (using consistent naming convention)
+      2. Column definitions with types (use destination-native types)
+      3. Primary key and unique constraints
+      4. Partitioning strategy (date-based for large tables)
+      5. Clustering/sort keys for common query patterns
+      6. Indexes for frequently joined or filtered columns
+
+      **Data Modeling:**
+      - Fact tables: transactional/event data with foreign keys
+      - Dimension tables: descriptive attributes
+      - Staging tables: raw data landing zone (preserve source format)
+      - Intermediate tables: transformed data before final load
+
+      **Naming Conventions:**
+      - Staging: stg_{source}_{entity}
+      - Intermediate: int_{entity}_{description}
+      - Final: dim_{entity} or fct_{entity}
+
+      Provide complete DDL statements for all tables.
+
+      **Data Lineage:**
+      For each destination column, document:
+      - Source table.column
+      - Any transformations applied
+      - Business logic or derivation rules
+    output_var: destination_schema
+    timeout_ms: 180000
+
+  # ── PHASE 1.5: Debate architecture choices ─────────────────────
+
+  - id: architecture_debate
+    type: debate
+    label: "Debate architecture: Batch vs Streaming, SQL vs NoSQL"
+    depends_on: [analyze_sources, design_destination]
+    model: claude-sonnet-4-6
+    agents:
+      - role: "Batch/SQL Advocate"
+        prompt: |
+          You are a senior data engineer who advocates for batch processing and SQL-based pipelines.
+          Argue for why this pipeline should use batch processing over streaming, and SQL-based
+          transformations over NoSQL approaches. Consider: data volume, freshness requirements,
+          complexity of transformations, team expertise, operational overhead, cost, and reliability.
+          Cite specific advantages of tools like dbt, Airflow, and traditional SQL warehouses.
+
+          Source profiles: {source_profiles}
+          Destination schema: {destination_schema}
+          Schedule: {input.schedule}
+          Framework: {input.framework}
+          Data sources: {input.sources}
+          Destination: {input.destination}
+      - role: "Streaming/NoSQL Advocate"
+        prompt: |
+          You are a senior data engineer who advocates for streaming and NoSQL-based pipelines.
+          Argue for why this pipeline should use streaming over batch processing, and consider
+          NoSQL approaches where appropriate. Consider: real-time requirements, event-driven
+          architecture benefits, scalability, schema flexibility, and modern data stack advantages.
+          Cite specific advantages of tools like Kafka, Flink, Spark Streaming, and document stores.
+
+          Source profiles: {source_profiles}
+          Destination schema: {destination_schema}
+          Schedule: {input.schedule}
+          Framework: {input.framework}
+          Data sources: {input.sources}
+          Destination: {input.destination}
+    rounds: 2
+    strategy: consensus
+    prompt: "Debate the architecture choices for the data pipeline — batch vs streaming processing, and SQL vs NoSQL storage — to arrive at the best approach for this specific use case."
+    output_var: architecture_debate_result
+    timeout_ms: 300000
+
+  # ── PHASE 2: Extract source metadata for schema mapping ────────
+
+  - id: extract_source_metadata
+    type: transform
+    label: "Extract source schemas"
+    depends_on: [analyze_sources]
+    operation: json_extract
+    json_path: "sources"
+    input_var: source_profiles
+    prompt: "Extract the sources array from source profiles"
+    output_var: source_schemas
+    timeout_ms: 10000
+
+  # ── PHASE 3: Generate pipeline code ────────────────────────────
+
+  - id: generate_extractors
+    type: agent
+    label: "Generate extraction code"
+    depends_on: [extract_source_metadata, design_destination, architecture_debate]
+    model: claude-sonnet-4-6
+    prompt: |
+      Generate production-quality extraction code.
+
+      Language: {input.language}
+      Framework: {input.framework}
+      Source profiles: {source_profiles}
+      Source schemas: {source_schemas}
+      Destination schema: {destination_schema}
+      Architecture decision: {architecture_debate_result}
+
+      For EACH data source, generate an extractor module:
+
+      **Code Requirements:**
+      1. Connection management with connection pooling and cleanup
+      2. Authentication handling (support env vars and secrets managers)
+      3. Incremental extraction using watermark columns
+      4. API pagination with configurable page size
+      5. Rate limiting and backoff for APIs
+      6. Schema validation on extracted data
+      7. Comprehensive error handling:
+         - Connection failures → retry with exponential backoff
+         - Schema changes → log warning, extract available fields
+         - Partial failures → checkpoint and resume
+      8. Logging at appropriate levels (INFO for progress, WARNING for anomalies, ERROR for failures)
+      9. Metrics collection (rows extracted, duration, errors)
+
+      **File Structure:**
+      ```
+      pipeline/
+      ├── extractors/
+      │   ├── __init__.py
+      │   ├── base.py          (abstract base extractor)
+      │   ├── {source_1}.py    (concrete extractor)
+      │   ├── {source_2}.py    (concrete extractor)
+      │   └── ...
+      ├── config/
+      │   ├── __init__.py
+      │   └── settings.py      (configuration management)
+      └── utils/
+          ├── __init__.py
+          ├── connections.py    (connection factories)
+          └── retry.py          (retry/backoff utilities)
+      ```
+
+      Write COMPLETE, RUNNABLE code for every file. No stubs, no "implement here" comments.
+      Include type hints and docstrings for all public methods.
+    output_var: extractor_code
+    timeout_ms: 300000
+
+  - id: generate_transformers
+    type: agent
+    label: "Generate transformation code"
+    depends_on: [extract_source_metadata, design_destination, architecture_debate]
+    model: claude-sonnet-4-6
+    prompt: |
+      Generate production-quality transformation code.
+
+      Language: {input.language}
+      Framework: {input.framework}
+      Source profiles: {source_profiles}
+      Destination schema: {destination_schema}
+      Architecture decision: {architecture_debate_result}
+
+      Generate transformer modules that convert raw extracted data into the destination schema:
+
+      **Transformation Rules:**
+      For each source-to-destination mapping:
+      1. Data type casting and conversion
+      2. Null handling (defaults, coalescing, filtering)
+      3. String normalization (trim, lowercase, encoding fixes)
+      4. Date/time parsing and timezone normalization (always store UTC)
+      5. Deduplication logic (based on primary key + timestamp)
+      6. Derived columns (calculated fields, business logic)
+      7. Data validation and quality checks
+      8. Slowly Changing Dimension handling (Type 1 or Type 2 as appropriate)
+
+      **Code Structure:**
+      ```
+      pipeline/
+      ├── transformers/
+      │   ├── __init__.py
+      │   ├── base.py          (abstract base transformer)
+      │   ├── {entity_1}.py    (entity-specific transformations)
+      │   ├── {entity_2}.py    (entity-specific transformations)
+      │   └── validators.py    (data quality validation functions)
+      ```
+
+      **Data Quality Checks (run during transformation):**
+      - Null rate per column (alert if exceeds threshold)
+      - Value range validation (e.g., prices > 0, dates not in future)
+      - Referential integrity (foreign keys exist)
+      - Uniqueness constraints
+      - Row count sanity checks (detect sudden drops or spikes)
+
+      Write COMPLETE code with full error handling. Every transformation must be idempotent.
+    output_var: transformer_code
+    timeout_ms: 300000
+
+  - id: generate_loaders
+    type: agent
+    label: "Generate loading code"
+    depends_on: [design_destination, architecture_debate]
+    model: claude-sonnet-4-6
+    prompt: |
+      Generate production-quality loading code for: {input.destination}
+
+      Language: {input.language}
+      Framework: {input.framework}
+      Destination schema: {destination_schema}
+      Architecture decision: {architecture_debate_result}
+
+      Generate loader modules that write transformed data to the destination:
+
+      **Loading Strategies:**
+      1. **Staging load**: write to staging tables first (always)
+      2. **Merge/upsert**: merge staging into final tables using primary keys
+      3. **Full refresh**: for small dimension tables, truncate and reload
+      4. **Append**: for fact/event tables, insert new records only
+      5. **SCD Type 2**: for slowly changing dimensions (if applicable)
+
+      **Code Requirements:**
+      1. Batch loading with configurable batch size
+      2. Transaction management (commit/rollback)
+      3. Atomic table swaps for full refresh (write to temp, rename)
+      4. Pre-load validation (schema compatibility check)
+      5. Post-load validation (row counts, checksums)
+      6. Idempotency: re-running the same load produces the same result
+      7. Cleanup: remove staging data after successful merge
+      8. Performance optimization:
+         - Bulk insert / COPY command where available
+         - Disable indexes during load, rebuild after
+         - Partition pruning for date-partitioned tables
+
+      **File Structure:**
+      ```
+      pipeline/
+      ├── loaders/
+      │   ├── __init__.py
+      │   ├── base.py          (abstract base loader)
+      │   ├── {destination}.py (destination-specific loader)
+      │   └── validators.py    (post-load validation)
+      ```
+
+      Write COMPLETE code. Include SQL for merge/upsert operations inline or as separate .sql files.
+    output_var: loader_code
+    timeout_ms: 300000
+
+  # ── PHASE 4: Generate orchestration and tests ──────────────────
+
+  - id: generate_orchestration
+    type: agent
+    label: "Generate pipeline orchestration"
+    depends_on: [generate_extractors, generate_transformers, generate_loaders]
+    model: claude-sonnet-4-6
+    prompt: |
+      Generate the pipeline orchestration code that ties extractors, transformers, and loaders together.
+
+      Language: {input.language}
+      Framework: {input.framework}
+      Schedule: {input.schedule}
+      Source profiles: {source_profiles}
+      Architecture decision: {architecture_debate_result}
+
+      Extractor code summary: {extractor_code}
+      Transformer code summary: {transformer_code}
+      Loader code summary: {loader_code}
+
+      **Orchestration Requirements:**
+
+      1. **Pipeline DAG**: define the execution order
+         - Extract all sources (parallel where independent)
+         - Transform (after extraction completes)
+         - Load (after transformation completes)
+         - Validate (after load completes)
+
+      2. **Configuration**:
+         - Environment-based config (dev/staging/production)
+         - Secrets management (env vars or secrets manager)
+         - Configurable parallelism, batch sizes, timeouts
+
+      3. **Error Handling**:
+         - Per-source failure isolation (one source failing doesn't block others)
+         - Retry policies per step
+         - Dead letter queue for failed records
+         - Alert on failure (structured error message for PagerDuty/Slack)
+
+      4. **Observability**:
+         - Structured logging with correlation IDs
+         - Metrics: rows processed, duration, error count per source
+         - Pipeline run metadata: start time, end time, status, row counts
+
+      5. **Scheduling** (for {input.framework}):
+         - Cron expression for {input.schedule} runs
+         - Backfill support (reprocess historical date ranges)
+         - Concurrency limits (don't overwhelm source systems)
+
+      **File Structure:**
+      ```
+      pipeline/
+      ├── main.py             (entry point)
+      ├── orchestrator.py     (DAG definition and execution)
+      ├── config/
+      │   ├── settings.py
+      │   └── {env}.yaml      (per-environment config)
+      ├── requirements.txt    (or pyproject.toml)
+      ├── Dockerfile
+      └── docker-compose.yml
+      ```
+
+      Write COMPLETE orchestration code. The pipeline should be runnable with a single command.
+    output_var: orchestration_code
+    timeout_ms: 300000
+
+  - id: generate_tests
+    type: agent
+    label: "Generate test suite"
+    depends_on: [generate_extractors, generate_transformers, generate_loaders]
+    model: claude-sonnet-4-6
+    prompt: |
+      Generate a comprehensive test suite for the ETL pipeline.
+
+      Language: {input.language}
+      Extractor code: {extractor_code}
+      Transformer code: {transformer_code}
+      Loader code: {loader_code}
+      Source profiles: {source_profiles}
+      Destination schema: {destination_schema}
+
+      **Test Categories:**
+
+      1. **Unit Tests (extractors/):**
+         - Connection handling (mock connections)
+         - Pagination logic (mock API responses with multiple pages)
+         - Incremental extraction (watermark handling)
+         - Error handling (connection timeout, invalid response, schema mismatch)
+         - Rate limiting behavior
+
+      2. **Unit Tests (transformers/):**
+         - Each transformation rule in isolation
+         - Null handling for every nullable field
+         - Data type conversions (edge cases: overflow, encoding, precision)
+         - Deduplication logic
+         - Derived column calculations
+         - Validation rule enforcement
+
+      3. **Unit Tests (loaders/):**
+         - Batch size handling (exact batch, partial batch, empty batch)
+         - Upsert/merge logic (insert new, update existing, no change)
+         - Transaction rollback on failure
+         - Post-load validation checks
+
+      4. **Integration Tests:**
+         - End-to-end pipeline with sample data (small dataset)
+         - Idempotency: run twice, verify same result
+         - Schema evolution: add a new column to source, verify handling
+         - Recovery: interrupt mid-pipeline, restart, verify no data loss
+
+      5. **Data Quality Tests:**
+         - Known good dataset → verify exact output
+         - Dataset with quality issues → verify proper handling
+         - Empty dataset → verify graceful handling
+         - Dataset with all nulls → verify defaults applied
+
+      **Test File Structure:**
+      ```
+      tests/
+      ├── conftest.py         (fixtures, sample data factories)
+      ├── test_extractors/
+      │   ├── test_{source_1}.py
+      │   └── test_{source_2}.py
+      ├── test_transformers/
+      │   ├── test_{entity_1}.py
+      │   └── test_validators.py
+      ├── test_loaders/
+      │   └── test_{destination}.py
+      ├── test_integration/
+      │   └── test_pipeline.py
+      └── fixtures/
+          ├── sample_data.json
+          └── expected_output.json
+      ```
+
+      Write COMPLETE test code with realistic test data. Use pytest conventions.
+      Every test must have a clear docstring explaining what it validates.
+    output_var: test_code
+    timeout_ms: 300000
+
+  # ── PHASE 5: Merge all code into final deliverable ─────────────
+
+  - id: merge_pipeline
+    type: merge
+    label: "Assemble complete pipeline"
+    depends_on: [generate_orchestration, generate_tests]
+    inputs: [source_profiles, destination_schema, extractor_code, transformer_code, loader_code, orchestration_code, test_code, architecture_debate_result]
+    strategy: llm_summarize
+    prompt: |
+      Assemble the complete ETL pipeline from all generated components:
+
+      Source profiles: {source_profiles}
+      Destination schema: {destination_schema}
+      Extractors: {extractor_code}
+      Transformers: {transformer_code}
+      Loaders: {loader_code}
+      Orchestration: {orchestration_code}
+      Tests: {test_code}
+      Architecture decision: {architecture_debate_result}
+
+      Create a unified deliverable that:
+      1. Lists the complete file structure with every file
+      2. Verifies imports are consistent across all modules
+      3. Ensures configuration is centralized (no hardcoded values)
+      4. Confirms all tests reference actual functions/classes from the source code
+      5. Includes a README with setup and run instructions
+      6. Reflects the architecture decisions from the debate
+    output_var: merged_pipeline
+    timeout_ms: 180000
+
+  # ── PHASE 5.5: Code review via subchain ────────────────────────
+
+  - id: code_review
+    type: subchain
+    label: "Code review via subchain"
+    depends_on: [merge_pipeline]
+    model: claude-sonnet-4-6
+    chain: code-review
+    inputs:
+      code: "{merged_pipeline}"
+      language: "{input.language}"
+      focus: "Review the generated ETL pipeline code for production readiness. Check for: error handling completeness, connection management, idempotency, security (no hardcoded credentials), performance (batch sizes, connection pooling), test coverage, and adherence to the chosen architecture ({input.framework})."
+    prompt: "Run code-review subchain to review the generated pipeline code for production readiness and best practices."
+    output_var: code_review_result
+    timeout_ms: 600000
+
+  # ── PHASE 6: Final review and documentation ────────────────────
+
+  - id: final_review
+    type: agent
+    label: "Final review and documentation"
+    depends_on: [code_review]
+    model: claude-opus-4-6
+    prompt: |
+      You are a staff data engineer reviewing this ETL pipeline before it goes to production.
+
+      Complete pipeline:
+      {merged_pipeline}
+
+      Code review feedback:
+      {code_review_result}
+
+      Architecture debate conclusions:
+      {architecture_debate_result}
+
+      Perform a final review and produce the complete deliverable:
+
+      ## Pipeline Overview
+      - Sources: list with connection types
+      - Destination: {input.destination}
+      - Schedule: {input.schedule}
+      - Framework: {input.framework}
+      - Language: {input.language}
+
+      ## Architecture Diagram (ASCII)
+      Show the data flow from sources through extraction, transformation, loading, and validation.
+
+      ## Complete File Listing
+      Every file with its purpose and key classes/functions.
+
+      ## Setup Instructions
+      1. Prerequisites (Python version, database clients, etc.)
+      2. Environment setup (virtualenv, dependencies)
+      3. Configuration (env vars, secrets)
+      4. Database setup (run DDL scripts)
+      5. First run (command to execute)
+
+      ## Operations Guide
+      - How to monitor pipeline runs
+      - How to handle failures and rerun
+      - How to backfill historical data
+      - How to add a new data source
+      - How to modify transformations
+
+      ## Code Quality Checklist
+      Verify and report (incorporating code review feedback):
+      - [ ] All extractors handle connection failures gracefully
+      - [ ] All transformations are idempotent
+      - [ ] All loaders use transactions
+      - [ ] All configuration is externalized
+      - [ ] All secrets use env vars (no hardcoded credentials)
+      - [ ] Test coverage is comprehensive
+      - [ ] Logging is structured and consistent
+      - [ ] Error messages are actionable
+      - [ ] Code review findings have been addressed
+
+      ## Known Limitations
+      What this generated pipeline does NOT handle (be honest):
+      - Edge cases not covered
+      - Scale limitations
+      - Missing features that would be needed in production
+
+      Provide the complete, production-ready pipeline code and documentation.
+    output_var: final_pipeline
+    timeout_ms: 300000
+
+output: final_pipeline
