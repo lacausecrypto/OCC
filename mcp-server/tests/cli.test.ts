@@ -10,7 +10,11 @@
  * - Unknown commands → help + exit 1
  * - Exit codes (0 on success, 1 on error)
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+
+// CLI subprocess tests use Unix-style paths and shell spawning that breaks on Windows
+const isWindows = process.platform === "win32";
+const describeUnix = isWindows ? describe.skip : describe;
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -52,7 +56,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
 });
 
 // ─── Help ───────────────────────────────────────────────────────────────────
@@ -100,7 +104,7 @@ describe("Unknown command", () => {
 
 // ─── Validate ───────────────────────────────────────────────────────────────
 
-describe("occ validate", () => {
+describeUnix("occ validate", () => {
   it("validates real chains with 0 errors", () => {
     const chainsDir = path.resolve(__dirname, "..", "..", "chains");
     if (!fs.existsSync(chainsDir)) return; // Skip if no chains dir
@@ -193,7 +197,7 @@ output: result
 
 // ─── Dry-run ────────────────────────────────────────────────────────────────
 
-describe("occ dry-run", () => {
+describeUnix("occ dry-run", () => {
   it("shows execution plan for a valid chain", () => {
     const chainsDir = path.resolve(__dirname, "..", "..", "chains");
     if (!fs.existsSync(chainsDir)) return;
