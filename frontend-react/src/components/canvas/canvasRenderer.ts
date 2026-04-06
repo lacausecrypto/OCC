@@ -633,14 +633,30 @@ function drawExecOverlay(
     ctx.textAlign = "left";
   }
 
-  // ─── Output lines ──────────────────────────────────────────
+  // ─── Output lines (pixel-precise truncation + clip) ─────────
   const lastLines = state.output.slice(-MAX_LINES);
-  const maxChars = Math.floor((termW - 24) / 5.6);
-  ctx.font = `400 10.5px ${monoFamily}, 'SF Mono', 'Fira Code', monospace`;
+  const textPadL = 12;
+  const textPadR = 12;
+  const textMaxW = termW - textPadL - textPadR;
+  ctx.font = `400 10px ${monoFamily}, 'SF Mono', 'Fira Code', monospace`;
+
+  // Clip region to prevent any text overflow
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(tx, ty + titleBarH, termW, termH - titleBarH, [0, 0, r, r]);
+  ctx.clip();
 
   lastLines.forEach((rawLine, li) => {
     const lineY = ty + titleBarH + 12 + li * lineH;
-    const line = rawLine.length > maxChars ? rawLine.slice(0, maxChars - 1) + "\u2026" : rawLine;
+
+    // Truncate using measureText for pixel-perfect fit
+    let line = rawLine;
+    if (ctx.measureText(line).width > textMaxW) {
+      while (line.length > 1 && ctx.measureText(line + "\u2026").width > textMaxW) {
+        line = line.slice(0, -1);
+      }
+      line += "\u2026";
+    }
 
     // Syntax-aware coloring
     if (line.startsWith("ERROR") || line.startsWith("[error]")) {
@@ -654,7 +670,7 @@ function drawExecOverlay(
     } else {
       ctx.fillStyle = isRunning ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.55)";
     }
-    ctx.fillText(line, tx + 12, lineY);
+    ctx.fillText(line, tx + textPadL, lineY);
   });
 
   // ─── Blinking cursor (thin line, Apple Terminal style) ──────
@@ -662,14 +678,16 @@ function drawExecOverlay(
     const blinkOn = Math.sin(now / 500 * Math.PI) > 0;
     if (blinkOn) {
       const lastLine = lastLines[lastLines.length - 1] ?? "";
-      const cursorX = tx + 12 + Math.min(lastLine.length, maxChars) * 5.6;
+      const cursorX = tx + textPadL + ctx.measureText(lastLine).width;
       const cursorY = ty + titleBarH + 2 + Math.max(0, numLines - 1) * lineH;
       ctx.fillStyle = color;
       ctx.globalAlpha = 0.8 * termOpacity;
-      ctx.fillRect(cursorX, cursorY, 1.5, 13);
+      ctx.fillRect(Math.min(cursorX, tx + termW - textPadR), cursorY, 1.5, 13);
       ctx.globalAlpha = termOpacity;
     }
   }
+
+  ctx.restore(); // end clip
 
   // ─── Connection line from node to terminal ─────────────────
   ctx.beginPath();
