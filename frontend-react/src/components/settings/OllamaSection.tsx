@@ -62,6 +62,7 @@ export function OllamaSection() {
   const [showMarketplace, setShowMarketplace] = useState(false);
   const [search, setSearch] = useState("");
   const [filterTag, setFilterTag] = useState<string | null>(null);
+  const [registered, setRegistered] = useState(false);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -150,6 +151,8 @@ export function OllamaSection() {
           models: installed.map((m) => m.name),
         }),
       });
+      setRegistered(true);
+      setTimeout(() => setRegistered(false), 3000);
     } catch { /* already exists */ }
   };
 
@@ -183,13 +186,14 @@ export function OllamaSection() {
           <button onClick={handleRegisterProvider} title="Register as LLM provider"
             style={{
               padding: "5px 14px", fontSize: 11, fontWeight: 600, borderRadius: 8, cursor: "pointer",
-              background: "var(--m-accent)", color: "#fff", border: "none",
-              transition: "opacity 0.15s",
+              background: registered ? "var(--c-success)" : "var(--m-accent)",
+              color: "#fff", border: "none",
+              transition: "all 0.2s ease",
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.85"; }}
+            onMouseEnter={(e) => { if (!registered) e.currentTarget.style.opacity = "0.85"; }}
             onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
           >
-            {"\u26D3"} Use in chains
+            {registered ? "\u2713 Registered!" : "\u26D3 Use in chains"}
           </button>
         )}
       </div>

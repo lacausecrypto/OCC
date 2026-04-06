@@ -111,6 +111,20 @@ RULES:
 9. Respond in the same language as the user.
 10. When building, describe the plan briefly then use [READY_TO_BUILD].
 
+MODIFY EXISTING STEPS:
+When the user wants to modify existing steps (change prompt, model, tools, pre-tools, etc.),
+respond with your explanation then use [ACTION:MODIFY] followed by a JSON block:
+\`\`\`json
+{"modifications": [
+  {"stepLabel": "Step Name", "patch": {"prompt": "new prompt", "model": "claude-haiku-4-5"}},
+  {"stepLabel": "Another Step", "patch": {"tools": ["WebSearch", "Read"], "preTools": [{"type": "web_search", "inject_as": "results", "query": "..."}]}},
+  {"stepLabel": "Old Step", "delete": true}
+]}
+\`\`\`
+Valid patch fields: prompt, model, type, tools (array), outputVar, preTools (array of pre-tool objects).
+Set "delete": true to remove a step entirely.
+Use the EXACT step label as shown in the canvas context.
+
 CONTEXT: You can see the current canvas state (steps, connections, models) and execution history. Use this context to give precise answers about the chain.
 
 NEVER:
@@ -764,6 +778,61 @@ async function executeDetectedActions(
           sysMsg.content = `\u{1F4CB} Dry-run: "${chainName}"\n\u2022 ${nodes.length} steps (${haiku} haiku, ${sonnet} sonnet, ${opus} opus)\n\u2022 Estimated cost: ~$${estCost}\n\u2022 History: ${stats.totalRuns ?? 0} runs, ${stats.successRate != null ? stats.successRate.toFixed(0) + "% success" : "no data"}, avg ${stats.avgDurationMs ? (stats.avgDurationMs / 1000).toFixed(1) + "s" : "?"}`;
         } catch {
           sysMsg.content = "\u26A0 Cannot fetch chain stats.";
+        }
+        break;
+      }
+
+      case "MODIFY": {
+        // Parse modification JSON from the full text
+        const jsonMatch = fullText.match(/```json\s*([\s\S]*?)```/) ?? fullText.match(/(\{[\s\S]*"modifications"[\s\S]*\})/);
+        if (!jsonMatch) {
+          sysMsg.content = "\u26A0 Could not parse modification plan.";
+          break;
+        }
+        try {
+          const plan = JSON.parse(jsonMatch[1].trim()) as {
+            modifications: Array<{
+              stepLabel: string;
+              patch?: { prompt?: string; model?: string; type?: string; tools?: string[]; outputVar?: string; preTools?: Record<string, unknown>[] };
+              delete?: boolean;
+            }>;
+          };
+
+          const canvas = useCanvasStore.getState();
+          canvas.pushUndo();
+          const nodes = [...canvas.nodes.values()];
+          let modified = 0;
+          let deleted = 0;
+
+          for (const mod of plan.modifications) {
+            // Find node by label (case-insensitive)
+            const node = nodes.find((n) => n.label.toLowerCase() === mod.stepLabel.toLowerCase());
+            if (!node) continue;
+
+            if (mod.delete) {
+              canvas.removeNode(node.id);
+              deleted++;
+              continue;
+            }
+
+            if (mod.patch) {
+              const patch: Record<string, unknown> = {};
+              if (mod.patch.prompt !== undefined) patch.prompt = mod.patch.prompt;
+              if (mod.patch.model !== undefined) patch.model = mod.patch.model;
+              if (mod.patch.type !== undefined) patch.type = mod.patch.type;
+              if (mod.patch.tools !== undefined) patch.tools = mod.patch.tools;
+              if (mod.patch.outputVar !== undefined) patch.outputVar = mod.patch.outputVar;
+              if (mod.patch.preTools !== undefined) patch.preTools = mod.patch.preTools;
+              if (Object.keys(patch).length > 0) {
+                canvas.updateNode(node.id, patch);
+                modified++;
+              }
+            }
+          }
+
+          sysMsg.content = `\u270F Modified ${modified} step(s)${deleted > 0 ? `, deleted ${deleted}` : ""}`;
+        } catch (err) {
+          sysMsg.content = `\u26A0 Modification failed: ${(err as Error).message}`;
         }
         break;
       }
