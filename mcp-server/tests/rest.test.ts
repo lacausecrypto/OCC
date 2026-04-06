@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi, beforeAll } from "vitest";
 import * as fs from "node:fs";
+import { cleanupTmpDir } from "./_test-utils.js";
 import * as path from "node:path";
 import * as os from "node:os";
 
@@ -87,13 +88,13 @@ describe("Loader integration (chain CRUD)", () => {
     process.env.CHAINS_DIR = tmpDir;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (originalEnv === undefined) {
       delete process.env.CHAINS_DIR;
     } else {
       process.env.CHAINS_DIR = originalEnv;
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    await cleanupTmpDir(tmpDir);
   });
 
   // Dynamically import the loader so CHAINS_DIR is picked up
@@ -414,7 +415,7 @@ output: result
     app = restModule.app;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     if (originalChainsDir === undefined) delete process.env.CHAINS_DIR;
     else process.env.CHAINS_DIR = originalChainsDir;
@@ -422,7 +423,7 @@ output: result
     else process.env.SCHEDULES_FILE = originalSchedulesFile;
     if (originalRestPort === undefined) delete process.env.REST_PORT;
     else process.env.REST_PORT = originalRestPort;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    await cleanupTmpDir(tmpDir);
   });
 
   // ── Health ──

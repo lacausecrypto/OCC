@@ -14,7 +14,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -222,8 +222,8 @@ async function cmdValidate(targetPath: string) {
   let listChains: typeof import("../loader.js").listChains;
 
   try {
-    const linter = await import(linterPath);
-    const loader = await import(loaderPath);
+    const linter = await import(pathToFileURL(linterPath).href);
+    const loader = await import(pathToFileURL(loaderPath).href);
     lintChain = linter.lintChain;
     loadChain = loader.loadChain;
     listChains = loader.listChains;
@@ -232,13 +232,12 @@ async function cmdValidate(targetPath: string) {
     process.exit(1);
   }
 
-  // Set CHAINS_DIR if path provided
+  // Set CHAINS_DIR if path provided — normalize to absolute path
   if (targetPath && fs.existsSync(targetPath)) {
     if (fs.statSync(targetPath).isDirectory()) {
-      process.env.CHAINS_DIR = targetPath;
+      process.env.CHAINS_DIR = path.resolve(targetPath);
     } else {
-      // Single file — set dir to parent
-      process.env.CHAINS_DIR = path.dirname(targetPath);
+      process.env.CHAINS_DIR = path.resolve(path.dirname(targetPath));
     }
   }
 
@@ -293,8 +292,8 @@ async function cmdDryRun(chainName: string, args: string[]) {
   let loadChain: typeof import("../loader.js").loadChain;
 
   try {
-    const linter = await import(linterPath);
-    const loader = await import(loaderPath);
+    const linter = await import(pathToFileURL(linterPath).href);
+    const loader = await import(pathToFileURL(loaderPath).href);
     dryRunChain = linter.dryRunChain;
     loadChain = loader.loadChain;
   } catch {

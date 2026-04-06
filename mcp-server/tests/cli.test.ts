@@ -11,10 +11,7 @@
  * - Exit codes (0 on success, 1 on error)
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
-
-// CLI subprocess tests use Unix-style paths and shell spawning that breaks on Windows
-const isWindows = process.platform === "win32";
-const describeUnix = isWindows ? describe.skip : describe;
+import { cleanupTmpDirSync } from "./_test-utils.js";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -56,12 +53,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
+  cleanupTmpDirSync(tmpDir);
 });
 
 // ─── Help ───────────────────────────────────────────────────────────────────
 
-describeUnix("occ help", () => {
+describe("occ help", () => {
   it("shows help with no args", () => {
     const { stdout, exitCode } = occ([]);
     expect(exitCode).toBe(0);
@@ -94,7 +91,7 @@ describeUnix("occ help", () => {
 
 // ─── Unknown command ────────────────────────────────────────────────────────
 
-describeUnix("Unknown command", () => {
+describe("Unknown command", () => {
   it("exits 1 for unknown command", () => {
     const { exitCode, stderr } = occ(["foobar"]);
     expect(exitCode).toBe(1);
@@ -104,7 +101,7 @@ describeUnix("Unknown command", () => {
 
 // ─── Validate ───────────────────────────────────────────────────────────────
 
-describeUnix("occ validate", () => {
+describe("occ validate", () => {
   it("validates real chains with 0 errors", () => {
     const chainsDir = path.resolve(__dirname, "..", "..", "chains");
     if (!fs.existsSync(chainsDir)) return; // Skip if no chains dir
@@ -197,7 +194,7 @@ output: result
 
 // ─── Dry-run ────────────────────────────────────────────────────────────────
 
-describeUnix("occ dry-run", () => {
+describe("occ dry-run", () => {
   it("shows execution plan for a valid chain", () => {
     const chainsDir = path.resolve(__dirname, "..", "..", "chains");
     if (!fs.existsSync(chainsDir)) return;
@@ -283,7 +280,7 @@ output: result
 
 // ─── List ───────────────────────────────────────────────────────────────────
 
-describeUnix("occ list", () => {
+describe("occ list", () => {
   it("exits with error when server not running", () => {
     // Use a port that's definitely not running
     const { exitCode, stderr } = occ(["list"], { OCC_URL: "http://localhost:19999" });
@@ -294,7 +291,7 @@ describeUnix("occ list", () => {
 
 // ─── Health ─────────────────────────────────────────────────────────────────
 
-describeUnix("occ health", () => {
+describe("occ health", () => {
   it("exits with error when server not running", () => {
     const { exitCode, stderr } = occ(["health"], { OCC_URL: "http://localhost:19999" });
     expect(exitCode).toBe(1);
@@ -304,7 +301,7 @@ describeUnix("occ health", () => {
 
 // ─── Run (no server) ────────────────────────────────────────────────────────
 
-describeUnix("occ run", () => {
+describe("occ run", () => {
   it("exits 1 without chain name", () => {
     const { exitCode, stderr } = occ(["run"]);
     expect(exitCode).toBe(1);
@@ -320,7 +317,7 @@ describeUnix("occ run", () => {
 
 // ─── Status (no server) ────────────────────────────────────────────────────
 
-describeUnix("occ status", () => {
+describe("occ status", () => {
   it("exits 1 without execution id", () => {
     const { exitCode, stderr } = occ(["status"]);
     expect(exitCode).toBe(1);
@@ -330,7 +327,7 @@ describeUnix("occ status", () => {
 
 // ─── Input parsing ──────────────────────────────────────────────────────────
 
-describeUnix("Input parsing", () => {
+describe("Input parsing", () => {
   it("handles multiple --input flags", () => {
     fs.writeFileSync(
       path.join(tmpDir, "multi-input.yaml"),
@@ -380,7 +377,7 @@ output: result
 
 // ─── New commands ───────────────────────────────────────────────────────────
 
-describeUnix("occ cancel", () => {
+describe("occ cancel", () => {
   it("exits 1 without execution id", () => {
     const { exitCode, stderr } = occ(["cancel"]);
     expect(exitCode).toBe(1);
@@ -394,7 +391,7 @@ describeUnix("occ cancel", () => {
   });
 });
 
-describeUnix("occ queue", () => {
+describe("occ queue", () => {
   it("exits with error when server not running", () => {
     const { exitCode, stderr } = occ(["queue"], { OCC_URL: "http://localhost:19999" });
     expect(exitCode).toBe(1);
@@ -402,7 +399,7 @@ describeUnix("occ queue", () => {
   });
 });
 
-describeUnix("occ timeline", () => {
+describe("occ timeline", () => {
   it("exits 1 without execution id", () => {
     const { exitCode, stderr } = occ(["timeline"]);
     expect(exitCode).toBe(1);
@@ -416,7 +413,7 @@ describeUnix("occ timeline", () => {
   });
 });
 
-describeUnix("occ stats", () => {
+describe("occ stats", () => {
   it("exits 1 without chain name", () => {
     const { exitCode, stderr } = occ(["stats"]);
     expect(exitCode).toBe(1);
@@ -430,7 +427,7 @@ describeUnix("occ stats", () => {
   });
 });
 
-describeUnix("occ approve/reject", () => {
+describe("occ approve/reject", () => {
   it("exits 1 without args", () => {
     const { exitCode: a, stderr: sa } = occ(["approve"]);
     expect(a).toBe(1);
@@ -454,7 +451,7 @@ describeUnix("occ approve/reject", () => {
   });
 });
 
-describeUnix("occ run-pipeline", () => {
+describe("occ run-pipeline", () => {
   it("exits 1 without pipeline name", () => {
     const { exitCode, stderr } = occ(["run-pipeline"]);
     expect(exitCode).toBe(1);
@@ -468,7 +465,7 @@ describeUnix("occ run-pipeline", () => {
   });
 });
 
-describeUnix("--json flag", () => {
+describe("--json flag", () => {
   it("help still works with --json (no crash)", () => {
     const { exitCode } = occ(["help", "--json"]);
     expect(exitCode).toBe(0);
@@ -483,7 +480,7 @@ describeUnix("--json flag", () => {
   });
 });
 
-describeUnix("--priority flag", () => {
+describe("--priority flag", () => {
   it("dry-run works with --priority (no crash)", () => {
     const chainsDir = path.resolve(__dirname, "..", "..", "chains");
     if (!fs.existsSync(chainsDir)) return;
@@ -496,7 +493,7 @@ describeUnix("--priority flag", () => {
   });
 });
 
-describeUnix("Help includes new commands", () => {
+describe("Help includes new commands", () => {
   it("help mentions all 17 commands and flags", () => {
     const { stdout } = occ(["help"]);
     expect(stdout).toContain("cancel");
@@ -515,7 +512,7 @@ describeUnix("Help includes new commands", () => {
 
 // ─── Generate ───────────────────────────────────────────────────────────────
 
-describeUnix("occ generate", () => {
+describe("occ generate", () => {
   it("exits 1 without description", () => {
     const { exitCode, stderr } = occ(["generate"]);
     expect(exitCode).toBe(1);
@@ -529,7 +526,7 @@ describeUnix("occ generate", () => {
   });
 });
 
-describeUnix("occ generate-answer", () => {
+describe("occ generate-answer", () => {
   it("exits 1 without args", () => {
     const { exitCode, stderr } = occ(["generate-answer"]);
     expect(exitCode).toBe(1);

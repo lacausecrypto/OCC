@@ -19,6 +19,7 @@
  * - sandboxExec (error paths)
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { cleanupTmpDirSync } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -60,7 +61,7 @@ afterEach(() => {
   delete process.env.OCC_VECTOR_DB;
   delete process.env.OCC_GRAPH_DB;
   delete process.env.OCC_SEMANTIC_CACHE_DB;
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
+  cleanupTmpDirSync(tmpDir);
 });
 
 // ─── stateLoad / stateSave ───────────────────────────────────────────────────

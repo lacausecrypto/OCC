@@ -11,6 +11,7 @@
  * - Schedule ID format validation
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { cleanupTmpDirSync } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -60,7 +61,7 @@ afterEach(() => {
   else process.env.SCHEDULES_FILE = origSchedulesFile;
   if (origChainsDir === undefined) delete process.env.CHAINS_DIR;
   else process.env.CHAINS_DIR = origChainsDir;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  cleanupTmpDirSync(tmpDir);
 });
 
 function makeSchedule(overrides: Record<string, unknown> = {}) {

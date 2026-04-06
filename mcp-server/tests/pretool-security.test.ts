@@ -11,6 +11,7 @@
  * - Cache: LRU eviction when cache exceeds 1000 entries
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { cleanupTmpDirSync } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -56,7 +57,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.WORKSPACE_DIR;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  cleanupTmpDirSync(tmpDir);
 });
 
 // ─── bash pre-tool: variable sanitization ──────────────────────────────────

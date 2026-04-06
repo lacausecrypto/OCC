@@ -16,6 +16,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { cleanupTmpDir } from "./_test-utils.js";
 import * as os from "node:os";
 
 // ─── sanitizeName tests (pure function from loader.ts) ─────────────────────
@@ -213,10 +214,7 @@ output: result
     else process.env.REST_PORT = originalRestPort;
     if (originalApiKey === undefined) delete process.env.OCC_API_KEY;
     else process.env.OCC_API_KEY = originalApiKey;
-    try { const { closeStorage } = await import("../src/storage.js"); closeStorage(); } catch { /* */ }
-    try { const { closeQueue } = await import("../src/queue.js"); closeQueue(); } catch { /* */ }
-    await new Promise(r => setTimeout(r, process.platform === "win32" ? 200 : 0));
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
+    await cleanupTmpDir(tmpDir);
   });
 
   // ── Security headers ──
@@ -549,10 +547,7 @@ describe("Auth middleware (OCC_API_KEY)", () => {
     else process.env.SCHEDULES_FILE = originalSchedulesFile;
     if (originalApiKey === undefined) delete process.env.OCC_API_KEY;
     else process.env.OCC_API_KEY = originalApiKey;
-    try { const { closeStorage } = await import("../src/storage.js"); closeStorage(); } catch { /* */ }
-    try { const { closeQueue } = await import("../src/queue.js"); closeQueue(); } catch { /* */ }
-    await new Promise(r => setTimeout(r, process.platform === "win32" ? 200 : 0));
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
+    await cleanupTmpDir(tmpDir);
   });
 
   it("returns 401 for unauthenticated request to /chains", async () => {

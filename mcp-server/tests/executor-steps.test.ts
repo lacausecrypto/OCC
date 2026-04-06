@@ -14,6 +14,7 @@
  * - resume execution
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { cleanupTmpDir } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -102,10 +103,10 @@ beforeEach(() => {
   mockRunStepWithRetryImpl = undefined as any;
 });
 
-afterEach(() => {
+afterEach(async () => {
   delete process.env.CHAINS_DIR;
   delete process.env.EXECUTIONS_FILE;
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  await cleanupTmpDir(tmpDir);
   vi.clearAllMocks();
 });
 

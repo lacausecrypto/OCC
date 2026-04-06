@@ -13,6 +13,7 @@
  * - Dry-run execution plan + cost estimation
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { cleanupTmpDirSync } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -41,7 +42,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.CHAINS_DIR;
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
+  cleanupTmpDirSync(tmpDir);
 });
 
 // ─── Clean chains ───────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@
  * - closeMcpClients idempotency
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { cleanupTmpDirSync } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -36,7 +37,7 @@ afterEach(async () => {
   else delete process.env.MCP_SERVERS_CONFIG;
   if (origChainsDir !== undefined) process.env.CHAINS_DIR = origChainsDir;
   else delete process.env.CHAINS_DIR;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  cleanupTmpDirSync(tmpDir);
 });
 
 // ─── mcpCall error paths ─────────────────────────────────────────────────────

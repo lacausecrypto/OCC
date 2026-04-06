@@ -6,6 +6,7 @@
  * chains are run.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { cleanupTmpDirSync } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -62,7 +63,7 @@ afterEach(() => {
   if (origChainsDir === undefined) delete process.env.CHAINS_DIR;
   else process.env.CHAINS_DIR = origChainsDir;
 
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
+  cleanupTmpDirSync(tmpDir);
 });
 
 function makeSchedule(overrides: Record<string, unknown> = {}) {

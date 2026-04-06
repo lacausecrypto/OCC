@@ -13,6 +13,7 @@
  * - Pre-tool caching
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { cleanupTmpDirSync } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -133,7 +134,7 @@ describe("read_file pre-tool", () => {
   afterEach(() => {
     if (origWorkspace === undefined) delete process.env.WORKSPACE_DIR;
     else process.env.WORKSPACE_DIR = origWorkspace;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanupTmpDirSync(tmpDir);
   });
 
   it("reads a file within workspace", async () => {
@@ -193,7 +194,7 @@ describe("write_file pre-tool", () => {
   afterEach(() => {
     if (origWorkspace === undefined) delete process.env.WORKSPACE_DIR;
     else process.env.WORKSPACE_DIR = origWorkspace;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanupTmpDirSync(tmpDir);
   });
 
   it("writes a file and returns the path", async () => {

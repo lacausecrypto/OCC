@@ -14,6 +14,7 @@
  * - Output validation
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { cleanupTmpDir } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -101,12 +102,12 @@ beforeEach(() => {
   process.env.EXECUTIONS_FILE = path.join(tmpDir, "executions.json");
 });
 
-afterEach(() => {
+afterEach(async () => {
   if (origChainsDir === undefined) delete process.env.CHAINS_DIR;
   else process.env.CHAINS_DIR = origChainsDir;
   if (origExecutionsFile === undefined) delete process.env.EXECUTIONS_FILE;
   else process.env.EXECUTIONS_FILE = origExecutionsFile;
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore cleanup errors */ }
+  await cleanupTmpDir(tmpDir);
 });
 
 // ─── getExecution / getAllExecutions ────────────────────────────────────────

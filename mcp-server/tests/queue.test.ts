@@ -13,6 +13,7 @@
  * - Purge old jobs
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { cleanupTmpDir } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -43,12 +44,12 @@ beforeEach(() => {
   initQueue(async (job) => `exec_${job.id}`);
 });
 
-afterEach(() => {
+afterEach(async () => {
   closeQueue();
   if (originalQueueDb !== undefined) process.env.OCC_QUEUE_DB = originalQueueDb;
   else delete process.env.OCC_QUEUE_DB;
   if (originalChainsDir !== undefined) process.env.CHAINS_DIR = originalChainsDir;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  await cleanupTmpDir(tmpDir);
 });
 
 // ─── Enqueue ────────────────────────────────────────────────────────────────

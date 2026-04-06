@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { cleanupTmpDir } from "./_test-utils.js";
 import * as os from "node:os";
 
 describe("REST API security and additional routes", () => {
@@ -168,13 +169,13 @@ output: result
     app = restModule.app;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     for (const [key, val] of Object.entries(originalEnvs)) {
       if (val === undefined) delete process.env[key];
       else process.env[key] = val;
     }
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
+    await cleanupTmpDir(tmpDir);
   });
 
   // ── GET /extract-style ──
@@ -538,13 +539,13 @@ describe("Auth middleware security", () => {
     app = restModule.app;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     for (const [key, val] of Object.entries(originalEnvs)) {
       if (val === undefined) delete process.env[key];
       else process.env[key] = val;
     }
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
+    await cleanupTmpDir(tmpDir);
   });
 
   it("returns 401 for unauthenticated request to /config", async () => {

@@ -11,6 +11,7 @@
  * - Cleanup (close, re-init)
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { cleanupTmpDir } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -65,12 +66,12 @@ beforeEach(() => {
   initStorage();
 });
 
-afterEach(() => {
+afterEach(async () => {
   closeStorage();
   if (originalDb !== undefined) process.env.OCC_DB = originalDb;
   else delete process.env.OCC_DB;
   if (originalChainsDir !== undefined) process.env.CHAINS_DIR = originalChainsDir;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  await cleanupTmpDir(tmpDir);
 });
 
 // ─── Schema & Init ──────────────────────────────────────────────────────────

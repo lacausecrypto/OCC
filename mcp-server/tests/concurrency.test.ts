@@ -11,6 +11,7 @@
  * - Linter concurrent invocations (stateless, should be safe)
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { cleanupTmpDir } from "./_test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -21,8 +22,8 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "occ-concurrency-test-"));
 });
 
-afterEach(() => {
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
+afterEach(async () => {
+  await cleanupTmpDir(tmpDir);
 });
 
 // ─── SQLite concurrent writes ───────────────────────────────────────────────
@@ -46,7 +47,7 @@ describe("SQLite concurrent writes", () => {
     initStorage();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     closeStorage();
   });
 
@@ -204,7 +205,7 @@ describe("Queue concurrency", () => {
     getQueueJob = mod.getQueueJob;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     closeQueue();
   });
 
@@ -330,7 +331,7 @@ describe("Storage isolation between executions", () => {
     initStorage();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     closeStorage();
   });
 
