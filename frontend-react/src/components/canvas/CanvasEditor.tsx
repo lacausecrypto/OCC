@@ -12,6 +12,7 @@ import { CanvasToolbar } from "./CanvasToolbar";
 import { CanvasZoom } from "./CanvasZoom";
 import { AnnotationToolbar } from "./AnnotationToolbar";
 import { BlueprintPanel } from "./BlueprintPanel";
+import { VersionPanel } from "./VersionPanel";
 import { WorkflowChat } from "./WorkflowChat";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { RunModal, SaveChainModal } from "../modals";
@@ -126,6 +127,7 @@ export function CanvasEditor() {
   } | null>(null);
   const [bpPanelOpen, setBpPanelOpen] = useState(false);
   const [wfChatOpen, setWfChatOpen] = useState(false);
+  const [versionPanelOpen, setVersionPanelOpen] = useState(false);
   const [saveModal, setSaveModal] = useState(false);
 
   // ─── Save selection as blueprint ─────────────────────────────
@@ -395,6 +397,8 @@ export function CanvasEditor() {
             useAppStore.getState().createNewChain();
           }}
           onSave={() => setSaveModal(true)}
+          onHistory={() => setVersionPanelOpen((v) => !v)}
+          historyActive={versionPanelOpen}
         />
       </div>
 
@@ -447,6 +451,23 @@ export function CanvasEditor() {
           onSaved={() => {
             // Refresh chains in dashboard after save
             void useChainsStore.getState().fetchChains();
+          }}
+        />
+      )}
+
+      {/* Version history panel — right side glass overlay */}
+      {versionPanelOpen && (
+        <VersionPanel
+          onClose={() => setVersionPanelOpen(false)}
+          onRestored={() => {
+            const chainName = useAppStore.getState().canvasChainName;
+            const pipeName = useAppStore.getState().pipelineName;
+            if (pipeName) {
+              void useAppStore.getState().loadPipelineToCanvas(pipeName);
+            } else if (chainName) {
+              void useAppStore.getState().loadChainToCanvas(chainName);
+            }
+            setVersionPanelOpen(false);
           }}
         />
       )}

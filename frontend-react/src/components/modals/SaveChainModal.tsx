@@ -16,6 +16,7 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
   const existingName = useAppStore((s) => s.canvasChainName);
   const [name, setName] = useState(existingName ?? "");
   const [description, setDescription] = useState("");
+  const [versionMessage, setVersionMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [yamlPreview, setYamlPreview] = useState<string | null>(null);
@@ -51,7 +52,7 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
     setSaving(true);
     setError(null);
     try {
-      const result = await saveChain(targetName, yaml);
+      const result = await saveChain(targetName, yaml, versionMessage || undefined);
       if (result.ok) {
         // Update the tracked chain name
         useAppStore.setState({ canvasChainName: targetName });
@@ -153,6 +154,18 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
               onChange={(e) => setDescription(e.target.value)}
               onKeyDown={onKeyDown}
               placeholder="What does this chain do?"
+              disabled={saving}
+            />
+          </div>
+
+          <div className={styles.field}>
+            <div className={styles.fieldLabel}>Version Note <span className={styles.optional}>(optional)</span></div>
+            <input
+              className={styles.input}
+              value={versionMessage}
+              onChange={(e) => setVersionMessage(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="What changed? e.g. 'Added validation step'"
               disabled={saving}
             />
           </div>

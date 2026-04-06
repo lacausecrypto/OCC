@@ -348,6 +348,133 @@
   background: rgba(255, 55, 95, 0.3);
 }
 
+/* ─── Version history panel — glass ─── */
+.versionPanel {
+  position: absolute;
+  top: 56px;
+  right: 16px;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 140px);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--m-radius);
+  box-shadow: var(--glass-shadow);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--m-font);
+  animation: fadeInScale 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+.vpTabs {
+  display: flex;
+  border-bottom: 1px solid var(--glass-border);
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+.vpTab {
+  padding: 8px 14px;
+  border: none;
+  background: none;
+  color: var(--m-text2);
+  font-size: calc(var(--m-body-size) * 0.86);
+  font-weight: 500;
+  cursor: pointer;
+  font-family: var(--m-font);
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+.vpTab:hover { color: var(--m-text); }
+.vpTabActive { color: var(--m-accent); border-bottom-color: var(--m-accent); }
+
+/* Timeline */
+.vpTimeline { position: relative; padding-left: 24px; }
+.vpTimeline::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--glass-border);
+}
+.vpRow {
+  position: relative;
+  padding: 8px 10px 8px 16px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--m-radius) - 2px);
+  transition: all 0.2s;
+  margin-bottom: 2px;
+}
+.vpRow:hover { border-color: var(--m-accent); background: var(--glass-tint); }
+.vpDot {
+  position: absolute;
+  left: -20px;
+  top: 14px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--m-accent);
+  background: var(--m-bg);
+  z-index: 1;
+}
+.vpDotLatest {
+  background: var(--m-accent);
+  box-shadow: 0 0 8px rgba(var(--m-accent-rgb), 0.4);
+}
+.vpDotRestore { background: var(--icon-orange, #ff9f0a); border-color: var(--icon-orange, #ff9f0a); }
+.vpInfo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vpVersion {
+  font-weight: 700;
+  font-size: calc(var(--m-body-size) * 0.93);
+  color: var(--m-text);
+  font-family: var(--m-font-mono, monospace);
+}
+.vpTime { font-size: var(--s-xs); color: var(--m-text2); }
+.vpMessage {
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.vpDelta {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-family: var(--m-font-mono, monospace);
+}
+.vpDeltaUp { background: rgba(48, 209, 88, 0.15); color: var(--c-success, #30d158); }
+.vpDeltaDown { background: rgba(255, 55, 95, 0.15); color: var(--c-error, #ff375f); }
+
+/* Diff */
+.vpDiffSelect {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: var(--m-bg);
+  color: var(--m-text);
+  border: 1px solid var(--m-border);
+  border-radius: calc(var(--m-radius) - 4px);
+  font-family: var(--m-font);
+}
+.vpDiffLine {
+  font-family: var(--m-font-mono, monospace);
+  font-size: 11px;
+  padding: 1px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+.vpDiffAdd { background: rgba(48, 209, 88, 0.1); color: var(--c-success, #30d158); }
+.vpDiffRemove { background: rgba(255, 55, 95, 0.1); color: var(--c-error, #ff375f); }
+.vpDiffSame { color: var(--m-text2); opacity: 0.4; }
+
 /* ─── Responsive ─── */
 @media (max-width: 768px) {
   .toolbar { gap: 2px; padding: 2px; top: 8px; }
@@ -360,8 +487,10 @@
   .annBtn { width: 24px; height: 24px; font-size: 11px; }
   .ctxMenu { min-width: min(180px, calc(100vw - 16px)); }
   .ctxSubmenu { min-width: min(160px, calc(100vw - 16px)); }
+  .versionPanel { width: min(360px, calc(100vw - 16px)); top: 48px; right: 8px; }
 }
 @media (max-width: 480px) {
+  .versionPanel { width: calc(100vw - 16px); top: 44px; right: 8px; max-height: calc(100vh - 100px); }
   .toolbar { top: 6px; gap: 1px; }
   .tbtn { padding: 3px 6px; font-size: 10px; }
   .minimap { display: none; }

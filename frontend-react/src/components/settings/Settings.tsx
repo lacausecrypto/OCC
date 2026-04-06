@@ -8,6 +8,8 @@ import { useServerStore } from "../../stores/server";
 import { ScheduleSection } from "./ScheduleSection";
 import { McpSection } from "./McpSection";
 import { ProviderSection } from "./ProviderSection";
+import { useShortcutStore, formatCombo } from "../../stores/shortcuts";
+import type { ShortcutAction, KeyCombo } from "../../stores/shortcuts";
 import styles from "./Settings.module.css";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -367,6 +369,33 @@ export function Settings() {
 
   // Token chart state
   const [chartMode, setChartMode] = useState<"daily" | "weekly">("daily");
+
+  // Keyboard shortcut editing
+  const shortcutStore = useShortcutStore();
+  const [editingShortcut, setEditingShortcut] = useState<ShortcutAction | null>(null);
+
+  useEffect(() => {
+    if (!editingShortcut) return;
+    const handler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setEditingShortcut(null); return; }
+      // Ignore standalone modifier keys
+      if (["Control", "Meta", "Shift", "Alt"].includes(e.key)) return;
+      const isMod = e.metaKey || e.ctrlKey;
+      // Only record shift if mod is also pressed (for Cmd+Shift+Z type combos)
+      // For standalone keys, shift is often just keyboard layout (Shift+6 = &)
+      const combo: KeyCombo = {
+        key: e.key.length === 1 ? e.key.toLowerCase() : e.key,
+        ...(isMod ? { mod: true } : {}),
+        ...(isMod && e.shiftKey ? { shift: true } : {}),
+      };
+      shortcutStore.setCombo(editingShortcut, combo);
+      setEditingShortcut(null);
+    };
+    window.addEventListener("keydown", handler, true); // capture phase
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [editingShortcut, shortcutStore]);
 
   // Server config (editable)
   interface ServerConfig {
@@ -1130,18 +1159,39 @@ export function Settings() {
           </div>
         </div>
 
-        {/* ═══ Keyboard Shortcuts ═══ */}
+        {/* ═══ Keyboard Shortcuts (configurable) ═══ */}
         <div id="shortcuts" className={styles.section}>
-          <div className={styles.sectionTitle}>Keyboard Shortcuts</div>
-          <div className={styles.sectionCard}>
-            <div className={styles.row}><div className={styles.rowBody}><div className={styles.rowLabel}>Dashboard</div></div><span className={styles.rowValue}>1</span></div>
-            <div className={styles.row}><div className={styles.rowBody}><div className={styles.rowLabel}>Workflow</div></div><span className={styles.rowValue}>2</span></div>
-            <div className={styles.row}><div className={styles.rowBody}><div className={styles.rowLabel}>BLOB</div></div><span className={styles.rowValue}>3</span></div>
-            <div className={styles.row}><div className={styles.rowBody}><div className={styles.rowLabel}>Settings</div></div><span className={styles.rowValue}>4</span></div>
-            <div className={styles.row}><div className={styles.rowBody}><div className={styles.rowLabel}>Toggle Design Space</div></div><span className={styles.rowValue}>[</span></div>
-            <div className={styles.row}><div className={styles.rowBody}><div className={styles.rowLabel}>Toggle Live Monitor</div></div><span className={styles.rowValue}>]</span></div>
-            <div className={styles.row}><div className={styles.rowBody}><div className={styles.rowLabel}>Delete selected</div></div><span className={styles.rowValue}>Del / Backspace</span></div>
+          <div className={styles.sectionTitle}>
+            Keyboard Shortcuts
+            <button className={styles.chartModeBtn} style={{ marginLeft: "auto" }} onClick={() => { shortcutStore.resetAll(); setEditingShortcut(null); }}>Reset All</button>
           </div>
+
+          {(["Navigation", "Workflow Canvas", "The Blob", "Global"] as const).map((cat) => (
+            <div key={cat} className={styles.sectionCard}>
+              <div className={styles.sectionSubtitle}>{cat}</div>
+              {shortcutStore.shortcuts.filter((s) => s.category === cat).map((s) => (
+                <div key={s.action} className={styles.row}>
+                  <div className={styles.rowBody}>
+                    <div className={styles.rowLabel}>{s.label}</div>
+                  </div>
+                  {editingShortcut === s.action ? (
+                    <div className={styles.shortcutCapture}>
+                      Press new key...
+                      <button className={styles.bpBtn} onClick={() => setEditingShortcut(null)} style={{ marginLeft: 8, fontSize: 9 }}>Cancel</button>
+                    </div>
+                  ) : (
+                    <button
+                      className={styles.shortcutKey}
+                      onClick={() => setEditingShortcut(s.action)}
+                      title="Click to change"
+                    >
+                      {formatCombo(s.combo)}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
         </div>
 
       </div>

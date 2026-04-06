@@ -6,8 +6,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
 [![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
 [![Pre--tools](https://img.shields.io/badge/Pre--tools-29%20types-orange)](#pre-tools)
-[![REST](https://img.shields.io/badge/REST%20API-84%20endpoints-green)](#rest-api)
-[![Tests](https://img.shields.io/badge/Tests-1735%20passed-brightgreen)](#tests)
+[![REST](https://img.shields.io/badge/REST%20API-95%20endpoints-green)](#rest-api)
+[![Tests](https://img.shields.io/badge/Tests-1777%20passed-brightgreen)](#tests)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](#)
@@ -47,12 +47,16 @@ It also supports **non-Claude providers** (OpenRouter, OpenAI, Groq, Mistral, To
 - 17-command CLI with dry-run (cost estimate, 0 tokens) and chain linting
 - MCP bidirectional: exposes 28 tools AND consumes external MCP servers
 - React frontend (Chimera) with canvas chain editor, live execution monitor, BLOB sessions
-- Workflow Chat: conversational chain builder with configurable LLM prompts
+- Workflow Chat: conversational chain builder with multi-session management per chain
+- Chain/pipeline versioning with diff, restore, and history tracking
 - Knowledge graph with concept extraction and cross-session memory
 - Scheduled execution via cron expressions
 - Multi-chain pipelines with inter-chain dependency resolution
 - Gate/approval system for human-in-the-loop workflows
 - Multi-provider LLM support (Claude, OpenRouter, OpenAI, custom endpoints)
+- Configurable keyboard shortcuts
+- Design Space: extract website styles via headless browser (Playwright) for theme blending
+- Context management: auto-budget compression, pipeline summarization, BLOB enrichment
 
 **What it doesn't do:**
 - No distributed execution across multiple machines (single-process, single-node)
@@ -347,15 +351,29 @@ OCC includes a React frontend with:
   - Step configuration: model, tools, pre-tools, prompt, type-specific fields
   - Advanced config: retry, fallback models, timeout, caching, output validation, guardrails
   - Type-specific panels for gate, router, evaluator, transform, loop, merge, browser, subchain, debate, webhook
-- **Workflow Chat** — conversational chain builder (describe what you want, AI creates the nodes)
-  - Configurable chat and planner prompts
-  - Configurable LLM models per stage
-  - Animated Unicode loader with 15 thinking phases
+  - Run readiness validation with glass tooltip (checks: server online, prompts filled, steps wired)
+  - Apple-style mini terminal SSE per node: live streaming output, traffic light dots, auto-fade
+  - Save chain to backend with Ctrl+S shortcut
+- **Workflow Chat** — conversational chain builder with glass popover UI
+  - Multi-session management per chain/pipeline (create, rename, delete, switch)
+  - Sessions fully isolated: chain A's chats never leak into chain B
+  - Persisted to localStorage — survives page refresh
+  - Configurable chat and planner LLM models + system prompts
+  - Animated message flow: slide-in animations, progress bar, Unicode thinking loader (15 phases)
+  - Two-stage AI: fast chat (Haiku) → smart planner (Sonnet) creates canvas nodes
 - **Live Monitor** — SSE-powered execution tracking with step timeline, log viewer
   - Gate approval panel — approve/reject pending gates directly from the UI
+  - Auto-purge stale executions (5min timeout for ghost "running" entries)
+  - Historical execution loading from backend on connect
+  - Error messages displayed inline on execution cards
 - **BLOB Sessions** — autonomous multi-model planning canvas with knowledge graph (see below)
-- **Settings** — LLM providers, MCP servers, schedules, queue stats, server config
+- **Settings** — LLM providers, MCP servers, schedules, queue stats, server config, cache management
+  - InfoTips with explanations throughout settings panels
+  - Responsive TOC (horizontal pill bar on mobile)
 - **Blueprints** — save and reuse step groups across chains
+- **Version History** — chain/pipeline versioning with diff view and restore
+- **Design Space** — extract website CSS/colors via headless browser (Playwright) for theme blending
+- **Keyboard Shortcuts** — configurable keybindings for common actions
 
 ## Pipeline Format
 
@@ -540,12 +558,12 @@ occ cancel | approve | reject
 # All commands support --json for scripting
 ```
 
-## REST API (84 endpoints)
+## REST API (95 endpoints)
 
 <details>
 <summary>Full endpoint list</summary>
 
-**Chains:** `GET /chains`, `GET /chains/:name`, `GET /chains/:name/stats`, `POST /chains/:name`, `DELETE /chains/:name`
+**Chains:** `GET /chains`, `GET /chains/:name`, `GET /chains/:name/stats`, `POST /chains/:name`, `DELETE /chains/:name`, `GET /chains/:name/versions`, `GET /chains/:name/versions/:v`, `DELETE /chains/:name/versions/:v`, `POST /chains/:name/versions/:v/restore`
 
 **Execution:** `POST /execute/:name`, `GET /executions`, `GET /executions/:id`, `GET /executions/:id/stream` (SSE), `GET /executions/:id/timeline`, `GET /executions/token-usage`, `DELETE /executions`, `DELETE /executions/:id`, `POST /executions/:id/resume`
 
@@ -555,7 +573,7 @@ occ cancel | approve | reject
 
 **Scheduling:** `GET /schedules`, `GET /schedules/:id`, `POST /schedules`, `PUT /schedules/:id`, `PATCH /schedules/:id/toggle`, `POST /schedules/:id/run`, `DELETE /schedules/:id`
 
-**Pipelines:** `GET /pipelines`, `GET /pipelines/:name`, `GET /pipelines/:name/json`, `POST /pipelines/:name`, `DELETE /pipelines/:name`, `POST /pipelines/:name/execute`, `GET /pipeline-executions`, `GET /pipeline-executions/:id`
+**Pipelines:** `GET /pipelines`, `GET /pipelines/:name`, `GET /pipelines/:name/json`, `POST /pipelines/:name`, `DELETE /pipelines/:name`, `POST /pipelines/:name/execute`, `GET /pipeline-executions`, `GET /pipeline-executions/:id`, `GET /pipelines/:name/versions`, `GET /pipelines/:name/versions/:v`, `DELETE /pipelines/:name/versions/:v`, `POST /pipelines/:name/versions/:v/restore`
 
 **LLM Providers:** `GET /providers`, `GET /providers/models`, `GET /providers/:id`, `POST /providers`, `PUT /providers/:id`, `DELETE /providers/:id`, `POST /providers/:id/test`
 
@@ -601,7 +619,7 @@ In production (`NODE_ENV=production`), the server **refuses to start** without `
 ```
 Claude Code ──MCP──> MCP Server (28 tools) ──> Executor ──> claude --print / HTTP providers
 Browser     ──HTTP──> REST+SSE (:4242)      ──> Queue    ──> SQLite (checkpoints, state, vectors)
-React UI    ──HTTP──> 84 endpoints          ──> Scheduler ──> Cron jobs
+React UI    ──HTTP──> 95 endpoints          ──> Scheduler ──> Cron jobs
                                             ──> BLOB     ──> Knowledge Graph
                                             ──> Providers ──> OpenRouter / OpenAI / Custom
 ```
@@ -689,7 +707,7 @@ See [BENCHMARKS.md](BENCHMARKS.md) for real execution results with actual token 
 
 ## Tests
 
-1735 tests across 47 files:
+1777 tests across 49 files:
 
 ```bash
 cd mcp-server && npm test

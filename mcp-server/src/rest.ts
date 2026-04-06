@@ -2155,75 +2155,95 @@ app.post("/knowledge/extract", async (req, res) => {
 });
 
 // ─── Workflow Chat — two-stage conversational chain builder ────────────────
-import { runStepWithRetry } from "./claude-runner.js";
+import { runStepWithRetry, runClaude as runClaudeForWfChat } from "./claude-runner.js";
 
 app.post("/workflow-chat", async (req: Request, res: Response) => {
-  const { stage, message, context, systemPrompt, model } = req.body as {
+  const { stage, message, context, systemPrompt, model, canvasContext } = req.body as {
     stage: "chat" | "plan";
     message: string;
     context?: Array<{ role: string; content: string }>;
     systemPrompt?: string;
     model?: string;
+    canvasContext?: string;
   };
 
   if (!stage || !message) {
     return res.status(400).json({ error: "stage and message required" });
   }
 
-  try {
-    // Build full prompt from context
-    const contextStr = (context ?? [])
-      .map((m) => `[${m.role}]: ${m.content}`)
-      .join("\n\n");
-    const fullPrompt = contextStr
-      ? `${contextStr}\n\n[user]: ${message}`
-      : message;
+  const contextStr = (context ?? []).map((m) => `[${m.role}]: ${m.content}`).join("\n\n");
+  const fullPrompt = contextStr ? `${contextStr}\n\n[user]: ${message}` : message;
 
-    const step = {
-      id: `_wf_${stage}`,
-      prompt: "",
-      output_var: "_wf_out",
-      model: model ?? (stage === "chat" ? "claude-haiku-4-5" : "claude-sonnet-4-6"),
-      tools: [] as string[],
-    };
+  const sysPrompt = systemPrompt
+    ? `${systemPrompt}\n\nRespond based on the conversation above.`
+    : (stage === "chat"
+      ? "You are a helpful workflow architect AI. Help the user design their chain."
+      : "You are a chain planner. Output ONLY valid JSON."
+    );
 
-    const sysPrompt = systemPrompt
-      ? `${systemPrompt}\n\nRespond based on the conversation above.`
-      : (stage === "chat"
-        ? "You are a helpful workflow architect AI. Help the user design their chain."
-        : "You are a chain planner. Output ONLY valid JSON."
+  const step = {
+    id: `_wf_${stage}`,
+    prompt: "",
+    output_var: "_wf_out",
+    model: model ?? (stage === "chat" ? "claude-haiku-4-5" : "claude-sonnet-4-6"),
+    tools: [] as string[],
+  };
+
+  // ── Chat stage: SSE streaming ──────────────────────────────────
+  if (stage === "chat") {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    try {
+      let fullOutput = "";
+      const result = await runClaudeForWfChat(
+        `${sysPrompt}\n\n---\n\n${fullPrompt}`,
+        step as any,
+        (chunk: string) => {
+          fullOutput += chunk;
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: chunk })}\n\n`);
+          if (typeof (res as any).flush === "function") (res as any).flush();
+        },
+        `wf-chat-${Date.now()}`,
       );
+      res.write(`data: ${JSON.stringify({ type: "done", text: fullOutput, inputTokens: result.inputTokens ?? 0, outputTokens: result.outputTokens ?? 0 })}\n\n`);
+      res.end();
+    } catch (err) {
+      res.write(`data: ${JSON.stringify({ type: "error", error: safeErrorMessage(err) })}\n\n`);
+      res.end();
+    }
+    return;
+  }
+
+  // ── Plan stage: JSON response (inject canvas context) ──────────
+  try {
+    let enrichedSysPrompt = sysPrompt;
+    if (canvasContext && !canvasContext.startsWith("Empty canvas")) {
+      enrichedSysPrompt += `\n\n## Current Canvas State\n${canvasContext}\n\nIMPORTANT: Build on top of existing steps. Do NOT recreate steps that already exist. Use depends_on to wire new steps to existing ones using their exact labels.`;
+    }
 
     const result = await runStepWithRetry(
       step,
-      `${sysPrompt}\n\n---\n\n${fullPrompt}`,
-      () => {}, // no streaming needed
-      `wf-${stage}-${Date.now()}`,
+      `${enrichedSysPrompt}\n\n---\n\n${fullPrompt}`,
+      () => {},
+      `wf-plan-${Date.now()}`,
       (msg: string, level: "info" | "warn" | "error") => logger[level]("workflow-chat", msg),
     );
 
-    if (stage === "plan") {
-      // Parse JSON from response
-      const jsonMatch = result.stdout.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          const plan = JSON.parse(jsonMatch[0]);
-          return res.json(plan);
-        } catch {
-          return res.json({ directResponse: "Could not parse plan JSON", raw: result.stdout });
-        }
+    const jsonMatch = result.stdout.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        return res.json(JSON.parse(jsonMatch[0]));
+      } catch {
+        return res.json({ directResponse: "Could not parse plan JSON", raw: result.stdout });
       }
-      return res.json({ directResponse: result.stdout });
     }
-
-    // Chat stage — return text response
-    res.json({
-      text: result.stdout,
-      inputTokens: result.inputTokens ?? 0,
-      outputTokens: result.outputTokens ?? 0,
-    });
+    res.json({ directResponse: result.stdout });
   } catch (err) {
-    logger.error("workflow-chat", `${stage} failed`, { error: safeErrorMessage(err) });
+    logger.error("workflow-chat", `plan failed`, { error: safeErrorMessage(err) });
     res.status(500).json({ error: safeErrorMessage(err) });
   }
 });

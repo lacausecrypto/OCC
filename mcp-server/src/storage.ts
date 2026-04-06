@@ -88,6 +88,33 @@ export function initStorage(): void {
     }
   }
 
+  // ─── Chain/Pipeline version history ───────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chain_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL DEFAULT 'chain',
+      entity_name TEXT NOT NULL,
+      version_number INTEGER NOT NULL,
+      yaml_content TEXT NOT NULL,
+      message TEXT,
+      step_count INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(entity_type, entity_name, version_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cv_entity ON chain_versions(entity_type, entity_name, version_number DESC);
+  `);
+
+  // Purge old versions (keep last N per entity)
+  const maxVersions = Number(process.env.VERSION_MAX_COUNT) || 100;
+  db.prepare(`
+    DELETE FROM chain_versions WHERE id IN (
+      SELECT cv.id FROM chain_versions cv
+      WHERE (SELECT COUNT(*) FROM chain_versions cv2
+             WHERE cv2.entity_type = cv.entity_type AND cv2.entity_name = cv.entity_name
+             AND cv2.version_number > cv.version_number) >= ?
+    )
+  `).run(maxVersions);
+
   // Migrate: fix orphaned running executions from previous crash
   db.prepare(`
     UPDATE executions SET status = 'error', error = 'Interrupted — server restarted', finished_at = datetime('now')
@@ -313,6 +340,126 @@ export function getChainStats(chainName: string): {
       output: tokens.total_output || 0,
     },
   };
+}
+
+// ─── Version history CRUD ──────────────────────────────────────────────────
+
+export interface VersionMeta {
+  id: number;
+  versionNumber: number;
+  message: string | null;
+  stepCount: number | null;
+  createdAt: string;
+  yamlSize: number;
+}
+
+export interface VersionFull extends VersionMeta {
+  yamlContent: string;
+}
+
+export function createVersion(
+  entityType: "chain" | "pipeline",
+  entityName: string,
+  yamlContent: string,
+  message?: string | null,
+  stepCount?: number,
+): VersionMeta {
+  // Deduplicate: skip if identical to latest version
+  const latest = db.prepare(
+    `SELECT version_number, yaml_content, id, message FROM chain_versions WHERE entity_type = ? AND entity_name = ? ORDER BY version_number DESC LIMIT 1`
+  ).get(entityType, entityName) as { version_number: number; yaml_content: string; id: number; message: string | null } | undefined;
+
+  if (latest && latest.yaml_content === yamlContent) {
+    // Update message if provided on an otherwise-duplicate save
+    if (message && !latest.message) {
+      db.prepare(`UPDATE chain_versions SET message = ? WHERE id = ?`).run(message, latest.id);
+    }
+    return {
+      id: latest.id,
+      versionNumber: latest.version_number,
+      message: message ?? latest.message,
+      stepCount: stepCount ?? null,
+      createdAt: new Date().toISOString(),
+      yamlSize: yamlContent.length,
+    };
+  }
+
+  const nextVersion = (latest?.version_number ?? 0) + 1;
+  const result = db.prepare(
+    `INSERT INTO chain_versions (entity_type, entity_name, version_number, yaml_content, message, step_count) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(entityType, entityName, nextVersion, yamlContent, message ?? null, stepCount ?? null);
+
+  return {
+    id: Number(result.lastInsertRowid),
+    versionNumber: nextVersion,
+    message: message ?? null,
+    stepCount: stepCount ?? null,
+    createdAt: new Date().toISOString(),
+    yamlSize: yamlContent.length,
+  };
+}
+
+export function listVersions(
+  entityType: "chain" | "pipeline",
+  entityName: string,
+  limit = 50,
+  offset = 0,
+): VersionMeta[] {
+  const rows = db.prepare(
+    `SELECT id, version_number, message, step_count, created_at, LENGTH(yaml_content) as yaml_size
+     FROM chain_versions WHERE entity_type = ? AND entity_name = ?
+     ORDER BY version_number DESC LIMIT ? OFFSET ?`
+  ).all(entityType, entityName, limit, offset) as Array<Record<string, unknown>>;
+
+  return rows.map((r) => ({
+    id: r.id as number,
+    versionNumber: r.version_number as number,
+    message: r.message as string | null,
+    stepCount: r.step_count as number | null,
+    createdAt: r.created_at as string,
+    yamlSize: r.yaml_size as number,
+  }));
+}
+
+export function getVersion(
+  entityType: "chain" | "pipeline",
+  entityName: string,
+  versionNumber: number,
+): VersionFull | null {
+  const row = db.prepare(
+    `SELECT * FROM chain_versions WHERE entity_type = ? AND entity_name = ? AND version_number = ?`
+  ).get(entityType, entityName, versionNumber) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    id: row.id as number,
+    versionNumber: row.version_number as number,
+    message: row.message as string | null,
+    stepCount: row.step_count as number | null,
+    createdAt: row.created_at as string,
+    yamlSize: (row.yaml_content as string).length,
+    yamlContent: row.yaml_content as string,
+  };
+}
+
+export function deleteVersion(
+  entityType: "chain" | "pipeline",
+  entityName: string,
+  versionNumber: number,
+): boolean {
+  const result = db.prepare(
+    `DELETE FROM chain_versions WHERE entity_type = ? AND entity_name = ? AND version_number = ?`
+  ).run(entityType, entityName, versionNumber);
+  return result.changes > 0;
+}
+
+export function countVersions(
+  entityType: "chain" | "pipeline",
+  entityName: string,
+): number {
+  const row = db.prepare(
+    `SELECT COUNT(*) as cnt FROM chain_versions WHERE entity_type = ? AND entity_name = ?`
+  ).get(entityType, entityName) as { cnt: number };
+  return row?.cnt ?? 0;
 }
 
 export function closeStorage(): void {

@@ -4,6 +4,7 @@
  */
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import { useBlobStore } from "../../stores/blob";
+import { useShortcutStore } from "../../stores/shortcuts";
 import { renderBlobCanvas, blobNodeAt, tickPhysics } from "./blobRenderer";
 import type { BlobNode } from "../../types/blob";
 import { BlobSessionManager } from "./BlobSessionManager";
@@ -424,6 +425,36 @@ export function BlobCanvas() {
     }, 15_000);
     return () => clearInterval(timer);
   }, [activeSessionId]);
+
+  // ─── Keyboard shortcuts ──────────────────────────────────────
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const inInput = ["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName);
+      const { matches } = useShortcutStore.getState();
+
+      if (matches(e, "blob.closeAll")) {
+        setShowGitGraph(false);
+        setShowKnowledge(false);
+        setShowPromptEditor(false);
+        setSelectedNode(null);
+        (document.activeElement as HTMLElement)?.blur();
+        return;
+      }
+
+      if (inInput) return;
+
+      if (matches(e, "blob.gitGraph")) { setShowGitGraph(v => !v); setShowKnowledge(false); setShowPromptEditor(false); setSelectedNode(null); }
+      if (matches(e, "blob.knowledge")) { setShowKnowledge(v => !v); setShowGitGraph(false); setShowPromptEditor(false); setSelectedNode(null); }
+      if (matches(e, "blob.promptEditor")) { setShowPromptEditor(v => !v); setShowGitGraph(false); setShowKnowledge(false); setSelectedNode(null); }
+      if (matches(e, "blob.focusChat")) {
+        e.preventDefault();
+        const chatInput = document.querySelector('[data-chat-input]') as HTMLInputElement;
+        chatInput?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // ─── Save on tab visibility change (user switches tab/minimizes) ──
   useEffect(() => {
@@ -909,6 +940,7 @@ export function BlobCanvas() {
               >{"\u270E"}</button>
               <input
                 className={styles.chatInput}
+                data-chat-input
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}

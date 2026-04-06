@@ -353,7 +353,7 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
           background: "var(--glass-tint-subtle)",
         }}>
           <div style={{
-            padding: "8px 8px 5px", display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "12px 10px 6px", display: "flex", alignItems: "center", justifyContent: "space-between",
             borderBottom: "1px solid var(--glass-border)",
           }}>
             <span style={{ fontSize: 9, fontWeight: 700, color: "var(--m-text2)", letterSpacing: 0.5, textTransform: "uppercase" }}>
@@ -406,7 +406,7 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", gap: 6,
-        padding: "10px 12px",
+        padding: "14px 12px 10px",
         borderBottom: "1px solid var(--glass-border)",
         flexShrink: 0,
       }}>

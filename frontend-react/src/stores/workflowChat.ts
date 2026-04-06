@@ -324,7 +324,10 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
     idx.push(session);
     saveIndex(idx);
     saveActiveForContext(contextKey, newId);
-    set({ activeSessionId: newId, messages: [], input: "" });
+    // If no prior session existed, keep orphan messages (don't erase what the user typed)
+    const newMessages = activeSessionId ? [] : messages;
+    set({ activeSessionId: newId, messages: newMessages, input: "" });
+    if (newMessages.length > 0) saveMessages(newId, newMessages);
   },
 
   renameSession: (sessionId: string, name: string) => {
@@ -352,9 +355,15 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
   getSessionsForContext: () => getSessionsForContext(get().contextKey),
 
   sendMessage: async () => {
-    const { input, messages, chatModel, plannerModel, chatSystemPrompt, plannerSystemPrompt } = get();
+    const { input, chatModel, plannerModel, chatSystemPrompt, plannerSystemPrompt } = get();
     const text = input.trim();
     if (!text || get().streaming) return;
+
+    // Ensure we have an active session before sending anything
+    if (!get().activeSessionId) {
+      get().createSession();
+    }
+    const messages = get().messages;
 
     const userMsg: WFMessage = {
       id: uid(), role: "user", content: text,
@@ -537,6 +546,18 @@ useAppStore.subscribe((state) => {
     useWorkflowChatStore.getState().setContextKey(key);
   }
 });
+
+// Initialize: resolve context + create default session on module load
+// (subscribe only fires on *changes*, not on initial state)
+(() => {
+  const appState = useAppStore.getState();
+  const initKey = appState.pipelineName
+    ? `pipeline:${appState.pipelineName}`
+    : appState.canvasChainName
+      ? `chain:${appState.canvasChainName}`
+      : "_new";
+  useWorkflowChatStore.getState().setContextKey(initKey);
+})();
 
 // Auto-save messages on every change
 useWorkflowChatStore.subscribe((state) => {

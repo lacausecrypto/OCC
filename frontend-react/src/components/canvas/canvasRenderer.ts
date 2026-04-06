@@ -391,9 +391,9 @@ function drawExecOverlay(
   n: CanvasNode,
   state: NodeExecState,
   color: string,
-  textColor: string,
-  text2Color: string,
-  borderColor: string,
+  _textColor: string,
+  _text2Color: string,
+  _borderColor: string,
   fontFamily: string,
   monoFamily: string,
 ): void {

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useCanvasStore } from "../../stores/canvas";
+import { useAnnotationStore } from "../../stores/annotations";
+import { useShortcutStore } from "../../stores/shortcuts";
 import { screenToCanvas, nodeAt, computeZoomToFit } from "./canvasRenderer";
+import type { CanvasNode, CanvasEdge } from "../../types/canvas";
+
+// Module-level clipboard (avoids re-renders)
+let clipboard: { nodes: CanvasNode[]; edges: CanvasEdge[] } | null = null;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -211,30 +217,165 @@ export function useCanvasInteractions(
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       // Don't capture if focused on input/textarea
-      if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName)) return;
+      const tagName = (e.target as HTMLElement)?.tagName;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tagName)) return;
 
-      if (e.key === " ") {
+      const { matches } = useShortcutStore.getState();
+
+      if (matches(e, "canvas.pan")) {
         e.preventDefault();
         spaceRef.current = true;
       }
-      if (e.key === "Delete" || e.key === "Backspace") {
+      if (matches(e, "canvas.delete")) {
         useCanvasStore.getState().removeSelected();
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "a") {
+      if (matches(e, "canvas.selectAll")) {
         e.preventDefault();
         const ids = [...useCanvasStore.getState().nodes.keys()];
         useCanvasStore.setState({ selection: new Set(ids) });
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+
+      // Redo: must be checked BEFORE Undo (redo has shift, undo doesn't)
+      if (matches(e, "canvas.redo")) {
+        e.preventDefault();
+        useCanvasStore.getState().popRedo();
+      } else if (matches(e, "canvas.undo")) {
         e.preventDefault();
         useCanvasStore.getState().popUndo();
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+
+      if (matches(e, "canvas.save")) {
         e.preventDefault();
         // Dispatch custom event for save — handled by CanvasEditor
         window.dispatchEvent(new CustomEvent("occ-canvas-save"));
       }
-      if (e.key === "Escape") {
+
+      // Duplicate
+      if (matches(e, "canvas.duplicate")) {
+        e.preventDefault();
+        const state = useCanvasStore.getState();
+        const sel = state.selection;
+        if (sel.size === 0) return;
+
+        state.pushUndo();
+
+        const oldToNew = new Map<string, string>();
+        const newNodes: CanvasNode[] = [];
+        let i = 0;
+        for (const id of sel) {
+          const node = state.nodes.get(id);
+          if (!node) continue;
+          const newId = `s${Date.now()}_${i}`;
+          oldToNew.set(id, newId);
+          newNodes.push({ ...node, id: newId, x: node.x + 30, y: node.y + 30 });
+          i++;
+        }
+
+        // Duplicate edges between selected nodes
+        const newEdges: CanvasEdge[] = [];
+        for (const edge of state.edges.values()) {
+          if (oldToNew.has(edge.from) && oldToNew.has(edge.to)) {
+            newEdges.push({
+              id: `e${Date.now()}_${newEdges.length}`,
+              from: oldToNew.get(edge.from)!,
+              to: oldToNew.get(edge.to)!,
+            });
+          }
+        }
+
+        for (const n of newNodes) state.addNode(n);
+        for (const ed of newEdges) state.addEdge(ed);
+        useCanvasStore.setState({ selection: new Set(newNodes.map((n) => n.id)) });
+      }
+
+      // Copy
+      if (matches(e, "canvas.copy")) {
+        const state = useCanvasStore.getState();
+        const sel = state.selection;
+        if (sel.size === 0) return;
+
+        const nodes: CanvasNode[] = [];
+        for (const id of sel) {
+          const node = state.nodes.get(id);
+          if (node) nodes.push({ ...node });
+        }
+        const selSet = sel;
+        const edges: CanvasEdge[] = [];
+        for (const edge of state.edges.values()) {
+          if (selSet.has(edge.from) && selSet.has(edge.to)) {
+            edges.push({ ...edge });
+          }
+        }
+        clipboard = { nodes, edges };
+      }
+
+      // Paste
+      if (matches(e, "canvas.paste")) {
+        // Don't interfere with annotation image paste
+        if (useAnnotationStore.getState().activeTool !== "none") return;
+        if (!clipboard || clipboard.nodes.length === 0) return;
+
+        e.preventDefault();
+        const state = useCanvasStore.getState();
+        state.pushUndo();
+
+        const oldToNew = new Map<string, string>();
+        const newNodes: CanvasNode[] = [];
+        let i = 0;
+        for (const node of clipboard.nodes) {
+          const newId = `s${Date.now()}_${i}`;
+          oldToNew.set(node.id, newId);
+          newNodes.push({ ...node, id: newId, x: node.x + 40, y: node.y + 40 });
+          i++;
+        }
+
+        const newEdges: CanvasEdge[] = [];
+        for (const edge of clipboard.edges) {
+          const newFrom = oldToNew.get(edge.from);
+          const newTo = oldToNew.get(edge.to);
+          if (newFrom && newTo) {
+            newEdges.push({
+              id: `e${Date.now()}_${newEdges.length}`,
+              from: newFrom,
+              to: newTo,
+            });
+          }
+        }
+
+        for (const n of newNodes) state.addNode(n);
+        for (const ed of newEdges) state.addEdge(ed);
+        useCanvasStore.setState({ selection: new Set(newNodes.map((n) => n.id)) });
+      }
+
+      // Zoom in
+      if (matches(e, "canvas.zoomIn")) {
+        e.preventDefault();
+        const state = useCanvasStore.getState();
+        const newZoom = clamp(state.camera.zoom * 1.4, 0.15, 5);
+        useCanvasStore.setState({ camera: { ...state.camera, zoom: newZoom } });
+      }
+
+      // Zoom out
+      if (matches(e, "canvas.zoomOut")) {
+        e.preventDefault();
+        const state = useCanvasStore.getState();
+        const newZoom = clamp(state.camera.zoom * 0.7, 0.15, 5);
+        useCanvasStore.setState({ camera: { ...state.camera, zoom: newZoom } });
+      }
+
+      // Zoom to fit
+      if (matches(e, "canvas.zoomFit")) {
+        e.preventDefault();
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const parentW = canvas.parentElement?.clientWidth ?? 800;
+        const parentH = canvas.parentElement?.clientHeight ?? 600;
+        const state = useCanvasStore.getState();
+        const cam = computeZoomToFit(state.nodes, parentW, parentH);
+        useCanvasStore.setState({ camera: cam });
+      }
+
+      if (matches(e, "canvas.deselect")) {
         useCanvasStore.setState({ selection: new Set() });
       }
     };
@@ -249,7 +390,7 @@ export function useCanvasInteractions(
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, []);
+  }, [canvasRef]);
 
   // ─── Zoom controls ────────────────────────────────────────────
   const zoomIn = useCallback(() => {

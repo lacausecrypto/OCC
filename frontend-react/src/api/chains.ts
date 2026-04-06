@@ -41,13 +41,15 @@ export async function fetchChainJson(
   return res.json() as Promise<ChainDefinition>;
 }
 
-/** Save (create or update) a chain */
+/** Save (create or update) a chain — auto-creates a version */
 export function saveChain(
   name: string,
   yaml: string,
+  versionMessage?: string,
 ): Promise<{ ok: boolean }> {
   return api.post<{ ok: boolean }>(`/chains/${encodeURIComponent(name)}`, {
     yaml,
+    versionMessage,
   });
 }
 

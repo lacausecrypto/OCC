@@ -884,6 +884,45 @@
 }
 
 /* ─── Empty state card ─── */
+/* ─── Keyboard shortcut editor ─── */
+.shortcutKey {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-family: var(--m-font-mono, monospace);
+  font-weight: 600;
+  color: var(--m-text);
+  background: var(--glass-tint-subtle, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--m-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 40px;
+  text-align: center;
+  flex-shrink: 0;
+  letter-spacing: 0.5px;
+}
+.shortcutKey:hover {
+  border-color: var(--m-accent);
+  background: rgba(var(--m-accent-rgb), 0.08);
+  color: var(--m-accent);
+}
+.shortcutCapture {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--m-accent);
+  background: rgba(var(--m-accent-rgb), 0.08);
+  border: 1px dashed var(--m-accent);
+  border-radius: 6px;
+  animation: pulse 1s ease-in-out infinite;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 .emptyCard {
   padding: 28px 16px;
   text-align: center;

@@ -6,6 +6,7 @@ import { DesignSidebar } from "../sidebar";
 import { MonitorSidebar } from "../monitor";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { useAppStore } from "../../stores/app";
+import { useShortcutStore } from "../../stores/shortcuts";
 
 const Dashboard = lazy(() => import("../dashboard/Dashboard").then((m) => ({ default: m.Dashboard })));
 const CanvasEditor = lazy(() => import("../canvas/CanvasEditor").then((m) => ({ default: m.CanvasEditor })));
@@ -42,12 +43,13 @@ export function AppLayout() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName)) return;
-      if (e.key === "1" && !e.metaKey && !e.ctrlKey) setActiveTab("dashboard");
-      if (e.key === "2" && !e.metaKey && !e.ctrlKey) setActiveTab("canvas");
-      if (e.key === "3" && !e.metaKey && !e.ctrlKey) setActiveTab("blob");
-      if (e.key === "4" && !e.metaKey && !e.ctrlKey) setActiveTab("settings");
-      if (e.key === "[" && !e.metaKey && !e.ctrlKey) setLeftCollapsed((v) => !v);
-      if (e.key === "]" && !e.metaKey && !e.ctrlKey) setRightCollapsed((v) => !v);
+      const { matches } = useShortcutStore.getState();
+      if (matches(e, "nav.dashboard")) setActiveTab("dashboard");
+      if (matches(e, "nav.workflow")) setActiveTab("canvas");
+      if (matches(e, "nav.blob")) setActiveTab("blob");
+      if (matches(e, "nav.settings")) setActiveTab("settings");
+      if (matches(e, "nav.toggleDesign")) setLeftCollapsed((v) => !v);
+      if (matches(e, "nav.toggleMonitor")) setRightCollapsed((v) => !v);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
