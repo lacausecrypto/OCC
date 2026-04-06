@@ -551,20 +551,24 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // ─── Start execution tracking ────────────────────────────────
   startExecution: async (executionId, name, type) => {
-    // Auto-connect SSE
+    // Auto-connect SSE FIRST — events may arrive immediately
     const monitorState = useMonitorStore.getState();
     if (monitorState.sseStatus !== "connected") {
       monitorState.connect("/events");
     }
 
-    // Load chain/pipeline FIRST (await it), THEN set execution tracking
+    // Set execution ID BEFORE loading canvas — SSE events arriving during
+    // loadChainToCanvas would be dropped if canvasExecId is null
+    useCanvasExecStore.getState().setCanvasExecId(executionId);
+
+    // Load chain/pipeline (builds stepToNodeMap)
     if (type === "chain") {
       await get().loadChainToCanvas(name);
     } else {
       await get().loadPipelineToCanvas(name);
     }
 
-    // Now canvas has nodes — set execution ID so SSE events get processed
+    // Re-set execution ID (loadChainToCanvas calls clearExecState which nulls it)
     useCanvasExecStore.getState().setCanvasExecId(executionId);
   },
 

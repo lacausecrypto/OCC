@@ -160,6 +160,7 @@ export const useCanvasExecStore = create<CanvasExecState>((set, get) => ({
     set({
       nodeExecState: new Map(),
       canvasExecId: null,
+      stepToNodeMap: new Map(),
     }),
 
   setCanvasExecId: (id) => set({ canvasExecId: id }),
