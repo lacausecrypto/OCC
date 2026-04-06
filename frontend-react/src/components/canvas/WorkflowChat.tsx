@@ -4,7 +4,7 @@
  * Configurable prompts, models, and animated Unicode loader.
  */
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useWorkflowChatStore, type WFMessage } from "../../stores/workflowChat";
+import { useWorkflowChatStore, type WFMessage, type WFSession } from "../../stores/workflowChat";
 
 // ─── Unicode Thinking Loader ─────────────────────────────────────────────────
 
@@ -201,7 +201,7 @@ function MessageBubble({ msg }: { msg: WFMessage }) {
           borderBottomLeftRadius: 4,
         }),
       }}>
-        {msg.content}
+        {msg.content.replace(/\s*\[READY_TO_BUILD\]\s*/g, "").trim()}
       </div>
       <div style={{
         fontSize: 9, color: "var(--m-text2)", marginTop: 2,
@@ -221,11 +221,24 @@ function MessageBubble({ msg }: { msg: WFMessage }) {
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
+// ─── Format context key for display ──────────────────────────────────────────
+
+function formatContextKey(k: string): { label: string; badge: string } {
+  if (k.startsWith("chain:")) return { label: k.slice(6), badge: "chain" };
+  if (k.startsWith("pipeline:")) return { label: k.slice(9), badge: "pipeline" };
+  if (k.startsWith("new-chain:")) return { label: "Untitled", badge: "new" };
+  return { label: "General", badge: "" };
+}
+
+// ─── Main component ──────────────────────────────────────────────────────────
+
 export function WorkflowChat({ onClose }: { onClose?: () => void }) {
   const {
-    messages, input, streaming, thinkingStartedAt, configOpen,
+    messages, input, streaming, thinkingStartedAt, configOpen, contextKey, activeSessionId,
     setInput, setConfigOpen, sendMessage, clearMessages,
+    switchSession, createSession, renameSession, deleteSession, getSessionsForContext,
   } = useWorkflowChatStore();
+  const [sessionsOpen, setSessionsOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -259,51 +272,116 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
     }
   }, [handleSend]);
 
+  const sessions = getSessionsForContext();
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const ctx = formatContextKey(contextKey);
+
   return (
-    <div style={{
-      display: "flex", flexDirection: "column", height: "100%",
-      position: "relative", overflow: "hidden",
-    }}>
-      {/* Config overlay */}
+    <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
+      {/* Session sidebar */}
+      {sessionsOpen && (
+        <div style={{
+          width: 130, flexShrink: 0, display: "flex", flexDirection: "column",
+          borderRight: "1px solid var(--glass-border, rgba(255,255,255,0.06))",
+          background: "rgba(0,0,0,0.12)",
+        }}>
+          <div style={{
+            padding: "8px 8px 5px", display: "flex", alignItems: "center", justifyContent: "space-between",
+            borderBottom: "1px solid var(--glass-border, rgba(255,255,255,0.06))",
+          }}>
+            <span style={{ fontSize: 9, fontWeight: 700, color: "var(--m-text2)", letterSpacing: 0.5, textTransform: "uppercase" }}>
+              {ctx.label}
+            </span>
+            <button onClick={() => createSession()} title="New session"
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--m-accent)", fontSize: 12, padding: 0 }}>
+              +
+            </button>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", padding: 3 }}>
+            {sessions.map((s) => {
+              const active = s.id === activeSessionId;
+              return (
+                <div key={s.id} style={{
+                  padding: "5px 6px", borderRadius: 5, cursor: "pointer", marginBottom: 1,
+                  background: active ? "rgba(10,132,255,0.1)" : "transparent",
+                  borderLeft: active ? "2px solid var(--m-accent)" : "2px solid transparent",
+                  display: "flex", alignItems: "center", gap: 4,
+                }}
+                  onClick={() => switchSession(s.id)}
+                  onDoubleClick={() => {
+                    const n = prompt("Rename:", s.name);
+                    if (n !== null && n.trim()) renameSession(s.id, n);
+                  }}
+                  title="Click: switch · Double-click: rename"
+                >
+                  <span style={{
+                    flex: 1, fontSize: 10, fontWeight: active ? 600 : 400,
+                    color: active ? "var(--m-accent)" : "var(--m-text)",
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>{s.name}</span>
+                  {!active && sessions.length > 1 && (
+                    <button onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--m-text2)", fontSize: 8, padding: 0, opacity: 0.3 }}>
+                      {"\u2715"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Chat column */}
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, position: "relative", overflow: "hidden" }}>
       {configOpen && <ConfigPanel allModels={allModels} />}
 
-      {/* Header — glass */}
+      {/* Header */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 8,
-        padding: "8px 12px",
+        display: "flex", alignItems: "center", gap: 6,
+        padding: "10px 12px",
         borderBottom: "1px solid var(--glass-border, rgba(255,255,255,0.06))",
         flexShrink: 0,
       }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--m-text)", flex: 1 }}>
-          {"\u2728"} Workflow Chat
-        </span>
-        <button onClick={() => setConfigOpen(true)} title="Configure prompts & models"
+        {/* Session info */}
+        <button onClick={() => setSessionsOpen(!sessionsOpen)} title="Sessions"
           style={{
-            background: "rgba(255,255,255,0.06)", border: "1px solid var(--glass-border, rgba(255,255,255,0.06))",
-            borderRadius: 6, padding: "2px 7px", fontSize: 10, cursor: "pointer",
-            color: "var(--m-text2)",
+            background: "none", border: "none", cursor: "pointer", padding: 0,
+            display: "flex", alignItems: "center", gap: 5, flex: 1, minWidth: 0,
+            color: "var(--m-text)",
           }}>
-          {"\u2699"}
+          <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: -0.2 }}>
+            {activeSession?.name ?? "Chat"}
+          </span>
+          <svg width="8" height="8" viewBox="0 0 8 8" style={{ flexShrink: 0, opacity: 0.4 }}>
+            <polyline points={sessionsOpen ? "1,5 4,2 7,5" : "1,3 4,6 7,3"} fill="none" stroke="currentColor" strokeWidth="1.2" />
+          </svg>
         </button>
-        {messages.length > 0 && (
-          <button onClick={clearMessages} title="Clear"
-            style={{
-              background: "rgba(255,55,95,0.06)", border: "1px solid rgba(255,55,95,0.12)",
-              borderRadius: 6, padding: "2px 7px", fontSize: 10, cursor: "pointer",
-              color: "#ff375f",
-            }}>
-            {"\u2718"}
-          </button>
+
+        {/* Badge */}
+        {ctx.badge && (
+          <span style={{ fontSize: 8, color: "var(--m-text2)", opacity: 0.5, flexShrink: 0 }}>{ctx.badge}</span>
         )}
-        {onClose && (
-          <button onClick={onClose} title="Close"
-            style={{
-              background: "none", border: "none", fontSize: 14, cursor: "pointer",
-              color: "var(--m-text2)", padding: "0 2px", lineHeight: 1,
-            }}>
-            {"\u00D7"}
+
+        {/* Actions */}
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <button onClick={() => setConfigOpen(true)} title="Settings"
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--m-text2)", fontSize: 13, padding: 0, lineHeight: 1 }}>
+            {"\u2699\uFE0F"}
           </button>
-        )}
+          {messages.length > 0 && (
+            <button onClick={clearMessages} title="Clear"
+              style={{ background: "none", border: "none", cursor: "pointer", color: "#ff375f", fontSize: 11, padding: 0, lineHeight: 1, opacity: 0.6 }}>
+              {"\u{1F5D1}"}
+            </button>
+          )}
+          {onClose && (
+            <button onClick={onClose} title="Close"
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--m-text2)", fontSize: 12, padding: 0, lineHeight: 1 }}>
+              {"\u2715"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
@@ -365,6 +443,7 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
         >
           {streaming ? "\u22EF" : "\u2191"}
         </button>
+      </div>
       </div>
     </div>
   );

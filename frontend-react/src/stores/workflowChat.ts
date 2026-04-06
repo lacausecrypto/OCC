@@ -39,15 +39,24 @@ export interface WFPlan {
   directResponse?: string;
 }
 
+export interface WFSession {
+  id: string;
+  contextKey: string; // "chain:deep-researcher", "pipeline:foo", etc.
+  name: string;
+  createdAt: string;
+}
+
 interface WorkflowChatState {
-  // Session isolation — each chain/pipeline/blob gets its own chat history
-  canvasKey: string;
+  // Context = which chain/pipeline is active
+  contextKey: string;
+  // Session = which chat session within this context
+  activeSessionId: string | null;
   messages: WFMessage[];
   input: string;
   streaming: boolean;
   thinkingStartedAt: number | null;
 
-  // Config — editable prompts & models
+  // Config
   chatModel: string;
   plannerModel: string;
   chatSystemPrompt: string;
@@ -63,8 +72,18 @@ interface WorkflowChatState {
   setPlannerSystemPrompt: (v: string) => void;
   sendMessage: () => Promise<void>;
   clearMessages: () => void;
-  /** Switch session — saves current messages, loads target session */
-  setCanvasKey: (key: string) => void;
+  /** Switch chain/pipeline context — auto-selects last session for this context */
+  setContextKey: (key: string) => void;
+  /** Switch to a specific session within current context */
+  switchSession: (sessionId: string) => void;
+  /** Create a new session for current context */
+  createSession: (name?: string) => void;
+  /** Rename a session */
+  renameSession: (sessionId: string, name: string) => void;
+  /** Delete a session */
+  deleteSession: (sessionId: string) => void;
+  /** List sessions for current context */
+  getSessionsForContext: () => WFSession[];
 }
 
 // ─── Default prompts ────────────────────────────────────────────────────────
@@ -120,34 +139,47 @@ Output format:
   ]
 }`;
 
-// ─── Session persistence (localStorage, annotation-style) ──────────────────
+// ─── Multi-session persistence ──────────────────────────────────────────────
+// Storage layout:
+//   occ-wfc-index    → WFSession[]  (all sessions metadata)
+//   occ-wfc-msg-{id} → WFMessage[]  (messages per session)
+//   occ-wfc-active   → { contextKey: sessionId }  (last active session per context)
 
-const WFC_STORAGE_KEY = "occ-wfc-sessions";
+const IDX_KEY = "occ-wfc-index";
+const ACTIVE_KEY = "occ-wfc-active";
 
-function loadMessagesForKey(key: string): WFMessage[] {
+function loadIndex(): WFSession[] {
+  try { return JSON.parse(localStorage.getItem(IDX_KEY) ?? "[]"); } catch { return []; }
+}
+function saveIndex(sessions: WFSession[]): void {
+  try { localStorage.setItem(IDX_KEY, JSON.stringify(sessions)); } catch { /* */ }
+}
+function loadMessages(sessionId: string): WFMessage[] {
+  try { return JSON.parse(localStorage.getItem(`occ-wfc-msg-${sessionId}`) ?? "[]"); } catch { return []; }
+}
+function saveMessages(sessionId: string, messages: WFMessage[]): void {
+  try { localStorage.setItem(`occ-wfc-msg-${sessionId}`, JSON.stringify(messages.slice(-50))); } catch { /* */ }
+}
+function removeMessages(sessionId: string): void {
+  try { localStorage.removeItem(`occ-wfc-msg-${sessionId}`); } catch { /* */ }
+}
+function loadActiveMap(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(ACTIVE_KEY) ?? "{}"); } catch { return {}; }
+}
+function saveActiveForContext(contextKey: string, sessionId: string): void {
   try {
-    const all = JSON.parse(localStorage.getItem(WFC_STORAGE_KEY) ?? "{}");
-    return Array.isArray(all[key]) ? all[key] : [];
-  } catch { return []; }
+    const map = loadActiveMap();
+    map[contextKey] = sessionId;
+    localStorage.setItem(ACTIVE_KEY, JSON.stringify(map));
+  } catch { /* */ }
+}
+function getActiveForContext(contextKey: string): string | null {
+  return loadActiveMap()[contextKey] ?? null;
 }
 
-function saveMessagesForKey(key: string, messages: WFMessage[]): void {
-  try {
-    const all = JSON.parse(localStorage.getItem(WFC_STORAGE_KEY) ?? "{}");
-    if (messages.length > 0) {
-      // Keep only last 50 messages per session to avoid localStorage bloat
-      all[key] = messages.slice(-50);
-    } else {
-      delete all[key];
-    }
-    localStorage.setItem(WFC_STORAGE_KEY, JSON.stringify(all));
-  } catch { /* localStorage full or unavailable */ }
-}
-
-function listSessionKeys(): string[] {
-  try {
-    return Object.keys(JSON.parse(localStorage.getItem(WFC_STORAGE_KEY) ?? "{}"));
-  } catch { return []; }
+// Exported for UI
+export function getSessionsForContext(contextKey: string): WFSession[] {
+  return loadIndex().filter((s) => s.contextKey === contextKey);
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -217,7 +249,8 @@ function shouldTriggerPlan(text: string): boolean {
 // ─── Store ──────────────────────────────────────────────────────────────────
 
 export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
-  canvasKey: "_default",
+  contextKey: "_default",
+  activeSessionId: null,
   messages: [],
   input: "",
   streaming: false,
@@ -236,20 +269,87 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
   setChatSystemPrompt: (v) => set({ chatSystemPrompt: v }),
   setPlannerSystemPrompt: (v) => set({ plannerSystemPrompt: v }),
   clearMessages: () => {
-    const { canvasKey } = get();
+    const { activeSessionId } = get();
     set({ messages: [] });
-    saveMessagesForKey(canvasKey, []);
+    if (activeSessionId) saveMessages(activeSessionId, []);
   },
 
-  setCanvasKey: (key: string) => {
-    const { canvasKey, messages } = get();
-    if (key === canvasKey) return;
-    // Save current session
-    saveMessagesForKey(canvasKey, messages);
-    // Load target session
-    const loaded = loadMessagesForKey(key);
-    set({ canvasKey: key, messages: loaded, input: "" });
+  setContextKey: (key: string) => {
+    const { contextKey, activeSessionId, messages } = get();
+    if (key === contextKey) return;
+    // Save current
+    if (activeSessionId) saveMessages(activeSessionId, messages);
+    // Find last active session for target context, or create one
+    let targetId = getActiveForContext(key);
+    const contextSessions = getSessionsForContext(key);
+    if (!targetId || !contextSessions.some((s) => s.id === targetId)) {
+      if (contextSessions.length > 0) {
+        targetId = contextSessions[0].id;
+      } else {
+        // Auto-create first session
+        const newId = uid();
+        const label = key.startsWith("chain:") ? key.slice(6) : key.startsWith("pipeline:") ? key.slice(9) : "Chat";
+        const session: WFSession = { id: newId, contextKey: key, name: `${label} #1`, createdAt: new Date().toISOString() };
+        const idx = loadIndex();
+        idx.push(session);
+        saveIndex(idx);
+        targetId = newId;
+      }
+    }
+    const loaded = loadMessages(targetId!);
+    saveActiveForContext(key, targetId!);
+    set({ contextKey: key, activeSessionId: targetId, messages: loaded, input: "" });
   },
+
+  switchSession: (sessionId: string) => {
+    const { activeSessionId, messages, contextKey } = get();
+    if (sessionId === activeSessionId) return;
+    if (activeSessionId) saveMessages(activeSessionId, messages);
+    const loaded = loadMessages(sessionId);
+    saveActiveForContext(contextKey, sessionId);
+    set({ activeSessionId: sessionId, messages: loaded, input: "" });
+  },
+
+  createSession: (name?: string) => {
+    const { activeSessionId, messages, contextKey } = get();
+    if (activeSessionId) saveMessages(activeSessionId, messages);
+    const newId = uid();
+    const count = getSessionsForContext(contextKey).length + 1;
+    const label = name || (() => {
+      const base = contextKey.startsWith("chain:") ? contextKey.slice(6) : contextKey.startsWith("pipeline:") ? contextKey.slice(9) : "Chat";
+      return `${base} #${count}`;
+    })();
+    const session: WFSession = { id: newId, contextKey, name: label, createdAt: new Date().toISOString() };
+    const idx = loadIndex();
+    idx.push(session);
+    saveIndex(idx);
+    saveActiveForContext(contextKey, newId);
+    set({ activeSessionId: newId, messages: [], input: "" });
+  },
+
+  renameSession: (sessionId: string, name: string) => {
+    const idx = loadIndex();
+    const s = idx.find((s) => s.id === sessionId);
+    if (s) { s.name = name.trim() || s.name; saveIndex(idx); }
+  },
+
+  deleteSession: (sessionId: string) => {
+    const { activeSessionId, contextKey } = get();
+    const idx = loadIndex().filter((s) => s.id !== sessionId);
+    saveIndex(idx);
+    removeMessages(sessionId);
+    // If deleted the active one, switch to another or create new
+    if (sessionId === activeSessionId) {
+      const remaining = idx.filter((s) => s.contextKey === contextKey);
+      if (remaining.length > 0) {
+        get().switchSession(remaining[0].id);
+      } else {
+        get().createSession();
+      }
+    }
+  },
+
+  getSessionsForContext: () => getSessionsForContext(get().contextKey),
 
   sendMessage: async () => {
     const { input, messages, chatModel, plannerModel, chatSystemPrompt, plannerSystemPrompt } = get();
@@ -425,22 +525,24 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
   },
 }));
 
-// Auto-switch workflow chat session when canvas chain changes
+// Auto-switch context when canvas chain changes
 useAppStore.subscribe((state) => {
   const key = state.pipelineName
     ? `pipeline:${state.pipelineName}`
     : state.canvasChainName
       ? `chain:${state.canvasChainName}`
       : "_new";
-  const current = useWorkflowChatStore.getState().canvasKey;
+  const current = useWorkflowChatStore.getState().contextKey;
   if (key !== current) {
-    useWorkflowChatStore.getState().setCanvasKey(key);
+    useWorkflowChatStore.getState().setContextKey(key);
   }
 });
 
-// Auto-save messages on every change (debounced via subscriber)
+// Auto-save messages on every change
 useWorkflowChatStore.subscribe((state) => {
-  saveMessagesForKey(state.canvasKey, state.messages);
+  if (state.activeSessionId) {
+    saveMessages(state.activeSessionId, state.messages);
+  }
 });
 
 // ─── Apply plan to canvas ───────────────────────────────────────────────────
