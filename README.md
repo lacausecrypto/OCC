@@ -6,8 +6,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
 [![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
 [![Pre--tools](https://img.shields.io/badge/Pre--tools-29%20types-orange)](#pre-tools)
-[![REST](https://img.shields.io/badge/REST%20API-95%20endpoints-green)](#rest-api-95-endpoints)
-[![Tests](https://img.shields.io/badge/Tests-1777%20passed-brightgreen)](#tests)
+[![REST](https://img.shields.io/badge/REST%20API-102%20endpoints-green)](#rest-api-95-endpoints)
+[![Tests](https://img.shields.io/badge/Tests-1789%20passed-brightgreen)](#tests)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](#)
@@ -41,11 +41,11 @@ Done in 47s — 6 steps, 3 parallel
 - [Pipelines](#pipeline-format) — multi-chain orchestration
 - [BLOB Sessions](#blob-sessions) — autonomous exploratory AI
 - [Scheduling](#scheduled-execution) · [Knowledge Graph](#knowledge-graph) · [CLI](#cli)
-- [REST API (95 endpoints)](#rest-api-95-endpoints) — auth, rate limiting
+- [REST API (102 endpoints)](#rest-api-95-endpoints) — auth, rate limiting
 - [Benchmarks](#token-efficiency--benchmarks) — OCC vs Claude CLI
 - [Deployment](#deployment-on-a-vps) · [Security](SECURITY.md) · [Configuration](#configuration)
-- [Example Chains (15)](#example-chains-15-included) · [Pipelines (5)](#example-pipelines-5-included)
-- [Tests (1777)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
+- [Example Chains (16)](#example-chains-15-included) · [Pipelines (5)](#example-pipelines-5-included)
+- [Tests (1789)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
 
 ---
 
@@ -55,14 +55,18 @@ OCC takes a YAML file describing a multi-step task, figures out which steps can 
 
 ### Models
 
-| Engine | Access | MCP Tools | Best For |
-|--------|--------|-----------|----------|
-| **Claude** (CLI) | `claude --print` subprocess | Full access (28 tools) | Default engine, complex reasoning |
-| **OpenRouter** | HTTP API | No | 200+ models (Llama, Gemini, Mistral...) |
-| **OpenAI** | HTTP API | No | GPT-4o, o3-mini |
-| **Groq / Together / Custom** | HTTP API (OpenAI-compat) | No | Fast inference, open-source models |
+| Engine | Access | Tool Use | Best For |
+|--------|--------|----------|----------|
+| **Claude** (CLI) | `claude --print` subprocess | Full MCP (28 native tools) | Default engine, complex reasoning |
+| **OpenRouter** | HTTP API | Agent loop (function calling) | 200+ models (Llama, Gemini, Mistral...) |
+| **OpenAI** | HTTP API | Agent loop (function calling) | GPT-4o, o3-mini |
+| **Ollama** | Local HTTP API | Agent loop (function calling) | Local models, privacy, offline |
+| **HuggingFace** | HTTP API | Agent loop (function calling) | Open-source models, fine-tuned |
+| **Groq / Together / Custom** | HTTP API (OpenAI-compat) | Agent loop (function calling) | Fast inference, open-source models |
 
-You can mix models per step: Haiku for classification, Sonnet for synthesis, GPT-4o for specific tasks, Opus for deep reasoning.
+All providers can use tools (Bash, Read, Write, Glob, Grep, WebSearch, WebFetch) via an agent loop that translates OCC tools to OpenAI function calling format and executes tool calls locally.
+
+You can mix models per step: Haiku for classification, Sonnet for synthesis, GPT-4o for specific tasks, Opus for deep reasoning, Ollama for local/private tasks.
 
 ### Core Engine
 
@@ -83,7 +87,7 @@ You can mix models per step: Haiku for classification, Sonnet for synthesis, GPT
 |-----------|---------|
 | **React frontend** | Canvas chain editor, live SSE monitor, BLOB sessions, workflow chat, design space |
 | **CLI** | 17 commands — run, validate, dry-run, generate, monitor, approve/reject |
-| **REST API** | 95 endpoints with Bearer auth, rate limiting, SSE streaming |
+| **REST API** | 102 endpoints with Bearer auth, rate limiting, SSE streaming |
 | **MCP** | Bidirectional — exposes 28 tools AND consumes external MCP servers |
 | **Docker** | Production-ready (non-root, cap_drop ALL, read-only FS) |
 
@@ -241,8 +245,10 @@ guardrails: [{ type: min_length, value: 500 }]     # Output guardrails
 ### Workflow Chat
 - Conversational chain builder — describe what you want, AI creates canvas nodes
 - **Multi-session per chain** — create, rename, delete, switch sessions (fully isolated)
-- Two-stage AI: fast chat (Haiku) → smart planner (Sonnet) generates nodes
-- Configurable system prompts + LLM models per stage
+- **Agentic actions** — run, stop, debug, analyze, dry-run, and **modify existing steps** from chat
+- Two-stage AI: fast chat → smart planner generates nodes
+- **Configurable per-provider** — choose any LLM provider/model for chat and planner stages
+- **Token tracking** — real-time token usage displayed per message
 - Persisted to localStorage — survives page refresh
 - Animated message flow: slide-in, progress bar, Unicode thinking loader (15 phases)
 
@@ -255,6 +261,9 @@ guardrails: [{ type: min_length, value: 500 }]     # Output guardrails
 ### Other
 - **BLOB Sessions** — autonomous multi-model planning canvas with knowledge graph ([details below](#blob-sessions))
 - **Settings** — providers, MCP servers, schedules, queue, cache, server config (with InfoTips)
+- **Ollama** — pull/manage local models, 1-click "Use in chains" registration, installed model tracking
+- **HuggingFace** — browse 118+ free models, tier filters (Free/PRO), live Hub search, rate limit info
+- **Token Usage Charts** — per-execution and per-step token usage visualization for debugging costs
 - **Design Space** — extract website styles via headless browser (Playwright) for theme blending
 - **Keyboard shortcuts** — configurable keybindings
 
@@ -346,7 +355,7 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject
 
 ---
 
-## REST API (95 endpoints)
+## REST API (102 endpoints)
 
 <details>
 <summary>Full endpoint list</summary>
@@ -367,7 +376,11 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject
 
 **Knowledge:** CRUD + `POST /knowledge/link` + `POST /knowledge/extract`
 
-**Other:** `POST /workflow-chat` · `POST /generate-chain` · `GET /config` · `PUT /config` · `GET /health` · `GET /events` (SSE) · `GET /mcp-servers` · `GET /proxy` · `GET /extract-style`
+**Ollama:** `GET /ollama/status` · `GET /ollama/models` · `POST /ollama/pull` (streaming) · `DELETE /ollama/models/:name`
+
+**HuggingFace:** `GET /huggingface/models` (Hub search) · `GET /huggingface/model/*` · `POST /huggingface/test`
+
+**Other:** `POST /workflow-chat` · `POST /generate-chain` · `GET /config` · `PUT /config` · `GET /health` · `GET /events` (SSE) · `GET /mcp-servers` · `GET /proxy` · `GET /extract-style` · `GET /download` · `GET /cache` · `DELETE /cache`
 
 </details>
 
@@ -400,7 +413,7 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject
 
 ---
 
-## Example Chains (15 included)
+## Example Chains (16 included)
 
 | Chain | Steps | Parallel | Key Features |
 |-------|-------|----------|-------------|
@@ -414,6 +427,7 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject
 | `market-monitor` | 4 | partial | evaluator, conditional |
 | `seo-analyzer` | 9 | 3-way | browser, transform |
 | `data-pipeline-builder` | 12 | 3+2 | debate, subchain |
+| `linkedin-workflow` | 6 | 3-way | state_save, notify, web_search |
 | `quick-summarizer` | 4 | 3-way | http_fetch, merge (benchmark) |
 | `repo-health-check` | 6 | 5-way | bash pre-tools (benchmark) |
 | `multi-lang-translator` | 6 | 5-way | isolation (benchmark) |
@@ -454,7 +468,7 @@ CORS_ORIGIN=https://yourdomain.com
 
 ## Tests
 
-**1777 tests** across 49 files:
+**1789 tests** across 49 files:
 
 ```bash
 cd mcp-server && npm test
@@ -469,7 +483,7 @@ Coverage: REST security · pre-tool execution (SSRF, SQL injection, path travers
 - **Single machine** — no distributed execution. Queue is SQLite, not Redis.
 - **No multi-tenant** — single API key, no per-user isolation.
 - **No built-in TLS** — use nginx/Caddy as reverse proxy.
-- **Non-Claude models** — work via HTTP providers but don't get MCP tool access.
+- **Non-Claude models** — work via HTTP providers with agent loop tool use (Bash, Read, Write, WebSearch, etc.), but don't get MCP native tool access.
 - **Frontend alpha** — canvas editor works but some operations require YAML editing.
 - **Bash pre-tool** — can execute arbitrary commands. Review chain YAML before running untrusted chains.
 - **No undo for side effects** — file writes, webhooks, emails cannot be reversed after execution.

@@ -39,7 +39,7 @@ mcp-server/src/
 
 ```bash
 cd mcp-server
-npm test              # Run all 553 tests
+npm test              # Run all 1789 tests (49 files)
 npm test -- --watch   # Watch mode
 npm test -- loader    # Run specific test file
 ```
