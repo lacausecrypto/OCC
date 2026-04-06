@@ -213,6 +213,19 @@ function detectServerDarkHints(html: string): boolean {
   const bodyTag = html.match(/<body[^>]*>/i)?.[0] || "";
   if (/class\s*=\s*["'][^"']*\bdark\b[^"']*["']/i.test(bodyTag)) return true;
 
+  // Check <meta theme-color> with dark media query — strong signal for dark-first sites
+  // Sites like OpenRouter have both light and dark theme-color; if dark one is very dark, treat as dark
+  const darkThemeColor = html.match(/<meta[^>]*media=["'][^"']*prefers-color-scheme:\s*dark[^"']*["'][^>]*content=["']([^"']+)["']/i)
+    ?? html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*media=["'][^"']*prefers-color-scheme:\s*dark[^"']*["']/i);
+  if (darkThemeColor) {
+    const c = parseColor(darkThemeColor[1]);
+    if (c && c[2] < 15) return true;
+  }
+
+  // Detect heavy Tailwind dark: usage — indicates dark-first design system
+  const darkTailwindCount = (html.match(/dark:/g) || []).length;
+  if (darkTailwindCount > 20) return true;
+
   return false;
 }
 
@@ -337,15 +350,23 @@ export async function extractStyle(url: string): Promise<Record<string, unknown>
   );
 
   // Strategy 1b: <meta name="theme-color"> — very reliable brand signal.
-  // Even if we found an accent from vars, prefer theme-color if the var-accent
-  // looks like a fallback (low saturation or default blue hue).
+  // Prefer the dark variant if site is detected as dark, otherwise use the generic/light one.
   {
-    const themeColor = html.match(/<meta[^>]*name=["']theme-color["'][^>]*content=["']([^"']+)["']/i)
-      ?? html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']theme-color["']/i);
-    if (themeColor) {
-      const c = parseColor(themeColor[1]);
+    // Try to find a non-media-query theme-color first (generic brand color)
+    const genericThemeColor = html.match(/<meta[^>]*name=["']theme-color["'][^>]*content=["']([^"']+)["'][^>]*(?!media)/i)
+      ?? html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']theme-color["'][^>]*(?!media)/i);
+    // Also grab the dark media query theme-color
+    const darkThemeColor = html.match(/<meta[^>]*media=["'][^"']*prefers-color-scheme:\s*dark[^"']*["'][^>]*content=["']([^"']+)["']/i)
+      ?? html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*media=["'][^"']*prefers-color-scheme:\s*dark[^"']*["']/i);
+
+    // Pick the right theme-color based on detected dark mode
+    const themeColorStr = (serverHintsDark && darkThemeColor)
+      ? darkThemeColor[1]
+      : genericThemeColor?.[1] ?? darkThemeColor?.[1];
+
+    if (themeColorStr) {
+      const c = parseColor(themeColorStr);
       if (c && c[1] > 15 && c[2] > 10 && c[2] < 90) {
-        // Use theme-color if we have no accent OR current accent is weak
         if (!accent || accent[1] < 35 || (accent[0] < 5 && accent[1] < 60)) {
           accent = c;
         }
@@ -480,7 +501,7 @@ export async function extractStyle(url: string): Promise<Record<string, unknown>
   // Only use dark vars when server explicitly renders dark (HTML attributes)
   // or when the default bg is already dark.
 
-  const accentIsFallback = !accent || (accent[1] < 25) || (accent[0] < 5 && accent[1] < 60);
+  let accentIsFallback = !accent || (accent[1] < 25) || (accent[0] < 5 && accent[1] < 60);
 
   if (!bg) bg = [0, 0, 95];
   if (!surface) surface = [bg[0], Math.min(bg[1] + 2, 15), Math.max(bg[2] - 5, 5)];
@@ -668,6 +689,32 @@ export async function extractStyle(url: string): Promise<Record<string, unknown>
     faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=256`;
   }
 
+  // ─── Headless browser upgrade for weak extractions ─────────────────────────
+  // If accent is fallback OR dark detection is uncertain, try Playwright for real computed styles
+  if (accentIsFallback) {
+    try {
+      const headlessResult = await extractStyleHeadless(url);
+      if (headlessResult) {
+        if (headlessResult.accent) accent = headlessResult.accent;
+        if (headlessResult.bg) bg = headlessResult.bg;
+        if (headlessResult.text) textColor = headlessResult.text;
+        if (headlessResult.isDark !== undefined) {
+          isDark = headlessResult.isDark;
+          // Re-normalize for the detected theme
+          if (isDark) {
+            bg[2] = Math.min(bg[2], 12); bg[1] = Math.min(bg[1], 20);
+            surface[2] = Math.min(surface[2], 18);
+            if (textColor[2] < 75) textColor[2] = 90;
+          }
+        }
+        accentIsFallback = false;
+        logger.info("style-extractor", `Headless upgrade for ${url}`, { accent: rnd(accent), isDark });
+      }
+    } catch (err) {
+      logger.warn("style-extractor", `Headless extraction failed for ${url}: ${(err as Error).message}`);
+    }
+  }
+
   logger.info("style-extractor", `Extracted style from ${url}`, { isDark, accent: rnd(accent), accentIsFallback });
 
   return {
@@ -679,4 +726,182 @@ export async function extractStyle(url: string): Promise<Record<string, unknown>
     fontFamily, ogImage, faviconUrl, accentIsFallback, isDark,
     name: "Extracted",
   };
+}
+
+// ─── Headless browser extraction (Playwright) ────────────────────────────────
+// Uses a real browser to extract computed styles — handles CSS-in-JS, dark mode, etc.
+
+interface HeadlessResult {
+  bg?: HSL;
+  accent?: HSL;
+  text?: HSL;
+  isDark?: boolean;
+}
+
+async function extractStyleHeadless(url: string): Promise<HeadlessResult | null> {
+  let browser;
+  try {
+    const pw = await import("playwright-core");
+    browser = await pw.chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
+    });
+    const ctx = await browser.newContext({
+      colorScheme: "dark",
+      viewport: { width: 1440, height: 900 },
+      userAgent: UA,
+    });
+    const page = await ctx.newPage();
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
+    await page.waitForTimeout(2000); // Let JS render
+
+    // Extract computed styles from real rendered DOM
+    const result = await page.evaluate(() => {
+      const body = document.body;
+      const html = document.documentElement;
+      if (!body) return null;
+
+      const bodyStyle = getComputedStyle(body);
+      const htmlStyle = getComputedStyle(html);
+
+      // Get actual background color (try body, then html)
+      const bgColor = bodyStyle.backgroundColor !== "rgba(0, 0, 0, 0)"
+        ? bodyStyle.backgroundColor
+        : htmlStyle.backgroundColor;
+      const textColor = bodyStyle.color;
+
+      // ── Helper: parse rgb string to [r,g,b] ──
+      function parseRgb(s: string): [number, number, number] | null {
+        const m = s.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+        return m ? [parseInt(m[1]), parseInt(m[2]), parseInt(m[3])] : null;
+      }
+
+      // ── Helper: compute HSL saturation + lightness from rgb ──
+      function rgbToSL(r: number, g: number, b: number): [number, number, number] {
+        const rn = r / 255, gn = g / 255, bn = b / 255;
+        const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
+        const l = (max + min) / 2;
+        if (max === min) return [0, 0, l * 100];
+        const d = max - min;
+        const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        let h = 0;
+        if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+        else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+        else h = ((rn - gn) / d + 4) / 6;
+        return [h * 360, s * 100, l * 100];
+      }
+
+      // ── Helper: is this a "chromatic" (non-gray) color? ──
+      function isChromatic(s: string): boolean {
+        const rgb = parseRgb(s);
+        if (!rgb) return false;
+        const [, sat, lit] = rgbToSL(rgb[0], rgb[1], rgb[2]);
+        return sat > 20 && lit > 8 && lit < 92; // not gray, not too dark, not too light
+      }
+
+      // ── Scan ALL visible elements in viewport for chromatic colors ──
+      const colorScores = new Map<string, number>();
+      const allElements = document.querySelectorAll("*");
+      const viewport = { w: window.innerWidth, h: window.innerHeight };
+      let scanned = 0;
+
+      for (const el of allElements) {
+        if (scanned > 300) break;
+        const rect = el.getBoundingClientRect();
+        // Skip off-screen elements
+        if (rect.bottom < 0 || rect.top > viewport.h * 1.5 || rect.width < 2 || rect.height < 2) continue;
+        scanned++;
+
+        const s = getComputedStyle(el);
+        const props = [
+          s.color, s.backgroundColor, s.borderColor,
+          s.borderTopColor, s.borderBottomColor,
+          s.outlineColor, s.textDecorationColor,
+        ];
+
+        // Also check SVG fill/stroke
+        if (el instanceof SVGElement) {
+          props.push(s.fill, s.stroke);
+        }
+
+        for (const c of props) {
+          if (!c || c === "transparent" || c === "rgba(0, 0, 0, 0)") continue;
+          if (!isChromatic(c)) continue;
+
+          // Weight by element prominence
+          const area = rect.width * rect.height;
+          const isAboveFold = rect.top < viewport.h;
+          const isInteractive = el.tagName === "A" || el.tagName === "BUTTON" || (el as HTMLElement).onclick != null;
+          const isSvg = el instanceof SVGElement;
+
+          let weight = 1;
+          if (isInteractive) weight += 3;
+          if (isAboveFold) weight += 1;
+          if (isSvg) weight += 2;
+          if (area > 1000) weight += 1;
+          // Background colors on large areas are more likely brand
+          if (c === s.backgroundColor && area > 500) weight += 2;
+
+          colorScores.set(c, (colorScores.get(c) ?? 0) + weight);
+        }
+      }
+
+      // Pick highest-scored chromatic color
+      let accentColor: string | null = null;
+      if (colorScores.size > 0) {
+        const sorted = [...colorScores.entries()].sort((a, b) => b[1] - a[1]);
+        // Pick the most vivid (highest saturation) among top 5 scorers
+        let bestSat = 0;
+        for (const [c] of sorted.slice(0, 5)) {
+          const rgb = parseRgb(c);
+          if (!rgb) continue;
+          const [, sat] = rgbToSL(rgb[0], rgb[1], rgb[2]);
+          if (sat > bestSat) {
+            bestSat = sat;
+            accentColor = c;
+          }
+        }
+      }
+
+      return { bgColor, textColor, accentColor };
+    });
+
+    await browser.close();
+    browser = null;
+
+    if (!result) return null;
+
+    const hBg = result.bgColor ? parseColorFromRgb(result.bgColor) : null;
+    const hText = result.textColor ? parseColorFromRgb(result.textColor) : null;
+    const hAccent = result.accentColor ? parseColorFromRgb(result.accentColor) : null;
+    const hIsDark = hBg ? hBg[2] < 50 : undefined;
+
+    if (!hAccent && !hBg) return null;
+    return {
+      bg: hBg ?? undefined,
+      accent: hAccent ?? undefined,
+      text: hText ?? undefined,
+      isDark: hIsDark,
+    };
+  } catch (err) {
+    if (browser) try { await browser.close(); } catch { /* */ }
+    throw err;
+  }
+}
+
+function parseColorFromRgb(str: string): HSL | null {
+  // Handle rgb(r, g, b) and rgba(r, g, b, a)
+  const m = str.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (!m) return parseColor(str);
+  const r = parseInt(m[1]) / 255, g = parseInt(m[2]) / 255, b = parseInt(m[3]) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, Math.round(l * 100)];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  else if (max === g) h = ((b - r) / d + 2) / 6;
+  else h = ((r - g) / d + 4) / 6;
+  return [Math.round(h * 3600) / 10, Math.round(s * 1000) / 10, Math.round(l * 1000) / 10];
 }
