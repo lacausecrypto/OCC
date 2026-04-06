@@ -1,0 +1,120 @@
+name: linkedin-workflow
+version: '1.0'
+
+steps:
+  - id: wf_1775477686937_0
+    type: browser
+    label: "Veille Sources Tech & Business"
+    model: claude-sonnet-4-6
+    prompt: "Scrape et collecte les contenus publiés dans les 7 derniers jours sur ces sources : Hacker News (top stories), Reddit (r/MachineLearning, r/entrepreneur, r/SaaS, r/nocode, r/freelance), Product Hunt (trending), DEV.to (top week), Indie Hackers. Pour chaque item collecté, extraire : titre, URL, date de publication, résumé court (2-3 phrases), nombre de commentaires/upvotes. Filtrer uniquement les items avec score social élevé (upvotes > 100 ou commentaires > 20) ou contenant des mots-clés : AI, automation, freelance, SaaS, no-code, productivité, revenue, growth, controversy. Retourner une liste JSON d'items avec ces champs : {title, url, date, summary, social_score, source, keywords}."
+    tools: [WebSearch, WebFetch]
+    pre_tools:
+      - type: web_search
+        inject_as: hn_results
+        query: "site:news.ycombinator.com top stories AI automation SaaS last 7 days"
+      - type: web_search
+        inject_as: reddit_results
+        query: reddit r/MachineLearning OR r/entrepreneur trending posts this week automation freelance
+      - type: web_search
+        inject_as: producthunt_results
+        query: "site:producthunt.com trending AI tools automation 2026"
+    output_var: tech_business_sources
+
+  - id: wf_1775477686938_1
+    type: browser
+    label: "Veille Tendances LinkedIn & Twitter"
+    model: claude-sonnet-4-6
+    prompt: "Recherche et collecte les tendances virales actuelles sur LinkedIn et X (Twitter) publiées dans les 7 derniers jours. Chercher : posts LinkedIn avec fort engagement sur les sujets IA, freelancing, création de contenu, business en ligne. Threads X/Twitter viraux sur automation, AI tools, indie hacking, productivité. Identifier les formats qui performent : listes, storytelling, opinions tranchées, controverses. Pour chaque tendance, extraire : sujet principal, angle utilisé (éducatif/storytelling/opinion), pourquoi ça engage, mots-clés récurrents. Retourner un JSON avec {trending_topics: [], viral_formats: [], hot_keywords: [], controversy_angles: []}."
+    tools: [WebSearch, WebFetch]
+    pre_tools:
+      - type: web_search
+        inject_as: linkedin_trends
+        query: LinkedIn viral posts AI freelancing automation 2026 high engagement
+      - type: web_search
+        inject_as: twitter_trends
+        query: "Twitter X viral threads AI tools automation indie hacker 2026 site:twitter.com OR site:x.com"
+    output_var: linkedin_twitter_trends
+
+  - id: wf_1775477686939_2
+    type: merge
+    label: "Fusion & Déduplication Sources"
+    model: claude-sonnet-4-6
+    prompt: "Reçois deux flux de données : sources tech/business {tech_business_sources} et tendances LinkedIn/Twitter {linkedin_twitter_trends}. Effectue les opérations suivantes : 1) Déduplique les items similaires (même sujet ou URL similaire). 2) Score chaque item sur 10 selon : récence (≤48h = 3pts, ≤7j = 1pt), potentiel viral (score social normalisé = 3pts), alignement avec priorités (IA/automation/freelancing/productivité/business en ligne = 2pts), potentiel débat/controverse (présence d'opinion forte = 2pts). 3) Sélectionne le TOP 10 des items avec score ≥ 6/10. 4) Pour chaque item retenu, ajouter un champ 'viral_potential_reason' expliquant pourquoi ce sujet peut engager. Retourner un JSON {selected_items: []} avec max 10 items, triés par score décroissant."
+    depends_on: [wf_1775477686937_0, wf_1775477686938_1]
+    output_var: top_content_items
+
+  - id: wf_1775477686939_3
+    type: loop
+    label: "Analyse & Extraction d'Angles"
+    model: claude-sonnet-4-6
+    prompt: "Pour chaque item dans {top_content_items}, effectue une analyse approfondie et génère 3 angles LinkedIn distincts. Pour chaque item : ANALYSE : - Idée principale en 1 phrase - Problème sous-jacent que ça résout ou révèle - Insight caché ou contre-intuitif - Potentiel controverse ou débat GÉNÉRATION DE 3 ANGLES : Angle 1 - ÉDUCATIF : Formule l'insight comme une leçon ou découverte. Ex: 'Ce que j'ai appris sur X après Y mois...' Angle 2 - STORYTELLING : Transforme en histoire personnelle ou cas concret. Ex: 'J'ai fait X, voici ce qui s'est passé...' Angle 3 - OPINION TRANCHÉE : Prend une position forte et défendable. Ex: 'La majorité se trompe sur X. Voici pourquoi...' Pour chaque angle, évalue sur 5 : potentiel engagement, originalité, clarté du hook. Retourner un JSON par item : {item_id, title, main_idea, hidden_insight, controversy_potential, angles: [{type, angle_summary, hook_preview, engagement_score}]}."
+    depends_on: [wf_1775477686939_2]
+    output_var: analyzed_angles
+
+  - id: wf_1775477686940_4
+    type: evaluator
+    label: Sélection Meilleurs Angles
+    model: claude-sonnet-4-6
+    prompt: "Évalue et sélectionne les meilleurs angles depuis {analyzed_angles}. Critères de sélection : 1) Sélectionne les TOP 5 items (parmi les 10 analysés) avec le plus fort potentiel de débat/partage. 2) Pour chaque item sélectionné, choisis l'angle le mieux noté (engagement_score le plus élevé). 3) Vérifie que les 5 items couvrent des angles variés (pas tous du même type). 4) Ajoute pour chaque sélection : recommended_post_format (liste/story/question/stat choc) et target_emotion (curiosité/surprise/validation/indignation/inspiration). Retourner {selected_for_generation: [5 items avec angle choisi et métadonnées]}. Si moins de 5 items disponibles, prendre tous les items disponibles."
+    depends_on: [wf_1775477686939_3]
+    output_var: selected_angles
+
+  - id: wf_1775477686940_5
+    type: loop
+    label: Génération Posts LinkedIn + 3 Hooks
+    model: claude-sonnet-4-6
+    prompt: "Pour chaque item dans {selected_angles}, génère un post LinkedIn complet avec 3 variantes de hooks. CONTRAINTES DE STYLE ABSOLUES : - Phrases courtes (max 12 mots par phrase) - Zéro jargon inutile - Ton humain, direct, authentique - Pas de bullet points sur-formatés sauf si vraiment nécessaire - Chaque ligne doit donner envie de lire la suivante STRUCTURE DU POST : Ligne 1-2 : HOOK (scroll-stopper, crée curiosité ou choc) Ligne 3-5 : Contexte ultra court (le problème ou la situation) Ligne 6-12 : Valeur / Insight principal (la révélation, l'astuce, l'opinion) Ligne 13-16 : Conclusion + question ouverte pour déclencher commentaires GÉNÈRE 3 HOOKS DISTINCTS pour le même post : Hook A : Stat choc ou chiffre surprenant Hook B : Question qui dérange ou challenge une croyance Hook C : Déclaration contre-intuitive ou opinion forte Pour chaque variante de hook, ré-écris les 2 premières lignes du post en conservant le reste. TEST FINAL pour chaque post : 'Est-ce que quelqu'un va commenter ou débattre ?' Si non, réécrire. Retourner {posts: [{item_id, hook_a, hook_b, hook_c, full_post_with_hook_a, full_post_with_hook_b, full_post_with_hook_c}]}."
+    depends_on: [wf_1775477686940_4]
+    output_var: linkedin_posts
+
+  - id: wf_1775477686941_6
+    type: transform
+    label: Génération Prompts Image Gemini
+    model: claude-sonnet-4-6
+    prompt: "Pour chaque post dans {linkedin_posts}, génère un prompt détaillé pour Gemini Image afin de créer une image LinkedIn virale. RÈGLES DU PROMPT IMAGE : Style visuel : moderne, clean, business/tech, minimaliste ou concept art Palette : fort contraste (dark background + accent color vif, ou blanc pur + élément graphique bold) Type d'image : illustration vectorielle, concept art minimaliste, ou typographie impactante L'image DOIT renforcer visuellement le hook du post (pas juste être décorative) Format : 1200x627px (format LinkedIn optimal) STRUCTURE DU PROMPT GEMINI : 'Create a [style] LinkedIn post image. [Description visuelle précise en lien avec le hook]. Color palette: [couleurs]. Style: [moderne/minimaliste/bold]. Include [element textuel court si pertinent]. No stock photo aesthetic. High contrast. Professional but eye-catching.' Pour chaque post, génère 2 variantes de prompt image (une plus minimaliste, une plus impactante). Retourner {image_prompts: [{item_id, hook_used, prompt_minimal, prompt_bold, visual_concept_explanation}]}."
+    depends_on: [wf_1775477686940_5]
+    output_var: image_prompts
+
+  - id: wf_1775477686941_7
+    type: transform
+    label: Génération Hashtags Optimisés
+    model: claude-sonnet-4-6
+    prompt: "Pour chaque post dans {linkedin_posts}, génère un set de hashtags LinkedIn optimisés. RÈGLES HASHTAGS LINKEDIN : Entre 5 et 10 hashtags maximum Mix de : 2-3 hashtags larges (>500k followers) ex: #IA #Marketing #Freelance 3-4 hashtags moyens (50k-500k) ex: #Automation #SaaS #ContentCreation 1-2 hashtags de niche (<50k) pour cibler la communauté exacte Toujours inclure 1-2 hashtags en français ET en anglais Éviter les hashtags trop génériques sans valeur (#life #work) Prioriser les hashtags actifs en 2026 POUR CHAQUE POST, considérer : Le sujet principal de l'insight Le secteur cible (IA, freelance, business, etc.) La géographie (FR/international) Le format du post Retourner {hashtags: [{item_id, hashtag_set: ['#tag1', ...], strategy_note}]}."
+    depends_on: [wf_1775477686940_5]
+    output_var: hashtags_sets
+
+  - id: wf_1775477686942_8
+    type: merge
+    label: Assemblage Sortie Finale Structurée
+    model: claude-sonnet-4-6
+    prompt: "Assemble tous les éléments produits en une sortie JSON finale structurée et exploitable. Sources à combiner : - Posts LinkedIn : {linkedin_posts} - Prompts image : {image_prompts} - Hashtags : {hashtags_sets} - Angles analysés : {selected_angles} STRUCTURE DE SORTIE pour chaque item (5 items au total) : { item_id: string, title: string, insight_summary: string (2-3 phrases max), viral_potential_score: number (1-10), hooks: { hook_a: string, hook_b: string, hook_c: string }, posts: { post_with_hook_a: string, post_with_hook_b: string, post_with_hook_c: string }, recommended_post: string (le meilleur des 3 selon toi), image_prompts: { minimal: string, bold: string }, hashtags: string[] (5-10 tags), metadata: { angle_type: string, target_emotion: string, post_format: string, estimated_engagement: 'low'|'medium'|'high'|'viral', best_posting_time: string } } Trier les 5 items par viral_potential_score décroissant. Ajouter un champ global 'generation_summary' avec stats : nb posts générés, distribution des angles, thèmes dominants. Retourner le JSON complet prêt à l'emploi."
+    depends_on: [wf_1775477686940_5, wf_1775477686941_6, wf_1775477686941_7]
+    output_var: final_linkedin_content_pack
+
+  - id: wf_1775477686942_9
+    type: evaluator
+    label: "Quality Gate & Score Final"
+    model: claude-sonnet-4-6
+    prompt: "Effectue un contrôle qualité final sur {final_linkedin_content_pack}. Pour chaque post, vérifie et score : CHECKLIST HOOK (0-3 pts chacun) : [ ] Le hook crée-t-il une curiosité ou une tension en ≤2 lignes ? [ ] Évite-t-il les clichés LinkedIn ('Je vais vous parler de...', 'Voici X conseils...') ? [ ] Donnerait-il envie de lire en scrollant rapidement ? CHECKLIST CONTENU (0-3 pts chacun) : [ ] Y a-t-il UN insight principal clair et mémorable ? [ ] Les phrases sont-elles courtes et sans jargon ? [ ] La conclusion appelle-t-elle à commenter ou débattre ? CHECKLIST IMAGE (0-2 pts chacun) : [ ] Le prompt image est-il suffisamment précis pour générer un visuel impactant ? [ ] L'image renforce-t-elle le hook (pas juste décorative) ? Pour tout post avec score < 7/11 : réécrire les éléments défaillants. Retourner {quality_report: {passed: [], revised: [], final_pack: {...}}} avec le pack final validé et les scores de qualité."
+    depends_on: [wf_1775477686942_8]
+    output_var: validated_content_pack
+
+  - id: wf_1775477686943_10
+    type: agent
+    label: "Sauvegarde & Notification"
+    model: claude-sonnet-4-6
+    prompt: "Sauvegarde le pack de contenu validé {validated_content_pack} et prépare un rapport de synthèse. ACTIONS : 1) Créer un fichier JSON horodaté avec le contenu complet : nom du fichier = 'linkedin-content-YYYY-MM-DD.json' 2) Générer un rapport markdown lisible 'rapport-veille-YYYY-MM-DD.md' avec : - Résumé exécutif (3-5 bullet points sur les tendances détectées) - Tableau récapitulatif des 5 posts (titre, angle, score viral, meilleur hook) - Top 3 sujets prioritaires du jour - Recommandations de posting (meilleur moment, ordre de publication suggéré) 3) Le rapport doit être actionnable en < 2 minutes de lecture CONTENU DU RAPPORT MARKDOWN : # Veille LinkedIn — [DATE] ## Résumé du jour ## Posts générés (tableau) ## Sujets tendance ## Plan de publication suggéré ## Notes pour améliorer le prochain cycle Retourner {files_created: [], report_summary: string, next_run_recommendations: []}."
+    tools: [Write, Bash]
+    pre_tools:
+      - type: state_save
+        inject_as: save_confirmation
+        key: linkedin_daily_pack
+        value: "{validated_content_pack}"
+      - type: notify
+        inject_as: notification_sent
+        channel: webhook
+        message: "Pack LinkedIn du jour généré — {validated_content_pack.generation_summary}"
+    depends_on: [wf_1775477686942_9]
+    output_var: saved_content_report
+
+output: saved_content_report

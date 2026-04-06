@@ -221,7 +221,7 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
     return [...weekMap.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(-8);
   }, [data, mode]);
 
-  if (chartData.length === 0) return <div className={styles.chartEmpty}>No execution data yet</div>;
+  if (!data || chartData.length === 0) return <div className={styles.chartEmpty}>No execution data yet</div>;
 
   // Pad to at least 7 entries
   const padded = [...chartData];
