@@ -10,7 +10,7 @@ import styles from "./Settings.module.css";
 interface LLMProvider {
   id: string;
   name: string;
-  type: "claude" | "openrouter" | "openai" | "custom";
+  type: "claude" | "openrouter" | "openai" | "ollama" | "huggingface" | "custom";
   apiKey: string;
   baseUrl: string;
   defaultModel?: string;
@@ -142,6 +142,13 @@ export function ProviderSection() {
 
   useEffect(() => { loadProviders(); }, [loadProviders]);
 
+  // Refresh when HuggingFaceSection updates providers
+  useEffect(() => {
+    const handler = () => loadProviders();
+    window.addEventListener("occ-providers-changed", handler);
+    return () => window.removeEventListener("occ-providers-changed", handler);
+  }, [loadProviders]);
+
   const installedIds = new Set(providers.map((p) => p.id));
 
   const handleQuickInstall = async (preset: ProviderPreset) => {
@@ -216,7 +223,10 @@ export function ProviderSection() {
     loadProviders();
   };
 
-  const typeColors: Record<string, string> = { claude: "var(--icon-blue-bg)", openrouter: "var(--icon-purple-bg)", openai: "var(--icon-green-bg)", custom: "var(--icon-orange-bg)" };
+  const typeColors: Record<string, string> = {
+    claude: "var(--icon-blue-bg)", openrouter: "var(--icon-purple-bg)", openai: "var(--icon-green-bg)",
+    ollama: "var(--icon-cyan-bg)", huggingface: "var(--icon-orange-bg)", custom: "var(--icon-orange-bg)",
+  };
 
   return (
     <div className={styles.section}>
@@ -245,9 +255,9 @@ export function ProviderSection() {
 
             {/* Models */}
             {p.enabled && p.models && p.models.length > 0 && (
-              <div className={styles.providerModels}>
-                {p.models.slice(0, 6).map((m) => <span key={m} className={styles.mcpToolPill}>{m}</span>)}
-                {p.models.length > 6 && <span className={styles.mcpToolPill}>+{p.models.length - 6}</span>}
+              <div className={styles.providerModels} style={{ maxHeight: 80, overflowY: "auto" }}>
+                {p.models.slice(0, 12).map((m) => <span key={m} className={styles.mcpToolPill}>{m.split("/").pop()}</span>)}
+                {p.models.length > 12 && <span className={styles.mcpToolPill} style={{ opacity: 0.6 }}>+{p.models.length - 12} more</span>}
               </div>
             )}
 

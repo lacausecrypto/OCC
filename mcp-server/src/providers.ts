@@ -14,7 +14,7 @@ import { logger } from "./logger.js";
 export interface LLMProvider {
   id: string;
   name: string;
-  type: "claude" | "openrouter" | "openai" | "ollama" | "custom";
+  type: "claude" | "openrouter" | "openai" | "ollama" | "huggingface" | "custom";
   apiKey: string;
   baseUrl: string;
   defaultModel?: string;
@@ -134,6 +134,18 @@ const PROVIDER_TEMPLATES: Record<string, Partial<LLMProvider>> = {
     type: "ollama",
     baseUrl: "http://localhost:11434",
     models: [], // Auto-discovered via /api/tags
+  },
+  huggingface: {
+    name: "HuggingFace",
+    type: "huggingface",
+    baseUrl: "https://router.huggingface.co/v1",
+    models: [
+      "Qwen/Qwen3-8B", "Qwen/Qwen3-32B", "Qwen/Qwen3.5-27B",
+      "meta-llama/Llama-3.1-8B-Instruct", "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+      "google/gemma-4-31B-it", "google/gemma-3-27b-it",
+      "deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-V3",
+      "Qwen/Qwen2.5-Coder-32B-Instruct", "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    ],
   },
 };
 
@@ -314,6 +326,9 @@ export async function runLLMHTTP(
     // Ollama is OpenAI-compatible at /v1/chat/completions
     const ollamaProvider = { ...provider, baseUrl: provider.baseUrl + "/v1" };
     return runOpenAICompat(ollamaProvider, config, onChunk, startTime);
+  } else if (provider.type === "huggingface") {
+    // HuggingFace Inference API is OpenAI-compatible
+    return runOpenAICompat(provider, config, onChunk, startTime);
   } else if (provider.type === "custom") {
     return runOpenAICompat(provider, config, onChunk, startTime);
   }
@@ -483,7 +498,7 @@ async function streamOpenAIResponse(
 export async function testProvider(id: string): Promise<{ ok: boolean; error?: string; models?: string[] }> {
   const provider = providers.get(id);
   if (!provider) return { ok: false, error: "Provider not found" };
-  if (provider.type !== "ollama" && !provider.apiKey) return { ok: false, error: "No API key configured" };
+  if (provider.type !== "ollama" && provider.type !== "huggingface" && !provider.apiKey) return { ok: false, error: "No API key configured" };
 
   if (provider.type === "claude") {
     return { ok: true, models: provider.models };

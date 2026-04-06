@@ -3,6 +3,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import yaml from "js-yaml";
 import { z } from "zod";
 import type { PipelineDefinition } from "./types.js";
@@ -39,7 +40,11 @@ function getPipelinesDir(): string {
   if (process.env.PIPELINES_DIR) return process.env.PIPELINES_DIR;
   const chainsDir = process.env.CHAINS_DIR ?? "";
   if (chainsDir) return path.join(chainsDir.replace(/[/\\]chains[/\\]?$/, ""), "pipelines");
-  return path.join(process.cwd(), "..", "pipelines");
+  // Resolve relative to this file (mcp-server/dist/ or mcp-server/src/)
+  const fileDir = path.dirname(fileURLToPath(import.meta.url));
+  const fromFile = path.resolve(fileDir, "..", "..", "pipelines");
+  if (fs.existsSync(fromFile)) return fromFile;
+  return path.join(process.cwd(), "pipelines");
 }
 
 // ─── CRUD ────────────────────────────────────────────────────────────────────

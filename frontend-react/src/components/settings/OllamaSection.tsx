@@ -156,7 +156,13 @@ export function OllamaSection() {
     } catch { /* already exists */ }
   };
 
-  const installedNames = new Set(installed.map((m) => m.name.split(":")[0]));
+  // Exact match on full name; untagged curated matches :latest only
+  const installedFull = new Set(installed.map((m) => m.name));
+  const isInstalled = (name: string) => {
+    if (installedFull.has(name)) return true;
+    if (!name.includes(":") && installedFull.has(`${name}:latest`)) return true;
+    return false;
+  };
 
   const filteredPopular = POPULAR_MODELS.filter((m) => {
     if (search && !m.name.includes(search.toLowerCase()) && !m.desc.toLowerCase().includes(search.toLowerCase())) return false;
@@ -301,7 +307,7 @@ export function OllamaSection() {
           {/* Grid */}
           <div className={styles.marketplaceGrid}>
             {filteredPopular.map((m) => {
-              const isInstalled = installedNames.has(m.name.split(":")[0]);
+              const modelInstalled = isInstalled(m.name);
               return (
                 <div key={m.name} className={styles.mcpPresetCard}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -319,7 +325,7 @@ export function OllamaSection() {
                     ))}
                   </div>
                   <div style={{ marginTop: 4 }}>
-                    {isInstalled ? (
+                    {modelInstalled ? (
                       <span style={{ fontSize: 9, color: "var(--c-success)", fontWeight: 600 }}>{"\u2713"} Installed</span>
                     ) : (
                       <button onClick={() => handlePull(m.name)} disabled={!!pulling}

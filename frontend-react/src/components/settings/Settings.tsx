@@ -9,6 +9,7 @@ import { ScheduleSection } from "./ScheduleSection";
 import { McpSection } from "./McpSection";
 import { ProviderSection } from "./ProviderSection";
 import { OllamaSection } from "./OllamaSection";
+import { HuggingFaceSection } from "./HuggingFaceSection";
 import { useShortcutStore, formatCombo } from "../../stores/shortcuts";
 import type { ShortcutAction, KeyCombo } from "../../stores/shortcuts";
 import styles from "./Settings.module.css";
@@ -179,6 +180,7 @@ interface DayDetailed {
   chains: SourceTokens;
   pipelines: SourceTokens;
   blob: SourceTokens;
+  workflowChat: SourceTokens;
 }
 interface TokenUsageDetailed {
   days: number;
@@ -187,12 +189,14 @@ interface TokenUsageDetailed {
   topChains: Array<{ name: string; input: number; output: number; count: number; total: number }>;
 }
 
-const SOURCE_COLORS = {
+const SOURCES = ["chains", "pipelines", "blob", "workflowChat"] as const;
+const SOURCE_COLORS: Record<string, string> = {
   chains: "var(--m-accent)",
   pipelines: "var(--c-purple, #bf5af2)",
   blob: "var(--icon-green, #30d158)",
+  workflowChat: "var(--c-warning, #ff9f0a)",
 };
-const SOURCE_LABELS = { chains: "Chains", pipelines: "Pipelines", blob: "The Blob" };
+const SOURCE_LABELS: Record<string, string> = { chains: "Chains", pipelines: "Pipelines", blob: "The Blob", workflowChat: "Workflow Chat" };
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -211,8 +215,8 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
       const weekStart = new Date(dt);
       weekStart.setDate(dt.getDate() - dt.getDay());
       const key = weekStart.toISOString().slice(0, 10);
-      const existing = weekMap.get(key) ?? { date: key, chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 } };
-      for (const src of ["chains", "pipelines", "blob"] as const) {
+      const existing = weekMap.get(key) ?? { date: key, chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 }, workflowChat: { input: 0, output: 0, count: 0 } };
+      for (const src of SOURCES) {
         existing[src].input += d[src].input;
         existing[src].output += d[src].output;
         existing[src].count += d[src].count;
@@ -229,24 +233,24 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
   while (padded.length < 7 && padded.length > 0) {
     const lastDate = new Date(padded[padded.length - 1].date);
     lastDate.setDate(lastDate.getDate() + (mode === "weekly" ? 7 : 1));
-    padded.push({ date: lastDate.toISOString().slice(0, 10), chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 } });
+    padded.push({ date: lastDate.toISOString().slice(0, 10), chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 }, workflowChat: { input: 0, output: 0, count: 0 } });
   }
 
   const maxTokens = Math.max(...padded.map((d) => {
     let total = 0;
-    for (const src of ["chains", "pipelines", "blob"] as const) total += d[src].input + d[src].output;
+    for (const src of SOURCES) total += d[src].input + d[src].output;
     return total;
   }), 1);
   const yLabels = [maxTokens, Math.round(maxTokens * 0.5), 0];
 
   // Source totals for legend
-  const sourceTotals = { chains: 0, pipelines: 0, blob: 0 };
+  const sourceTotals: Record<string, number> = { chains: 0, pipelines: 0, blob: 0, workflowChat: 0 };
   for (const d of data.daily) {
-    for (const src of ["chains", "pipelines", "blob"] as const) {
+    for (const src of SOURCES) {
       sourceTotals[src] += d[src].input + d[src].output;
     }
   }
-  const activeSources = (["chains", "pipelines", "blob"] as const).filter((s) => sourceTotals[s] > 0);
+  const activeSources = SOURCES.filter((s) => sourceTotals[s] > 0);
 
   return (
     <div className={styles.chartWrap}>
@@ -294,16 +298,24 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
           <div className={styles.chartGridLine} style={{ top: "100%" }} />
           <div className={styles.chartBars}>
             {padded.map((d) => {
-              const chainH = ((d.chains.input + d.chains.output) / maxTokens) * 100;
-              const pipeH = ((d.pipelines.input + d.pipelines.output) / maxTokens) * 100;
-              const blobH = ((d.blob.input + d.blob.output) / maxTokens) * 100;
-              const dayTotal = d.chains.input + d.chains.output + d.pipelines.input + d.pipelines.output + d.blob.input + d.blob.output;
+              const heights: Record<string, number> = {};
+              let dayTotal = 0;
+              for (const src of SOURCES) {
+                const t = d[src].input + d[src].output;
+                heights[src] = (t / maxTokens) * 100;
+                dayTotal += t;
+              }
+              const tooltip = dayTotal > 0
+                ? `${d.date}\n${SOURCES.filter((s) => d[s].input + d[s].output > 0).map((s) => `${SOURCE_LABELS[s]}: ${(d[s].input + d[s].output).toLocaleString()}`).join("\n")}\nTotal: ${dayTotal.toLocaleString()}`
+                : d.date;
               return (
-                <div key={d.date} className={styles.chartBar} title={dayTotal > 0 ? `${d.date}\nChains: ${(d.chains.input + d.chains.output).toLocaleString()}\nPipelines: ${(d.pipelines.input + d.pipelines.output).toLocaleString()}\nBlob: ${(d.blob.input + d.blob.output).toLocaleString()}\nTotal: ${dayTotal.toLocaleString()}` : d.date}>
+                <div key={d.date} className={styles.chartBar} title={tooltip}>
                   <div className={styles.chartBarStack}>
-                    {blobH > 0 && <div className={styles.chartBarSegment} style={{ height: `${blobH}%`, background: SOURCE_COLORS.blob }} />}
-                    {pipeH > 0 && <div className={styles.chartBarSegment} style={{ height: `${pipeH}%`, background: SOURCE_COLORS.pipelines }} />}
-                    {chainH > 0 && <div className={styles.chartBarSegment} style={{ height: `${chainH}%`, background: SOURCE_COLORS.chains }} />}
+                    {/* Render bottom → top: workflowChat, blob, pipelines, chains */}
+                    {heights.workflowChat > 0 && <div className={styles.chartBarSegment} style={{ height: `${heights.workflowChat}%`, background: SOURCE_COLORS.workflowChat }} />}
+                    {heights.blob > 0 && <div className={styles.chartBarSegment} style={{ height: `${heights.blob}%`, background: SOURCE_COLORS.blob }} />}
+                    {heights.pipelines > 0 && <div className={styles.chartBarSegment} style={{ height: `${heights.pipelines}%`, background: SOURCE_COLORS.pipelines }} />}
+                    {heights.chains > 0 && <div className={styles.chartBarSegment} style={{ height: `${heights.chains}%`, background: SOURCE_COLORS.chains }} />}
                   </div>
                 </div>
               );
@@ -330,11 +342,15 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
           {data.topChains.map((c) => {
             const pct = data.totals.input + data.totals.output > 0 ? ((c.total / (data.totals.input + data.totals.output)) * 100) : 0;
             const isBlob = c.name.startsWith("blob_");
+            const isWfc = c.name === "_workflow_chat";
+            const isPipe = c.name.includes("|");
+            const dotColor = isWfc ? SOURCE_COLORS.workflowChat : isBlob ? SOURCE_COLORS.blob : isPipe ? SOURCE_COLORS.pipelines : SOURCE_COLORS.chains;
+            const displayName = isWfc ? "Workflow Chat" : isBlob ? "Blob session" : c.name;
             return (
               <div key={c.name} className={styles.tokenTableRow}>
                 <span className={styles.tokenTableName}>
-                  <span className={styles.legendDot} style={{ background: isBlob ? SOURCE_COLORS.blob : SOURCE_COLORS.chains }} />
-                  {isBlob ? "Blob session" : c.name}
+                  <span className={styles.legendDot} style={{ background: dotColor }} />
+                  {displayName}
                 </span>
                 <span className={styles.tokenTableNum}>{c.count}</span>
                 <span className={styles.tokenTableNum}>{formatTokens(c.input)}</span>
@@ -412,6 +428,8 @@ export function Settings() {
     // BLOB
     blobDir: string; blobPlanningModel: string; blobChatModel: string;
     blobStepModel: string; blobAutoCheckSec: string;
+    // Workflow Chat
+    workflowChatModel: string; workflowPlannerModel: string;
     // Rate limits
     rateLimitExec: string; rateLimitGen: string;
     // Execution
@@ -430,15 +448,19 @@ export function Settings() {
     setConfigDirty(true);
   };
 
-  const saveConfig = async () => {
+  const saveConfig = async (override?: Partial<ServerConfig>) => {
     if (!config) return;
+    const toSave = override ? { ...config, ...override } : config;
     await fetch("/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config),
+      body: JSON.stringify(toSave),
     }).catch(() => {});
     setConfigDirty(false);
   };
+
+  // Available LLM models (from all providers)
+  const [availableModels, setAvailableModels] = useState<{ provider: string; providerName: string; model: string }[]>([]);
 
   // Local settings
   const [autoConnect, setAutoConnect] = useState(() => localStorage.getItem("occ-auto-connect") !== "false");
@@ -459,6 +481,10 @@ export function Settings() {
     setHealth(h);
     setQueue(q);
     setExecutions(Array.isArray(e) ? e : []);
+
+    // Load available models from all providers
+    const models = await fetchJson<{ provider: string; providerName: string; model: string }[]>("/providers/models");
+    if (Array.isArray(models)) setAvailableModels(models);
 
     // Load MCP config - the /mcp-servers endpoint returns tools, we need the raw config
     // Try fetching the config file shape
@@ -513,6 +539,7 @@ export function Settings() {
     { id: "execution", label: "Execution" },
     { id: "providers", label: "Providers" },
     { id: "ollama", label: "Ollama" },
+    { id: "huggingface", label: "HuggingFace" },
     { id: "queue", label: "Queue" },
     { id: "schedules", label: "Schedules" },
     { id: "mcp", label: "MCP Servers" },
@@ -522,6 +549,7 @@ export function Settings() {
     { id: "email", label: "Email" },
     { id: "about", label: "About" },
     { id: "tokens", label: "Token Usage" },
+    { id: "models", label: "LLM Models" },
     { id: "blob", label: "BLOB" },
     { id: "data", label: "Data" },
     { id: "shortcuts", label: "Shortcuts" },
@@ -710,6 +738,14 @@ export function Settings() {
           <div className={styles.sectionTitle}>Ollama — Local Models</div>
           <div className={styles.sectionCard}>
             <OllamaSection />
+          </div>
+        </div>
+
+        {/* ═══ HuggingFace (inference API) ═══ */}
+        <div id="huggingface" className={styles.section}>
+          <div className={styles.sectionTitle}>HuggingFace — Inference API</div>
+          <div className={styles.sectionCard}>
+            <HuggingFaceSection />
           </div>
         </div>
 
@@ -908,34 +944,96 @@ export function Settings() {
           </div>
         </div>
 
-        {/* ═══ BLOB Configuration ═══ */}
-        <div id="blob" className={styles.section}>
-          <div className={styles.sectionTitle}>BLOB</div>
+        {/* ═══ LLM Models ═══ */}
+        <div id="models" className={styles.section}>
+          <div className={styles.sectionTitle}>LLM Models</div>
+
+          {/* BLOB Models */}
           <div className={styles.sectionCard}>
+            <div className={styles.sectionSubtitle}>BLOB</div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-green-bg)" }}>P</div>
               <div className={styles.rowBody}>
-                <div className={styles.rowLabel}>Planning Model <InfoTip text={"The LLM used to plan BLOB graph structure (branches, steps, forks).\n\nDefault: claude-sonnet-4-6\n\nThis model receives the user message, existing branches, knowledge graph, and MCP servers. It outputs a JSON plan. Use a capable model (Sonnet+) for accurate graph planning. Haiku works for simple prompts but may produce weaker step breakdowns.\n\nRequires server restart."} /></div>
-                <div className={styles.rowDesc}>LLM for graph planning (fast + cheap)</div>
+                <div className={styles.rowLabel}>Planning Model <InfoTip text={"The LLM used to plan BLOB graph structure (branches, steps, forks).\n\nDefault: claude-sonnet-4-6\n\nThis model receives the user message, existing branches, knowledge graph, and MCP servers. It outputs a JSON plan. Use a capable model (Sonnet+) for accurate graph planning. Haiku works for simple prompts but may produce weaker step breakdowns."} /></div>
+                <div className={styles.rowDesc}>LLM for graph planning</div>
               </div>
-              <input className={styles.rowInput} value={config?.blobPlanningModel ?? "claude-haiku-4-5"} onChange={(e) => updateConfig("blobPlanningModel", e.target.value)} onBlur={saveConfig} style={{ width: 180 }} />
+              <select className={styles.rowInput} value={config?.blobPlanningModel ?? "claude-sonnet-4-6"} onChange={(e) => { updateConfig("blobPlanningModel", e.target.value); saveConfig({ blobPlanningModel: e.target.value }); }} style={{ width: 220 }}>
+                {availableModels.length > 0 ? availableModels.map((m) => (
+                  <option key={`bp-${m.provider}-${m.model}`} value={m.model}>{m.model} ({m.providerName})</option>
+                )) : (
+                  <option value={config?.blobPlanningModel ?? "claude-sonnet-4-6"}>{config?.blobPlanningModel ?? "claude-sonnet-4-6"}</option>
+                )}
+              </select>
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-blue-bg)" }}>C</div>
               <div className={styles.rowBody}>
-                <div className={styles.rowLabel}>Chat Model <InfoTip text={"The LLM used for BLOB conversational chat responses.\n\nDefault: claude-haiku-4-5\n\nThis model handles direct Q&A in the BLOB chat. It receives the system prompt, knowledge graph context, and conversation history. Haiku is fast and cheap for chat. Use Sonnet for more nuanced responses.\n\nRequires server restart."} /></div>
+                <div className={styles.rowLabel}>Chat Model <InfoTip text={"The LLM used for BLOB conversational chat responses.\n\nDefault: claude-haiku-4-5\n\nThis model handles direct Q&A in the BLOB chat. It receives the system prompt, knowledge graph context, and conversation history. Haiku is fast and cheap for chat. Use Sonnet for more nuanced responses."} /></div>
                 <div className={styles.rowDesc}>LLM for conversational responses</div>
               </div>
-              <input className={styles.rowInput} value={config?.blobChatModel ?? "claude-sonnet-4-6"} onChange={(e) => updateConfig("blobChatModel", e.target.value)} onBlur={saveConfig} style={{ width: 180 }} />
+              <select className={styles.rowInput} value={config?.blobChatModel ?? "claude-sonnet-4-6"} onChange={(e) => { updateConfig("blobChatModel", e.target.value); saveConfig({ blobChatModel: e.target.value }); }} style={{ width: 220 }}>
+                {availableModels.length > 0 ? availableModels.map((m) => (
+                  <option key={`bc-${m.provider}-${m.model}`} value={m.model}>{m.model} ({m.providerName})</option>
+                )) : (
+                  <option value={config?.blobChatModel ?? "claude-sonnet-4-6"}>{config?.blobChatModel ?? "claude-sonnet-4-6"}</option>
+                )}
+              </select>
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-purple-bg)" }}>E</div>
               <div className={styles.rowBody}>
-                <div className={styles.rowLabel}>Step Execution Model <InfoTip text={"The LLM used to execute individual BLOB step nodes.\n\nDefault: claude-sonnet-4-6\n\nEach step receives its prompt + previous step outputs (max 5, truncated at 2000 chars each) + relevant knowledge. Use Sonnet for quality, Haiku for speed/cost. Can be overridden per step in the BLOB planner.\n\nRequires server restart."} /></div>
-                <div className={styles.rowDesc}>LLM for workflow step execution</div>
+                <div className={styles.rowLabel}>Step Execution Model <InfoTip text={"The LLM used to execute individual BLOB step nodes.\n\nDefault: claude-sonnet-4-6\n\nEach step receives its prompt + previous step outputs (max 5, truncated at 2000 chars each) + relevant knowledge. Use Sonnet for quality, Haiku for speed/cost. Can be overridden per step in the BLOB planner."} /></div>
+                <div className={styles.rowDesc}>LLM for step execution</div>
               </div>
-              <input className={styles.rowInput} value={config?.blobStepModel ?? "claude-sonnet-4-6"} onChange={(e) => updateConfig("blobStepModel", e.target.value)} onBlur={saveConfig} style={{ width: 180 }} />
+              <select className={styles.rowInput} value={config?.blobStepModel ?? "claude-sonnet-4-6"} onChange={(e) => { updateConfig("blobStepModel", e.target.value); saveConfig({ blobStepModel: e.target.value }); }} style={{ width: 220 }}>
+                {availableModels.length > 0 ? availableModels.map((m) => (
+                  <option key={`bs-${m.provider}-${m.model}`} value={m.model}>{m.model} ({m.providerName})</option>
+                )) : (
+                  <option value={config?.blobStepModel ?? "claude-sonnet-4-6"}>{config?.blobStepModel ?? "claude-sonnet-4-6"}</option>
+                )}
+              </select>
             </div>
+          </div>
+
+          {/* Workflow Chat Models */}
+          <div className={styles.sectionCard}>
+            <div className={styles.sectionSubtitle}>Workflow Chat</div>
+            <div className={styles.row}>
+              <div className={styles.rowIcon} style={{ background: "var(--icon-orange-bg, var(--icon-yellow-bg))" }}>A</div>
+              <div className={styles.rowBody}>
+                <div className={styles.rowLabel}>Chat Model <InfoTip text={"The LLM used for the Workflow Chat conversational stage.\n\nDefault: claude-haiku-4-5\n\nThis model responds to user messages in the chat panel, asks clarifying questions, and designs chain architecture before building. Haiku is fast and cheap for interactive chat. Use Sonnet for more nuanced architectural decisions.\n\nStreamed via SSE — tokens appear in real-time."} /></div>
+                <div className={styles.rowDesc}>LLM for chat conversation (streamed)</div>
+              </div>
+              <select className={styles.rowInput} value={config?.workflowChatModel ?? "claude-haiku-4-5"} onChange={(e) => { updateConfig("workflowChatModel", e.target.value); saveConfig({ workflowChatModel: e.target.value }); }} style={{ width: 220 }}>
+                {availableModels.length > 0 ? availableModels.map((m) => (
+                  <option key={`wc-${m.provider}-${m.model}`} value={m.model}>{m.model} ({m.providerName})</option>
+                )) : (
+                  <option value={config?.workflowChatModel ?? "claude-haiku-4-5"}>{config?.workflowChatModel ?? "claude-haiku-4-5"}</option>
+                )}
+              </select>
+            </div>
+            <div className={styles.row}>
+              <div className={styles.rowIcon} style={{ background: "var(--icon-red-bg, rgba(255,55,95,0.15))" }}>B</div>
+              <div className={styles.rowBody}>
+                <div className={styles.rowLabel}>Planner Model <InfoTip text={"The LLM used for the Workflow Chat planning stage (chain generation).\n\nDefault: claude-sonnet-4-6\n\nWhen the chat triggers a build (via [READY_TO_BUILD] tag or user confirmation), this model receives the full conversation + canvas context and outputs a JSON plan with steps, types, prompts, and wiring. Use Sonnet+ for reliable JSON and smart step design. Haiku may produce invalid JSON or weaker chains.\n\nNon-streaming — returns complete JSON plan."} /></div>
+                <div className={styles.rowDesc}>LLM for chain plan generation (JSON)</div>
+              </div>
+              <select className={styles.rowInput} value={config?.workflowPlannerModel ?? "claude-sonnet-4-6"} onChange={(e) => { updateConfig("workflowPlannerModel", e.target.value); saveConfig({ workflowPlannerModel: e.target.value }); }} style={{ width: 220 }}>
+                {availableModels.length > 0 ? availableModels.map((m) => (
+                  <option key={`wp-${m.provider}-${m.model}`} value={m.model}>{m.model} ({m.providerName})</option>
+                )) : (
+                  <option value={config?.workflowPlannerModel ?? "claude-sonnet-4-6"}>{config?.workflowPlannerModel ?? "claude-sonnet-4-6"}</option>
+                )}
+              </select>
+            </div>
+          </div>
+          {configDirty && <div className={styles.sectionHint} style={{ color: "var(--m-accent)" }}>Changes saved — applied on next request.</div>}
+        </div>
+
+        {/* ═══ BLOB Configuration ═══ */}
+        <div id="blob" className={styles.section}>
+          <div className={styles.sectionTitle}>BLOB</div>
+          <div className={styles.sectionCard}>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-cyan-bg)" }}>T</div>
               <div className={styles.rowBody}>

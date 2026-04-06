@@ -661,6 +661,18 @@ useAppStore.subscribe((state) => {
       ? `chain:${appState.canvasChainName}`
       : "_new";
   useWorkflowChatStore.getState().setContextKey(initKey);
+
+  // Load model defaults from server config
+  fetch("/config")
+    .then((r) => r.ok ? r.json() : null)
+    .then((cfg) => {
+      if (!cfg) return;
+      const updates: Partial<WorkflowChatState> = {};
+      if (cfg.workflowChatModel) updates.chatModel = cfg.workflowChatModel;
+      if (cfg.workflowPlannerModel) updates.plannerModel = cfg.workflowPlannerModel;
+      if (Object.keys(updates).length > 0) useWorkflowChatStore.setState(updates);
+    })
+    .catch(() => {});
 })();
 
 // Auto-save messages on every change

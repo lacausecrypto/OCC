@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as yaml from "js-yaml";
 import { z } from "zod";
 import type { ChainDefinition } from "./types.js";
@@ -239,12 +240,17 @@ const ChainSchema = z.object({
 
 export function getChainsDir(): string {
   if (process.env.CHAINS_DIR) return process.env.CHAINS_DIR;
-  // Resolve relative to this file's location (src/ or dist/), not cwd
-  // dist/loader.js → ../chains  |  src/loader.ts → ../chains
-  const fromFile = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "..", "chains");
+  // Resolve relative to this file's location (mcp-server/src/ or mcp-server/dist/)
+  // mcp-server/dist/loader.js → ../../chains  (project root)
+  // Use fileURLToPath to correctly decode %20 → spaces in paths
+  const fileDir = path.dirname(fileURLToPath(import.meta.url));
+  // Try: go up to mcp-server/, then up to project root, then /chains
+  const fromFile = path.resolve(fileDir, "..", "..", "chains");
   if (fs.existsSync(fromFile)) return fromFile;
-  // Fallback: relative to cwd (for CLI usage)
-  return path.join(process.cwd(), "..", "chains");
+  // Fallback: relative to cwd
+  const fromCwd = path.join(process.cwd(), "chains");
+  if (fs.existsSync(fromCwd)) return fromCwd;
+  return fromCwd;
 }
 
 /** Sanitize a chain/pipeline name to prevent path traversal */

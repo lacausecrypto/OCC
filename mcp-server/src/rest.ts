@@ -21,7 +21,7 @@ import {
   sanitizeName,
 } from "./loader.js";
 import { executeChain, getExecution, getAllExecutions, cancelExecution, loadPersistedExecutions, resumeExecution, approveGate, getPendingApprovals, validateClaudeBinary, canStartExecution, getRunningExecutionCount, getExecutionTimeline } from "./executor.js";
-import { getChainStats, createVersion, listVersions, getVersion, deleteVersion as deleteVersionFromDb, countVersions } from "./storage.js";
+import { getChainStats, createVersion, listVersions, getVersion, deleteVersion as deleteVersionFromDb, countVersions, saveExecution, checkpointStep } from "./storage.js";
 import { loadMcpServers, discoverTools, getConfiguredServers, getMcpConfig, saveMcpConfig, closeMcpClients } from "./mcp-client.js";
 import { closeStorage } from "./storage.js";
 import { initQueue, enqueue, getQueueJob, listQueueJobs, listQueueByStatus, cancelQueueJob, getQueueStats, purgeOldJobs, closeQueue } from "./queue.js";
@@ -520,6 +520,7 @@ app.get("/executions/token-usage-detailed", async (req, res) => {
     chains: { input: number; output: number; count: number };
     pipelines: { input: number; output: number; count: number };
     blob: { input: number; output: number; count: number };
+    workflowChat: { input: number; output: number; count: number };
   }>();
   // Per-chain totals
   const chainTotals = new Map<string, { input: number; output: number; count: number }>();
@@ -533,6 +534,7 @@ app.get("/executions/token-usage-detailed", async (req, res) => {
       chains: { input: 0, output: 0, count: 0 },
       pipelines: { input: 0, output: 0, count: 0 },
       blob: { input: 0, output: 0, count: 0 },
+      workflowChat: { input: 0, output: 0, count: 0 },
     };
 
     let stepInput = 0, stepOutput = 0;
@@ -545,9 +547,14 @@ app.get("/executions/token-usage-detailed", async (req, res) => {
     totalExecs++;
 
     // Classify source
+    const isWorkflowChat = exec.id.startsWith("wfc_") || exec.chainName === "_workflow_chat";
     const isBlob = exec.id.startsWith("blob_") || exec.chainName.startsWith("blob_");
     const isPipeline = exec.chainName.includes("|") || exec.id.includes("pipeline_");
-    if (isBlob) {
+    if (isWorkflowChat) {
+      entry.workflowChat.input += stepInput;
+      entry.workflowChat.output += stepOutput;
+      entry.workflowChat.count++;
+    } else if (isBlob) {
       entry.blob.input += stepInput;
       entry.blob.output += stepOutput;
       entry.blob.count++;
@@ -584,6 +591,7 @@ app.get("/executions/token-usage-detailed", async (req, res) => {
               chains: { input: 0, output: 0, count: 0 },
               pipelines: { input: 0, output: 0, count: 0 },
               blob: { input: 0, output: 0, count: 0 },
+              workflowChat: { input: 0, output: 0, count: 0 },
             };
             const inp = node.data.inputTokens ?? 0;
             const out = node.data.outputTokens ?? 0;
@@ -1290,6 +1298,8 @@ app.get("/config", (_req, res) => {
     blobChatModel: process.env.BLOB_CHAT_MODEL ?? "claude-sonnet-4-6",
     blobStepModel: process.env.BLOB_STEP_MODEL ?? "claude-sonnet-4-6",
     blobAutoCheckSec: process.env.BLOB_AUTO_CHECK_SEC ?? "60",
+    workflowChatModel: process.env.WORKFLOW_CHAT_MODEL ?? "claude-haiku-4-5",
+    workflowPlannerModel: process.env.WORKFLOW_PLANNER_MODEL ?? "claude-sonnet-4-6",
     maxContextChars: process.env.MAX_CONTEXT_CHARS ?? "50000",
     maxChatContextChars: process.env.MAX_CHAT_CONTEXT_CHARS ?? "8000",
     resendApiKey: process.env.RESEND_API_KEY ? "***" : "",
@@ -1337,6 +1347,8 @@ app.put("/config", (req, res) => {
       blobChatModel: "BLOB_CHAT_MODEL",
       blobStepModel: "BLOB_STEP_MODEL",
       blobAutoCheckSec: "BLOB_AUTO_CHECK_SEC",
+      workflowChatModel: "WORKFLOW_CHAT_MODEL",
+      workflowPlannerModel: "WORKFLOW_PLANNER_MODEL",
       maxContextChars: "MAX_CONTEXT_CHARS",
       maxChatContextChars: "MAX_CHAT_CONTEXT_CHARS",
       resendApiKey: "RESEND_API_KEY",
@@ -1479,6 +1491,67 @@ app.get("/ollama/status", async (_req, res) => {
     res.json({ online: true, models: data.models?.length ?? 0, host: OLLAMA_DEFAULT });
   } catch {
     res.json({ online: false, models: 0, host: OLLAMA_DEFAULT });
+  }
+});
+
+// ─── HuggingFace proxy routes ─────────────────────────────────────────────────
+
+const HF_API = "https://huggingface.co/api";
+
+// GET /huggingface/models → search text-generation models
+app.get("/huggingface/models", async (req, res) => {
+  try {
+    const search = (req.query.search as string) ?? "";
+    const filter = (req.query.filter as string) ?? "text-generation";
+    const sort = (req.query.sort as string) ?? "downloads";
+    const limit = Math.min(Number(req.query.limit) || 30, 100);
+    const url = `${HF_API}/models?filter=${encodeURIComponent(filter)}&sort=${sort}&direction=-1&limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ""}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!resp.ok) return res.status(502).json({ error: `HuggingFace API ${resp.status}` });
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: `Cannot reach HuggingFace API: ${safeErrorMessage(err)}` });
+  }
+});
+
+// GET /huggingface/model/:id → model details (id is url-encoded repo path)
+app.get("/huggingface/model/*", async (req, res) => {
+  try {
+    const modelId = (req.params as Record<string, string>)[0]; // e.g. "meta-llama/Llama-3.2-3B-Instruct"
+    const resp = await fetch(`${HF_API}/models/${modelId}`, { signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) return res.status(resp.status).json({ error: `HuggingFace ${resp.status}` });
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// POST /huggingface/test → test inference API with token
+app.post("/huggingface/test", async (req, res) => {
+  try {
+    const { token, model } = req.body as { token?: string; model?: string };
+    const testModel = model ?? "Qwen/Qwen3-8B";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const resp = await fetch(`https://router.huggingface.co/v1/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: testModel,
+        messages: [{ role: "user", content: "Hello" }],
+        max_tokens: 10,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => resp.statusText);
+      return res.json({ ok: false, error: `${resp.status}: ${errText}` });
+    }
+    res.json({ ok: true, model: testModel });
+  } catch (err) {
+    res.json({ ok: false, error: safeErrorMessage(err) });
   }
 });
 
@@ -2258,7 +2331,9 @@ app.post("/workflow-chat", async (req: Request, res: Response) => {
     id: `_wf_${stage}`,
     prompt: "",
     output_var: "_wf_out",
-    model: model ?? (stage === "chat" ? "claude-haiku-4-5" : "claude-sonnet-4-6"),
+    model: model ?? (stage === "chat"
+      ? (process.env.WORKFLOW_CHAT_MODEL ?? "claude-haiku-4-5")
+      : (process.env.WORKFLOW_PLANNER_MODEL ?? "claude-sonnet-4-6")),
     tools: [] as string[],
   };
 
@@ -2272,6 +2347,7 @@ app.post("/workflow-chat", async (req: Request, res: Response) => {
 
     try {
       let fullOutput = "";
+      const execId = `wfc_chat_${Date.now()}`;
       const result = await runClaudeForWfChat(
         `${sysPrompt}\n\n---\n\n${fullPrompt}`,
         step as any,
@@ -2280,10 +2356,17 @@ app.post("/workflow-chat", async (req: Request, res: Response) => {
           res.write(`data: ${JSON.stringify({ type: "chunk", text: chunk })}\n\n`);
           if (typeof (res as any).flush === "function") (res as any).flush();
         },
-        `wf-chat-${Date.now()}`,
+        execId,
       );
-      res.write(`data: ${JSON.stringify({ type: "done", text: fullOutput, inputTokens: result.inputTokens ?? 0, outputTokens: result.outputTokens ?? 0 })}\n\n`);
+      const inputTokens = result.inputTokens ?? 0;
+      const outputTokens = result.outputTokens ?? 0;
+      res.write(`data: ${JSON.stringify({ type: "done", text: fullOutput, inputTokens, outputTokens })}\n\n`);
       res.end();
+      // Persist token usage for dashboard tracking
+      try {
+        saveExecution({ id: execId, chainName: "_workflow_chat", status: "done", input: {}, steps: {}, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), durationMs: 0 });
+        checkpointStep(execId, { stepId: "chat", status: "done", inputTokens, outputTokens });
+      } catch { /* non-critical */ }
     } catch (err) {
       res.write(`data: ${JSON.stringify({ type: "error", error: safeErrorMessage(err) })}\n\n`);
       res.end();
@@ -2298,13 +2381,22 @@ app.post("/workflow-chat", async (req: Request, res: Response) => {
       enrichedSysPrompt += `\n\n## Current Canvas State\n${canvasContext}\n\nIMPORTANT: Build on top of existing steps. Do NOT recreate steps that already exist. Use depends_on to wire new steps to existing ones using their exact labels.`;
     }
 
+    const execId = `wfc_plan_${Date.now()}`;
     const result = await runStepWithRetry(
       step,
       `${enrichedSysPrompt}\n\n---\n\n${fullPrompt}`,
       () => {},
-      `wf-plan-${Date.now()}`,
+      execId,
       (msg: string, level: "info" | "warn" | "error") => logger[level]("workflow-chat", msg),
     );
+
+    // Persist token usage for dashboard tracking
+    try {
+      const inputTokens = result.inputTokens ?? 0;
+      const outputTokens = result.outputTokens ?? 0;
+      saveExecution({ id: execId, chainName: "_workflow_chat", status: "done", input: {}, steps: {}, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), durationMs: 0 });
+      checkpointStep(execId, { stepId: "plan", status: "done", inputTokens, outputTokens });
+    } catch { /* non-critical */ }
 
     const jsonMatch = result.stdout.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
