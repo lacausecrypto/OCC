@@ -177,6 +177,18 @@ export function ExecutionList({ onOpenExecModal }: ExecutionListProps) {
                 </span>
               ) : null}
             </div>
+
+            {/* Error message */}
+            {ex.error && (
+              <div style={{
+                fontSize: 10, lineHeight: 1.3, padding: "4px 8px", marginTop: 4,
+                background: "rgba(255, 55, 95, 0.08)", borderRadius: 6,
+                color: "#ff375f", wordBreak: "break-word",
+                border: "1px solid rgba(255, 55, 95, 0.15)",
+              }}>
+                {esc(ex.error.length > 120 ? ex.error.slice(0, 120) + "..." : ex.error)}
+              </div>
+            )}
           </div>
         );
       })}

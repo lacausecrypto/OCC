@@ -61,9 +61,10 @@ const rateLimitKeyGenerator = (req: Request): string => {
   if (authHeader?.startsWith("Bearer ")) return "key:" + authHeader.slice(7, 15);
   return "ip:" + (req.ip ?? req.socket.remoteAddress ?? "unknown");
 };
-const executeLimiter = rateLimit({ windowMs: 60_000, max: parseInt(process.env.RATE_LIMIT_EXEC ?? "20"), keyGenerator: rateLimitKeyGenerator, message: { error: "Too many executions — try again in a minute" } });
-const generateLimiter = rateLimit({ windowMs: 60_000, max: parseInt(process.env.RATE_LIMIT_GEN ?? "5"), keyGenerator: rateLimitKeyGenerator, message: { error: "Too many generation requests — try again in a minute" } });
-const configLimiter = rateLimit({ windowMs: 60_000, max: 30, keyGenerator: rateLimitKeyGenerator, message: { error: "Too many config requests — try again in a minute" } });
+const rlOpts = { keyGenerator: rateLimitKeyGenerator, validate: false as any };
+const executeLimiter = rateLimit({ windowMs: 60_000, max: parseInt(process.env.RATE_LIMIT_EXEC ?? "20"), ...rlOpts, message: { error: "Too many executions — try again in a minute" } });
+const generateLimiter = rateLimit({ windowMs: 60_000, max: parseInt(process.env.RATE_LIMIT_GEN ?? "5"), ...rlOpts, message: { error: "Too many generation requests — try again in a minute" } });
+const configLimiter = rateLimit({ windowMs: 60_000, max: 30, ...rlOpts, message: { error: "Too many config requests — try again in a minute" } });
 app.use("/execute", executeLimiter);
 app.use("/pipelines/*/execute", executeLimiter);
 app.use("/generate-chain", generateLimiter);
@@ -360,7 +361,7 @@ app.post("/chains/:name/versions/:version/restore", (req, res) => {
       const parsed = yaml.load(version.yamlContent) as { steps?: unknown[] };
       stepCount = Array.isArray(parsed?.steps) ? parsed.steps.length : undefined;
     } catch { /* ignore */ }
-    createVersion("chain", safeName, version.yamlContent, `Restored from v${vNum}`, stepCount);
+    try { createVersion("chain", safeName, version.yamlContent, `Restored from v${vNum}`, stepCount); } catch { /* */ }
 
     res.json({ ok: true, restoredFrom: vNum });
   } catch (err) {
@@ -406,8 +407,8 @@ app.post("/chains/:name", (req, res) => {
       stepCount = Array.isArray(parsed?.steps) ? parsed.steps.length : undefined;
     } catch { /* ignore parse errors — still save */ }
 
-    // Create version snapshot before writing
-    createVersion("chain", safeName, newYaml, versionMessage, stepCount);
+    // Create version snapshot before writing (non-blocking — save even if versioning fails)
+    try { createVersion("chain", safeName, newYaml, versionMessage, stepCount); } catch { /* versioning DB may not be initialized */ }
 
     // Write the file
     fs.writeFileSync(path.join(dir, `${safeName}.yaml`), newYaml, "utf-8");
@@ -448,9 +449,8 @@ app.post("/execute/:name", async (req: Request, res: Response) => {
       const executionId = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
 
       const emitter = (event: ExecutionEvent) => {
-        if (event.type === "execution_started") {
-          (event as any).executionId = executionId;
-        }
+        // Ensure ALL events carry the same executionId returned to the client
+        (event as any).executionId = executionId;
         emitSSE(executionId, event);
       };
 
@@ -778,11 +778,16 @@ app.get("/executions", (req, res) => {
   const offset = parseInt(req.query.offset as string) || 0;
   const all = getAllExecutions().slice(offset, offset + limit);
   res.json(
-    all.map(({ id, chainName, status, startedAt, finishedAt, durationMs, result, steps }) => {
+    all.map(({ id, chainName, status, startedAt, finishedAt, durationMs, error, result, steps }) => {
       // Collect file paths from result + all step outputs
       const texts = [result ?? "", ...Object.values(steps).map((s) => s.output ?? "")];
       const files = extractFilePaths(texts.join("\n"));
-      return { id, chainName, status, startedAt, finishedAt, durationMs, files };
+      // Include step summary for the monitor UI
+      const stepSummary: Record<string, { status: string; durationMs?: number; error?: string }> = {};
+      for (const [sid, s] of Object.entries(steps)) {
+        stepSummary[sid] = { status: s.status, durationMs: s.durationMs, ...(s.error ? { error: s.error } : {}) };
+      }
+      return { id, chainName, status, startedAt, finishedAt, durationMs, error, files, steps: stepSummary };
     })
   );
 });
@@ -1018,8 +1023,8 @@ app.post("/pipelines/:name", (req, res) => {
       stepCount = Array.isArray(parsed?.chains) ? parsed.chains.length : undefined;
     } catch { /* ignore parse errors — still save */ }
 
-    // Create version snapshot before writing
-    createVersion("pipeline", pSafeName, newYaml, versionMessage, stepCount);
+    // Create version snapshot before writing (non-blocking)
+    try { createVersion("pipeline", pSafeName, newYaml, versionMessage, stepCount); } catch { /* versioning DB may not be initialized */ }
 
     // Write the file
     fs.writeFileSync(path.join(dir, `${pSafeName}.yaml`), newYaml, "utf-8");

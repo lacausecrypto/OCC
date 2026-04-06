@@ -36,6 +36,23 @@ export const useMonitorStore = create<MonitorState>((set, get) => ({
     sseManager.onStatusChange = (status) => set({ sseStatus: status });
     sseManager.onEvent = (event) => get().handleEvent(event);
     sseManager.connect(url);
+
+    // Load recent executions from backend (SSE only captures live events)
+    fetch("/executions?limit=30")
+      .then((r) => r.ok ? r.json() : [])
+      .then((data: ChainExecution[]) => {
+        if (!Array.isArray(data)) return;
+        set((s) => {
+          const executions = new Map(s.executions);
+          for (const ex of data) {
+            if (!executions.has(ex.id)) {
+              executions.set(ex.id, ex);
+            }
+          }
+          return { executions };
+        });
+      })
+      .catch(() => {});
   },
 
   disconnect: () => {
