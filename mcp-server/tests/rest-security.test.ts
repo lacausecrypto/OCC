@@ -174,7 +174,7 @@ output: result
       if (val === undefined) delete process.env[key];
       else process.env[key] = val;
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
   });
 
   // ── GET /extract-style ──
@@ -544,7 +544,7 @@ describe("Auth middleware security", () => {
       if (val === undefined) delete process.env[key];
       else process.env[key] = val;
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
   });
 
   it("returns 401 for unauthenticated request to /config", async () => {

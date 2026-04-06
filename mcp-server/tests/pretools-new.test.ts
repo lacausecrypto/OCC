@@ -29,7 +29,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.CHAINS_DIR;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
 });
 
 // ─── current_datetime improvements ──────────────────────────────────────────

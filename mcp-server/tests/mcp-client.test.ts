@@ -32,7 +32,7 @@ afterEach(async () => {
   else delete process.env.MCP_SERVERS_CONFIG;
   if (originalChainsDir !== undefined) process.env.CHAINS_DIR = originalChainsDir;
   else delete process.env.CHAINS_DIR;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
 });
 
 // ─── Config loading ─────────────────────────────────────────────────────────

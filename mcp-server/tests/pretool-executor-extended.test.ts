@@ -39,7 +39,7 @@ afterEach(() => {
   delete process.env.OCC_VECTOR_DB;
   delete process.env.OCC_GRAPH_DB;
   delete process.env.OCC_SEMANTIC_CACHE_DB;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
 });
 
 // ─── state_load / state_save via executor ────────────────────────────────────

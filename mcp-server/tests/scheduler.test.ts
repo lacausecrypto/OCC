@@ -62,7 +62,7 @@ afterEach(() => {
   if (origChainsDir === undefined) delete process.env.CHAINS_DIR;
   else process.env.CHAINS_DIR = origChainsDir;
 
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
 });
 
 function makeSchedule(overrides: Record<string, unknown> = {}) {

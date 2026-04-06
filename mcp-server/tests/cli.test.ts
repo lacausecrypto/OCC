@@ -61,7 +61,7 @@ afterEach(() => {
 
 // ─── Help ───────────────────────────────────────────────────────────────────
 
-describe("occ help", () => {
+describeUnix("occ help", () => {
   it("shows help with no args", () => {
     const { stdout, exitCode } = occ([]);
     expect(exitCode).toBe(0);
@@ -94,7 +94,7 @@ describe("occ help", () => {
 
 // ─── Unknown command ────────────────────────────────────────────────────────
 
-describe("Unknown command", () => {
+describeUnix("Unknown command", () => {
   it("exits 1 for unknown command", () => {
     const { exitCode, stderr } = occ(["foobar"]);
     expect(exitCode).toBe(1);
@@ -283,7 +283,7 @@ output: result
 
 // ─── List ───────────────────────────────────────────────────────────────────
 
-describe("occ list", () => {
+describeUnix("occ list", () => {
   it("exits with error when server not running", () => {
     // Use a port that's definitely not running
     const { exitCode, stderr } = occ(["list"], { OCC_URL: "http://localhost:19999" });
@@ -294,7 +294,7 @@ describe("occ list", () => {
 
 // ─── Health ─────────────────────────────────────────────────────────────────
 
-describe("occ health", () => {
+describeUnix("occ health", () => {
   it("exits with error when server not running", () => {
     const { exitCode, stderr } = occ(["health"], { OCC_URL: "http://localhost:19999" });
     expect(exitCode).toBe(1);
@@ -304,7 +304,7 @@ describe("occ health", () => {
 
 // ─── Run (no server) ────────────────────────────────────────────────────────
 
-describe("occ run", () => {
+describeUnix("occ run", () => {
   it("exits 1 without chain name", () => {
     const { exitCode, stderr } = occ(["run"]);
     expect(exitCode).toBe(1);
@@ -320,7 +320,7 @@ describe("occ run", () => {
 
 // ─── Status (no server) ────────────────────────────────────────────────────
 
-describe("occ status", () => {
+describeUnix("occ status", () => {
   it("exits 1 without execution id", () => {
     const { exitCode, stderr } = occ(["status"]);
     expect(exitCode).toBe(1);
@@ -330,7 +330,7 @@ describe("occ status", () => {
 
 // ─── Input parsing ──────────────────────────────────────────────────────────
 
-describe("Input parsing", () => {
+describeUnix("Input parsing", () => {
   it("handles multiple --input flags", () => {
     fs.writeFileSync(
       path.join(tmpDir, "multi-input.yaml"),
@@ -380,7 +380,7 @@ output: result
 
 // ─── New commands ───────────────────────────────────────────────────────────
 
-describe("occ cancel", () => {
+describeUnix("occ cancel", () => {
   it("exits 1 without execution id", () => {
     const { exitCode, stderr } = occ(["cancel"]);
     expect(exitCode).toBe(1);
@@ -394,7 +394,7 @@ describe("occ cancel", () => {
   });
 });
 
-describe("occ queue", () => {
+describeUnix("occ queue", () => {
   it("exits with error when server not running", () => {
     const { exitCode, stderr } = occ(["queue"], { OCC_URL: "http://localhost:19999" });
     expect(exitCode).toBe(1);
@@ -402,7 +402,7 @@ describe("occ queue", () => {
   });
 });
 
-describe("occ timeline", () => {
+describeUnix("occ timeline", () => {
   it("exits 1 without execution id", () => {
     const { exitCode, stderr } = occ(["timeline"]);
     expect(exitCode).toBe(1);
@@ -416,7 +416,7 @@ describe("occ timeline", () => {
   });
 });
 
-describe("occ stats", () => {
+describeUnix("occ stats", () => {
   it("exits 1 without chain name", () => {
     const { exitCode, stderr } = occ(["stats"]);
     expect(exitCode).toBe(1);
@@ -430,7 +430,7 @@ describe("occ stats", () => {
   });
 });
 
-describe("occ approve/reject", () => {
+describeUnix("occ approve/reject", () => {
   it("exits 1 without args", () => {
     const { exitCode: a, stderr: sa } = occ(["approve"]);
     expect(a).toBe(1);
@@ -454,7 +454,7 @@ describe("occ approve/reject", () => {
   });
 });
 
-describe("occ run-pipeline", () => {
+describeUnix("occ run-pipeline", () => {
   it("exits 1 without pipeline name", () => {
     const { exitCode, stderr } = occ(["run-pipeline"]);
     expect(exitCode).toBe(1);
@@ -468,7 +468,7 @@ describe("occ run-pipeline", () => {
   });
 });
 
-describe("--json flag", () => {
+describeUnix("--json flag", () => {
   it("help still works with --json (no crash)", () => {
     const { exitCode } = occ(["help", "--json"]);
     expect(exitCode).toBe(0);
@@ -483,7 +483,7 @@ describe("--json flag", () => {
   });
 });
 
-describe("--priority flag", () => {
+describeUnix("--priority flag", () => {
   it("dry-run works with --priority (no crash)", () => {
     const chainsDir = path.resolve(__dirname, "..", "..", "chains");
     if (!fs.existsSync(chainsDir)) return;
@@ -496,7 +496,7 @@ describe("--priority flag", () => {
   });
 });
 
-describe("Help includes new commands", () => {
+describeUnix("Help includes new commands", () => {
   it("help mentions all 17 commands and flags", () => {
     const { stdout } = occ(["help"]);
     expect(stdout).toContain("cancel");
@@ -515,7 +515,7 @@ describe("Help includes new commands", () => {
 
 // ─── Generate ───────────────────────────────────────────────────────────────
 
-describe("occ generate", () => {
+describeUnix("occ generate", () => {
   it("exits 1 without description", () => {
     const { exitCode, stderr } = occ(["generate"]);
     expect(exitCode).toBe(1);
@@ -529,7 +529,7 @@ describe("occ generate", () => {
   });
 });
 
-describe("occ generate-answer", () => {
+describeUnix("occ generate-answer", () => {
   it("exits 1 without args", () => {
     const { exitCode, stderr } = occ(["generate-answer"]);
     expect(exitCode).toBe(1);

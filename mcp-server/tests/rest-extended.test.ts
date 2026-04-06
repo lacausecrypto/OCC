@@ -203,7 +203,7 @@ output: result
     app = restModule.app;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     if (originalChainsDir === undefined) delete process.env.CHAINS_DIR;
     else process.env.CHAINS_DIR = originalChainsDir;
@@ -213,7 +213,10 @@ output: result
     else process.env.REST_PORT = originalRestPort;
     if (originalApiKey === undefined) delete process.env.OCC_API_KEY;
     else process.env.OCC_API_KEY = originalApiKey;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    try { const { closeStorage } = await import("../src/storage.js"); closeStorage(); } catch { /* */ }
+    try { const { closeQueue } = await import("../src/queue.js"); closeQueue(); } catch { /* */ }
+    await new Promise(r => setTimeout(r, process.platform === "win32" ? 200 : 0));
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
   });
 
   // ── Security headers ──
@@ -538,7 +541,7 @@ describe("Auth middleware (OCC_API_KEY)", () => {
     app = restModule.app;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     if (originalChainsDir === undefined) delete process.env.CHAINS_DIR;
     else process.env.CHAINS_DIR = originalChainsDir;
@@ -546,7 +549,10 @@ describe("Auth middleware (OCC_API_KEY)", () => {
     else process.env.SCHEDULES_FILE = originalSchedulesFile;
     if (originalApiKey === undefined) delete process.env.OCC_API_KEY;
     else process.env.OCC_API_KEY = originalApiKey;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    try { const { closeStorage } = await import("../src/storage.js"); closeStorage(); } catch { /* */ }
+    try { const { closeQueue } = await import("../src/queue.js"); closeQueue(); } catch { /* */ }
+    await new Promise(r => setTimeout(r, process.platform === "win32" ? 200 : 0));
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
   });
 
   it("returns 401 for unauthenticated request to /chains", async () => {
