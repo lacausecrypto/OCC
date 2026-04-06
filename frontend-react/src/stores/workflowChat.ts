@@ -88,26 +88,36 @@ interface WorkflowChatState {
 
 // ─── Default prompts ────────────────────────────────────────────────────────
 
-const DEFAULT_CHAT_PROMPT = `You are a Workflow Architect AI that BUILDS chains, not just talks about them.
+const DEFAULT_CHAT_PROMPT = `You are an Agentic Workflow AI — you BUILD, RUN, DEBUG, and MANAGE chains.
+
+You have the following ACTIONS available. Include the exact tag at the end of your response to trigger them:
+
+[READY_TO_BUILD] — Build/modify steps on the canvas from your plan
+[ACTION:RUN] — Execute the current chain on the canvas
+[ACTION:STOP] — Stop the running execution
+[ACTION:ANALYZE] — Analyze the current chain structure (dependencies, bottlenecks, issues)
+[ACTION:DEBUG] — Debug the last execution (inspect errors, step outputs, timing)
+[ACTION:DRY_RUN] — Show execution plan + cost estimate without running
 
 RULES:
-1. Be ACTION-ORIENTED. When the user describes what they want, immediately design and build it.
-2. Ask AT MOST 1 clarifying question if truly ambiguous. Otherwise, make smart assumptions and BUILD.
-3. When the user says "go", "do it", "create it", "yes", or any affirmative → immediately describe the plan and say "I'll build this now"
-4. ALWAYS end your response with "I'll build this now" or "Let me create this" when you have enough context to build.
-5. Keep responses SHORT. 3-5 bullet points max for the plan, then build.
-6. If the user gives vague instructions like "figure it out yourself" or "you decide", make reasonable assumptions and BUILD immediately.
-7. Respond in the same language as the user (French → French, English → English, etc.)
+1. Be ACTION-ORIENTED. Build, run, debug — don't just talk.
+2. Ask AT MOST 1 clarifying question. Otherwise, make smart assumptions and ACT.
+3. When the user says "run", "lance", "execute" → respond briefly then use [ACTION:RUN]
+4. When the user says "stop", "cancel", "arrête" → use [ACTION:STOP]
+5. When the user says "debug", "what went wrong", "pourquoi ça a fail" → use [ACTION:DEBUG]
+6. When the user says "analyze", "check", "vérifie" → use [ACTION:ANALYZE]
+7. When the user says "dry-run", "estimate", "combien ça coûte" → use [ACTION:DRY_RUN]
+8. Keep responses SHORT. 3-5 bullet points max.
+9. Respond in the same language as the user.
+10. When building, describe the plan briefly then use [READY_TO_BUILD].
+
+CONTEXT: You can see the current canvas state (steps, connections, models) and execution history. Use this context to give precise answers about the chain.
 
 NEVER:
-- Ask more than 1 question before building
-- Give long explanations without building
-- Say "approuve" or "confirme" — just build when you have enough info
-- Refuse to build because of missing details — use smart defaults
+- Ask multiple questions before acting
+- Give long explanations without an action
+- Refuse to act because of missing details — use smart defaults`;
 
-When you have gathered enough information to build the workflow, end your response with the exact tag [READY_TO_BUILD].
-Do NOT include [READY_TO_BUILD] if you still need clarification from the user.
-This tag signals the system to proceed to the build phase automatically.`;
 
 const DEFAULT_PLANNER_PROMPT = `You are a chain planner. Given a conversation, produce a JSON plan that creates canvas nodes.
 
@@ -198,26 +208,100 @@ function getHeaders(): Record<string, string> {
  * Detect if the assistant response signals readiness to build.
  * Supports English and French patterns.
  */
-/** Strip the [READY_TO_BUILD] tag from displayed text */
+/** Strip action tags from displayed text */
 function stripBuildTag(text: string): string {
-  return text.replace(/\s*\[READY_TO_BUILD\]\s*/g, "").trim();
+  return text
+    .replace(/\s*\[READY_TO_BUILD\]\s*/g, "")
+    .replace(/\s*\[ACTION:\w+\]\s*/g, "")
+    .trim();
 }
 
-/** Build a text summary of the current canvas state for the planner */
+/** Build a rich text summary of current canvas + execution state */
 function buildCanvasContext(): string {
   const canvasState = useCanvasStore.getState();
   const appState = useAppStore.getState();
   const nodes = [...canvasState.nodes.values()];
-  if (nodes.length === 0) return "Empty canvas — no steps exist yet.";
   const edges = [...canvasState.edges.values()];
-  const lines = nodes.map((n) => {
+
+  const parts: string[] = [];
+
+  // Chain info
+  const chainName = appState.canvasChainName || appState.pipelineName || "untitled";
+  parts.push(`Chain: "${chainName}" | ${nodes.length} steps | ${edges.length} connections`);
+
+  if (nodes.length === 0) {
+    parts.push("Canvas is empty — no steps exist yet.");
+    return parts.join("\n");
+  }
+
+  // Step details
+  parts.push("\nSteps:");
+  for (const n of nodes) {
     const deps = edges.filter((e) => e.to === n.id).map((e) => {
       const src = canvasState.nodes.get(e.from);
       return src?.label ?? e.from;
     });
-    return `- "${n.label}" (${n.type})${deps.length > 0 ? ` [depends on: ${deps.join(", ")}]` : ""}`;
-  });
-  return `Chain: "${appState.canvasChainName || "untitled"}"\nExisting steps (${nodes.length}):\n${lines.join("\n")}\nConnections: ${edges.length}`;
+    const model = n.model ? ` [${n.model}]` : "";
+    const tools = n.tools?.length ? ` tools:[${n.tools.join(",")}]` : "";
+    const pretools = n.preTools?.length ? ` pre-tools:${n.preTools.length}` : "";
+    const prompt = n.prompt ? ` prompt:"${n.prompt.slice(0, 60)}..."` : " prompt:EMPTY";
+    parts.push(`  - "${n.label}" (${n.type})${model}${tools}${pretools}${deps.length > 0 ? ` ← [${deps.join(", ")}]` : ""}${prompt}`);
+  }
+
+  // Execution history (last 3)
+  try {
+    const { useMonitorStore } = require("./monitor");
+    const executions = [...useMonitorStore.getState().executions.values()]
+      .filter((e: any) => e.chainName === chainName)
+      .sort((a: any, b: any) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))
+      .slice(0, 3);
+
+    if (executions.length > 0) {
+      parts.push("\nRecent executions:");
+      for (const ex of executions) {
+        const steps = Object.entries(ex.steps ?? {});
+        const errors = steps.filter(([, s]: any) => s.status === "error");
+        const done = steps.filter(([, s]: any) => s.status === "done");
+        const dur = ex.durationMs ? `${(ex.durationMs / 1000).toFixed(1)}s` : "?";
+        parts.push(`  - ${ex.status} (${dur}) | ${done.length}/${steps.length} done${errors.length > 0 ? ` | ERRORS: ${errors.map(([id, s]: any) => `${id}: ${s.error?.slice(0, 80)}`).join("; ")}` : ""}${ex.error ? ` | ${ex.error.slice(0, 100)}` : ""}`);
+      }
+    }
+  } catch { /* monitor not available */ }
+
+  return parts.join("\n");
+}
+
+/** Build execution debug info for the last run */
+function buildDebugContext(): string {
+  try {
+    const { useMonitorStore } = require("./monitor");
+    const appState = useAppStore.getState();
+    const chainName = appState.canvasChainName || appState.pipelineName || "";
+    const executions = [...useMonitorStore.getState().executions.values()]
+      .filter((e: any) => e.chainName === chainName)
+      .sort((a: any, b: any) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
+
+    const last = executions[0];
+    if (!last) return "No execution history found for this chain.";
+
+    const parts: string[] = [];
+    parts.push(`Last execution: ${last.status} | ${last.durationMs ? (last.durationMs / 1000).toFixed(1) + "s" : "?"}`);
+    if (last.error) parts.push(`Chain error: ${last.error}`);
+
+    const steps = Object.entries(last.steps ?? {});
+    for (const [stepId, step] of steps) {
+      const s = step as any;
+      const dur = s.durationMs ? `${(s.durationMs / 1000).toFixed(1)}s` : "";
+      const tokens = s.inputTokens ? `${s.inputTokens}+${s.outputTokens} tok` : "";
+      const err = s.error ? ` ERROR: ${s.error}` : "";
+      const output = s.output ? ` output:"${String(s.output).slice(0, 100)}..."` : "";
+      parts.push(`  ${s.status} ${stepId} ${dur} ${tokens}${err}${output}`);
+    }
+
+    return parts.join("\n");
+  } catch {
+    return "Cannot access execution history.";
+  }
 }
 
 function shouldTriggerPlan(text: string): boolean {
@@ -374,6 +458,12 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
     const headers = getHeaders();
     const context = [...get().messages].slice(-20).map((m) => ({ role: m.role, content: m.content }));
     const canvasCtx = buildCanvasContext();
+    // Add debug context if user seems to want debugging
+    const lowerText = text.toLowerCase();
+    const wantsDebug = /debug|error|fail|bug|wrong|broke|crash|pourquoi|why.*fail|qu.est.ce qui/i.test(lowerText);
+    const fullCanvasCtx = wantsDebug
+      ? canvasCtx + "\n\n--- EXECUTION DEBUG ---\n" + buildDebugContext()
+      : canvasCtx;
 
     try {
       // ── Stage 1: Chat response (SSE streaming) ────────────────
@@ -391,7 +481,7 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
           context,
           systemPrompt: chatSystemPrompt,
           model: chatModel,
-          canvasContext: canvasCtx,
+          canvasContext: fullCanvasCtx,
         }),
       });
 
@@ -475,7 +565,7 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
             context: fullContext,
             systemPrompt: plannerSystemPrompt,
             model: plannerModel,
-            canvasContext: canvasCtx,
+            canvasContext: fullCanvasCtx,
           }),
         });
 
@@ -518,6 +608,9 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
           set({ messages: get().messages.filter((m) => m.id !== planningMsg.id) });
         }
       }
+      // ── Stage 3: Execute detected actions ──────────────────────
+      await executeDetectedActions(fullText, get, set);
+
     } catch (err) {
       const errMsg: WFMessage = {
         id: uid(), role: "system",
@@ -562,6 +655,128 @@ useWorkflowChatStore.subscribe((state) => {
     saveMessages(state.activeSessionId, state.messages);
   }
 });
+
+// ─── Action executor ────────────────────────────────────────────────────────
+
+async function executeDetectedActions(
+  fullText: string,
+  get: () => WorkflowChatState,
+  set: (partial: Partial<WorkflowChatState> | ((s: WorkflowChatState) => Partial<WorkflowChatState>)) => void,
+): Promise<void> {
+  const headers = getHeaders();
+  const actions = [...fullText.matchAll(/\[ACTION:(\w+)\]/g)].map((m) => m[1]);
+  if (actions.length === 0) return;
+
+  for (const action of actions) {
+    const sysMsg: WFMessage = {
+      id: uid(), role: "system", content: "", timestamp: new Date().toISOString(),
+    };
+
+    switch (action) {
+      case "RUN": {
+        const appState = useAppStore.getState();
+        const chainName = appState.canvasChainName;
+        if (!chainName) {
+          sysMsg.content = "\u26A0 No chain loaded on canvas. Save the chain first.";
+          break;
+        }
+        try {
+          const res = await fetch(`/execute/${encodeURIComponent(chainName)}`, {
+            method: "POST", headers, body: JSON.stringify({ input: {} }),
+          });
+          const data = await res.json() as { executionId?: string; error?: string };
+          if (data.executionId) {
+            sysMsg.content = `\u25B6 Chain "${chainName}" started \u2014 execution ${data.executionId.slice(0, 12)}`;
+            // Auto-connect SSE + track
+            appState.startExecution(data.executionId, chainName, "chain");
+          } else {
+            sysMsg.content = `\u26A0 Failed to start: ${data.error ?? "unknown error"}`;
+          }
+        } catch (err) {
+          sysMsg.content = `\u26A0 Run failed: ${(err as Error).message}`;
+        }
+        break;
+      }
+
+      case "STOP": {
+        try {
+          const { useCanvasExecStore } = await import("./canvasExec");
+          const execId = useCanvasExecStore.getState().canvasExecId;
+          if (!execId) {
+            sysMsg.content = "\u26A0 No running execution to stop.";
+          } else {
+            await fetch(`/executions/${encodeURIComponent(execId)}`, { method: "DELETE", headers });
+            sysMsg.content = `\u25A0 Execution ${execId.slice(0, 12)} cancelled.`;
+          }
+        } catch (err) {
+          sysMsg.content = `\u26A0 Stop failed: ${(err as Error).message}`;
+        }
+        break;
+      }
+
+      case "DEBUG": {
+        const debugInfo = buildDebugContext();
+        sysMsg.content = `\u{1F50D} Debug info:\n${debugInfo}`;
+        break;
+      }
+
+      case "ANALYZE": {
+        const canvasState = useCanvasStore.getState();
+        const nodes = [...canvasState.nodes.values()];
+        const edges = [...canvasState.edges.values()];
+        if (nodes.length === 0) {
+          sysMsg.content = "\u26A0 Canvas is empty \u2014 nothing to analyze.";
+          break;
+        }
+        // Quick analysis
+        const issues: string[] = [];
+        const noPrompt = nodes.filter((n) => !n.prompt || n.prompt.startsWith("TODO"));
+        if (noPrompt.length > 0) issues.push(`${noPrompt.length} step(s) missing prompts: ${noPrompt.map((n) => n.label).join(", ")}`);
+        const orphans = nodes.filter((n) => !edges.some((e) => e.from === n.id || e.to === n.id));
+        if (orphans.length > 1) issues.push(`${orphans.length} disconnected steps: ${orphans.map((n) => n.label).join(", ")}`);
+        const noOutput = nodes.filter((n) => !n.outputVar);
+        if (noOutput.length > 0) issues.push(`${noOutput.length} step(s) missing output variable`);
+        // Parallel detection
+        const roots = nodes.filter((n) => !edges.some((e) => e.to === n.id));
+        const parallelWaves = roots.length;
+
+        sysMsg.content = `\u{1F4CA} Analysis: ${nodes.length} steps, ${edges.length} connections, ${parallelWaves} parallel root(s)\n${issues.length > 0 ? "\u26A0 Issues:\n" + issues.map((i) => `  \u2022 ${i}`).join("\n") : "\u2713 No issues found."}`;
+        break;
+      }
+
+      case "DRY_RUN": {
+        const appState = useAppStore.getState();
+        const chainName = appState.canvasChainName;
+        if (!chainName) {
+          sysMsg.content = "\u26A0 No chain loaded. Save first.";
+          break;
+        }
+        try {
+          const res = await fetch(`/chains/${encodeURIComponent(chainName)}/stats`, { headers });
+          const stats = await res.json() as { totalRuns?: number; avgDurationMs?: number; successRate?: number };
+          const canvasState = useCanvasStore.getState();
+          const nodes = [...canvasState.nodes.values()];
+          const haiku = nodes.filter((n) => n.model?.includes("haiku")).length;
+          const sonnet = nodes.filter((n) => !n.model || n.model?.includes("sonnet")).length;
+          const opus = nodes.filter((n) => n.model?.includes("opus")).length;
+          const estCost = (haiku * 0.005 + sonnet * 0.04 + opus * 0.15).toFixed(3);
+
+          sysMsg.content = `\u{1F4CB} Dry-run: "${chainName}"\n\u2022 ${nodes.length} steps (${haiku} haiku, ${sonnet} sonnet, ${opus} opus)\n\u2022 Estimated cost: ~$${estCost}\n\u2022 History: ${stats.totalRuns ?? 0} runs, ${stats.successRate != null ? stats.successRate.toFixed(0) + "% success" : "no data"}, avg ${stats.avgDurationMs ? (stats.avgDurationMs / 1000).toFixed(1) + "s" : "?"}`;
+        } catch {
+          sysMsg.content = "\u26A0 Cannot fetch chain stats.";
+        }
+        break;
+      }
+
+      default:
+        sysMsg.content = `\u26A0 Unknown action: ${action}`;
+    }
+
+    if (sysMsg.content) {
+      set({ messages: [...get().messages, sysMsg] });
+    }
+  }
+}
 
 // ─── Apply plan to canvas ───────────────────────────────────────────────────
 
