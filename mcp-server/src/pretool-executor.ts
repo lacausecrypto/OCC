@@ -139,6 +139,16 @@ export type ClaudeRunner = (
 
 const preToolCache = new Map<string, { result: string; expiresAt: number }>();
 
+export function clearPreToolCache(): number {
+  const count = preToolCache.size;
+  preToolCache.clear();
+  return count;
+}
+
+export function getPreToolCacheSize(): number {
+  return preToolCache.size;
+}
+
 function getPreToolCacheKey(tool: PreTool, vars: Record<string, string>): string {
   const key = JSON.stringify({ type: tool.type, url: tool.url, query: tool.query, path: tool.path,
     command: tool.command, var_name: tool.var_name, server: tool.server, tool: tool.tool,

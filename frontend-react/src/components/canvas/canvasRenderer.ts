@@ -72,6 +72,8 @@ export function renderCanvas(
 ): void {
   const parentW = canvas.parentElement?.clientWidth ?? canvas.width;
   const parentH = canvas.parentElement?.clientHeight ?? canvas.height;
+  // Guard: skip render if container has 0 size (during sidebar transition)
+  if (parentW < 1 || parentH < 1) return;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = parentW * dpr;
   canvas.height = parentH * dpr;

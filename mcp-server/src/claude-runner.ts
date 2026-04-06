@@ -583,7 +583,7 @@ export async function applyContextStrategy(
           { id: "_summarize", output_var: "_", tools: [], model: "claude-haiku-4-5", prompt: "" } as ChainStep,
           () => {},
           undefined,
-          undefined,
+          15000, // 15s timeout — fast fail to keep original
           processTracker
         );
         result[varName] = stdout;
@@ -608,4 +608,75 @@ export async function applyContextStrategy(
   }
 
   return result;
+}
+
+/**
+ * Auto-compress vars in-place when total chars exceed budget.
+ * Keeps input.* vars and the N most recent step outputs intact.
+ * Summarizes older outputs via Haiku; falls back to truncation.
+ */
+export async function autoCompressVars(
+  vars: Record<string, string>,
+  maxChars: number,
+  recentKeepCount: number,
+  onLog: (message: string, level: "info" | "warn" | "error") => void,
+  processTracker?: ProcessTracker,
+  /** @internal test-only: override the compression function */
+  _compressFn?: (text: string) => Promise<string>,
+): Promise<number> {
+  const totalChars = () => Object.values(vars).reduce((s, v) => s + v.length, 0);
+  let current = totalChars();
+  if (current <= maxChars) return current;
+
+  // Partition keys into protected, recent, and old
+  const allKeys = Object.keys(vars);
+  const protectedKeys = new Set(allKeys.filter(k => k.startsWith("input.") || k === "__early_exit"));
+  // Also protect the bare input aliases (keys that also exist as input.X)
+  for (const k of allKeys) {
+    if (protectedKeys.has(`input.${k}`)) protectedKeys.add(k);
+  }
+
+  const stepKeys = allKeys.filter(k => !protectedKeys.has(k));
+  // Recent = last N step keys (JS preserves insertion order for string keys)
+  const recentKeys = new Set(stepKeys.slice(-recentKeepCount));
+  // Old = everything else, sorted by size (largest first) for max impact
+  const oldKeys = stepKeys
+    .filter(k => !recentKeys.has(k))
+    .sort((a, b) => (vars[b]?.length ?? 0) - (vars[a]?.length ?? 0));
+
+  for (const key of oldKeys) {
+    if (totalChars() <= maxChars) break;
+    const value = vars[key];
+    if (!value || value.length < 500) continue;
+
+    // Try Haiku summarization (or test override)
+    try {
+      let compressed: string;
+      if (_compressFn) {
+        compressed = await _compressFn(value);
+      } else {
+        const summaryPrompt = `Summarize concisely, preserving key technical details:\n\n${value}`;
+        const { stdout } = await runClaude(
+          summaryPrompt,
+          { id: "_auto_compress", output_var: "_", tools: [], model: "claude-haiku-4-5", prompt: "" } as ChainStep,
+          () => {},
+          undefined,
+          15000, // 15s timeout — fast fail to truncation fallback
+          processTracker,
+        );
+        compressed = stdout;
+      }
+      const before = value.length;
+      vars[key] = compressed;
+      onLog(`Auto-compressed "${key}": ${before} → ${compressed.length} chars (summarize)`, "info");
+    } catch {
+      // Fallback: hard truncate to 1000 chars
+      const before = value.length;
+      vars[key] = value.slice(0, 1000) + `\n[auto-truncated from ${before} chars]`;
+      onLog(`Auto-truncated "${key}": ${before} → 1000 chars (Haiku unavailable)`, "warn");
+    }
+  }
+
+  const final = totalChars();
+  return final;
 }

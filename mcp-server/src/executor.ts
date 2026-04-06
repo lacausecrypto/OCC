@@ -23,6 +23,7 @@ import {
   runClaude,
   runStepWithRetry,
   applyContextStrategy,
+  autoCompressVars,
   MAX_CONCURRENT_EXECUTIONS,
 } from "./claude-runner.js";
 import type { ClaudeResult, ProcessTracker } from "./claude-runner.js";
@@ -226,6 +227,29 @@ function saveCache(chainName: string, entry: CacheEntry): void {
     const cacheFile = path.join(cacheDir, `${entry.key}.json`);
     fs.writeFileSync(cacheFile, JSON.stringify(entry, null, 2), "utf-8");
   } catch (err) { console.error("[cache]", err); }
+}
+
+/** Clear all step result caches. Returns number of files deleted. */
+export function clearStepCache(): number {
+  const cacheDir = getCacheDir();
+  let count = 0;
+  try {
+    if (!fs.existsSync(cacheDir)) return 0;
+    const chains = fs.readdirSync(cacheDir);
+    for (const chain of chains) {
+      const chainDir = path.join(cacheDir, chain);
+      const stat = fs.statSync(chainDir);
+      if (!stat.isDirectory()) continue;
+      const files = fs.readdirSync(chainDir).filter(f => f.endsWith(".json"));
+      for (const file of files) {
+        fs.unlinkSync(path.join(chainDir, file));
+        count++;
+      }
+      // Remove empty chain dir
+      try { fs.rmdirSync(chainDir); } catch { /* not empty */ }
+    }
+  } catch { /* cache dir may not exist */ }
+  return count;
 }
 
 // ─── Output validation (guardrails) ─────────────────────────────────────────
@@ -1606,6 +1630,18 @@ export async function executeChain(
 
           try {
             await executeStep(step, chain, vars, execution, executionId, emit);
+
+            // Auto-compress vars if context budget exceeded
+            const maxCtx = chain.max_context_chars ?? parseInt(process.env.MAX_CONTEXT_CHARS ?? "50000", 10);
+            if (maxCtx > 0) {
+              const total = Object.values(vars).reduce((s, v) => s + v.length, 0);
+              if (total > maxCtx) {
+                const after = await autoCompressVars(vars, maxCtx, 3,
+                  (msg, lvl) => { emit({ type: "step_log", executionId, stepId, message: msg, level: lvl }); },
+                );
+                emit({ type: "step_log", executionId, stepId, message: `Context budget: ${total} → ${after} chars (limit: ${maxCtx})`, level: "info" });
+              }
+            }
           } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
             stepResult.status = "error";
@@ -1705,6 +1741,17 @@ export async function resumeExecution(
     const stepResult = existing.steps[step.id];
     if (stepResult?.status === "done" && stepResult.output) {
       vars[step.output_var] = stepResult.output;
+    }
+  }
+
+  // Auto-compress restored vars if over budget
+  const maxCtx = chain.max_context_chars ?? parseInt(process.env.MAX_CONTEXT_CHARS ?? "50000", 10);
+  if (maxCtx > 0) {
+    const total = Object.values(vars).reduce((s, v) => s + v.length, 0);
+    if (total > maxCtx) {
+      await autoCompressVars(vars, maxCtx, 3,
+        (msg, lvl) => { emit({ type: "step_log", executionId, stepId: "resume", message: msg, level: lvl }); },
+      );
     }
   }
 

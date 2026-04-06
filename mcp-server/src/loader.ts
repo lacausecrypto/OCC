@@ -232,6 +232,7 @@ const ChainSchema = z.object({
     .default([]),
   steps: z.array(StepSchema).min(1),
   output: z.string().min(1),
+  max_context_chars: z.number().optional(),
 });
 
 // ─── Loader ───────────────────────────────────────────────────────────────────

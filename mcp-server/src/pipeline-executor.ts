@@ -231,6 +231,41 @@ export async function executePipeline(
             // Get the underlying execution ID from the result
             chainResults[chainRefId] = result;
 
+            // Compress output for downstream chains if configured
+            if (chainRef.summarize_output && result.length > 500) {
+              const threshold = typeof chainRef.summarize_output === "number" ? chainRef.summarize_output : 5000;
+              if (result.length > threshold) {
+                if (typeof chainRef.summarize_output === "number") {
+                  chainResults[chainRefId] = result.slice(0, threshold) + `\n[truncated from ${result.length} chars]`;
+                  emit({ type: "step_log", executionId, stepId: chainRefId, message: `Output truncated: ${result.length} → ${threshold} chars`, level: "info" });
+                } else {
+                  try {
+                    const { runClaude } = await import("./claude-runner.js");
+                    let summary = "";
+                    await runClaude(
+                      `Summarize concisely, preserving key technical details, decisions, and data:\n\n${result}`,
+                      { id: `_pipe_summary_${chainRefId}`, type: "agent", model: "claude-haiku-4-5", prompt: "", tools: [], output_var: "_", pre_tools: [] } as any,
+                      (chunk: string) => { summary += chunk; },
+                      undefined,
+                      15000, // 15s timeout — fast fail to truncation fallback
+                    );
+                    chainResults[chainRefId] = summary;
+                    emit({ type: "step_log", executionId, stepId: chainRefId, message: `Output summarized: ${result.length} → ${summary.length} chars`, level: "info" });
+                  } catch {
+                    chainResults[chainRefId] = result.slice(0, threshold) + `\n[truncated — summarization failed]`;
+                    emit({ type: "step_log", executionId, stepId: chainRefId, message: `Summarization failed, truncated to ${threshold} chars`, level: "warn" });
+                  }
+                }
+              }
+            }
+
+            // Auto-truncate extremely large outputs (safety net)
+            const AUTO_LIMIT = parseInt(process.env.PIPELINE_AUTO_TRUNCATE_LIMIT ?? "100000", 10);
+            if (!chainRef.summarize_output && chainResults[chainRefId].length > AUTO_LIMIT) {
+              chainResults[chainRefId] = chainResults[chainRefId].slice(0, AUTO_LIMIT) + `\n[auto-truncated from ${result.length} chars]`;
+              emit({ type: "step_log", executionId, stepId: chainRefId, message: `Output auto-truncated: ${result.length} → ${AUTO_LIMIT} chars`, level: "warn" });
+            }
+
             emit({
               type: "step_done",
               executionId,
@@ -242,7 +277,7 @@ export async function executePipeline(
               type: "step_log",
               executionId,
               stepId: chainRefId,
-              message: `Chain "${chainRef.chain}" completed in ${(durationMs / 1000).toFixed(1)}s (${result.length} chars)`,
+              message: `Chain "${chainRef.chain}" completed in ${(durationMs / 1000).toFixed(1)}s (${chainResults[chainRefId].length} chars)`,
               level: "info",
             });
 

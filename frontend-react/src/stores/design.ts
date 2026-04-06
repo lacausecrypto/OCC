@@ -166,7 +166,6 @@ export interface DesignState {
   presets: DesignPreset[];
   blendX: number;
   blendY: number;
-
   setPreset: (idx: number, preset: DesignPreset) => void;
   setBlendPosition: (x: number, y: number) => void;
   getBlendResult: () => BlendResult;
@@ -189,6 +188,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   },
 
   setBlendPosition: (x, y) => set({ blendX: x, blendY: y }),
+
 
   getBlendResult: () => {
     const { presets, blendX, blendY } = get();

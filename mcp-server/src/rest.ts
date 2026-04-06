@@ -954,23 +954,119 @@ app.delete("/queue/purge", (req, res) => {
   res.json({ purged });
 });
 
+// DELETE /cache/steps — clear step result cache (filesystem)
+app.delete("/cache/steps", async (_req, res) => {
+  const { clearStepCache } = await import("./executor.js");
+  const count = clearStepCache();
+  res.json({ cleared: count, type: "step_cache" });
+});
+
+// DELETE /cache/pretools — clear pre-tool in-memory cache
+app.delete("/cache/pretools", async (_req, res) => {
+  const { clearPreToolCache, getPreToolCacheSize } = await import("./pretool-executor.js");
+  const count = clearPreToolCache();
+  res.json({ cleared: count, type: "pretool_cache" });
+});
+
+// GET /cache/stats — cache sizes
+app.get("/cache/stats", async (_req, res) => {
+  const { getPreToolCacheSize } = await import("./pretool-executor.js");
+  let stepCacheCount = 0;
+  try {
+    const cacheDir = path.join(process.env.CHAINS_DIR ?? ".", "..", "cache");
+    if (fs.existsSync(cacheDir)) {
+      const chains = fs.readdirSync(cacheDir);
+      for (const chain of chains) {
+        const d = path.join(cacheDir, chain);
+        if (fs.statSync(d).isDirectory()) stepCacheCount += fs.readdirSync(d).filter(f => f.endsWith(".json")).length;
+      }
+    }
+  } catch { /* ignore */ }
+  res.json({
+    stepCache: stepCacheCount,
+    preToolCache: getPreToolCacheSize(),
+  });
+});
+
 // GET /health
-app.get("/health", (_req, res) => res.json({
-  ok: true,
-  version: "2.0.0",
-  runningExecutions: getRunningExecutionCount(),
-  mcpServers: getConfiguredServers(),
-  queue: getQueueStats(),
-  chainsDir: process.env.CHAINS_DIR ?? "./chains",
-  pipelinesDir: process.env.PIPELINES_DIR ?? "./pipelines",
-  workspaceDir: process.env.WORKSPACE_DIR ?? ".",
-  restPort: parseInt(process.env.REST_PORT ?? "4242"),
-  claudeCli: process.env.CLAUDE_CLI ?? "claude",
-  nodeVersion: process.version,
-  uptime: Math.floor(process.uptime()),
-  maxConcurrent: parseInt(process.env.MAX_CONCURRENT_EXECUTIONS ?? "5"),
-  claudeTimeoutMs: parseInt(process.env.CLAUDE_TIMEOUT_MS ?? "1800000"),
-}));
+app.get("/health", (_req, res) => {
+  // Collect database file sizes
+  const dbFiles: Record<string, number> = {};
+  const dbPaths: Record<string, string> = {
+    main: process.env.OCC_DB ?? "./occ.db",
+    queue: process.env.OCC_QUEUE_DB ?? "./occ-queue.db",
+    state: process.env.OCC_STATE_DB ?? "",
+    vector: process.env.OCC_VECTOR_DB ?? "",
+    semanticCache: process.env.OCC_SEMANTIC_CACHE_DB ?? "",
+    graph: process.env.OCC_GRAPH_DB ?? "",
+  };
+  let totalDbBytes = 0;
+  for (const [name, dbPath] of Object.entries(dbPaths)) {
+    if (!dbPath) continue;
+    try {
+      const resolved = path.resolve(dbPath);
+      const stat = fs.statSync(resolved);
+      dbFiles[name] = stat.size;
+      totalDbBytes += stat.size;
+      // Also count WAL and journal files
+      for (const suffix of ["-wal", "-shm", "-journal"]) {
+        try { totalDbBytes += fs.statSync(resolved + suffix).size; } catch {}
+      }
+    } catch {}
+  }
+
+  // Count chains and pipelines
+  let chainCount = 0;
+  let pipelineCount = 0;
+  try { chainCount = fs.readdirSync(path.resolve(process.env.CHAINS_DIR ?? "./chains")).filter(f => f.endsWith(".yaml") || f.endsWith(".yml")).length; } catch {}
+  try { pipelineCount = fs.readdirSync(path.resolve(process.env.PIPELINES_DIR ?? "./pipelines")).filter(f => f.endsWith(".yaml") || f.endsWith(".yml")).length; } catch {}
+
+  // BLOB dir size
+  let blobBytes = 0;
+  let blobSessionCount = 0;
+  try {
+    const blobDir = path.resolve(process.env.BLOB_DIR ?? "./blobs");
+    const files = fs.readdirSync(blobDir);
+    blobSessionCount = files.filter(f => f === "index.json").length > 0
+      ? JSON.parse(fs.readFileSync(path.join(blobDir, "index.json"), "utf-8")).length
+      : 0;
+    for (const f of files) {
+      try { blobBytes += fs.statSync(path.join(blobDir, f)).size; } catch {}
+    }
+  } catch {}
+
+  // Memory usage
+  const mem = process.memoryUsage();
+
+  res.json({
+    ok: true,
+    version: "2.0.0",
+    runningExecutions: getRunningExecutionCount(),
+    mcpServers: getConfiguredServers(),
+    queue: getQueueStats(),
+    chainsDir: process.env.CHAINS_DIR ?? "./chains",
+    pipelinesDir: process.env.PIPELINES_DIR ?? "./pipelines",
+    workspaceDir: process.env.WORKSPACE_DIR ?? ".",
+    restPort: parseInt(process.env.REST_PORT ?? "4242"),
+    claudeCli: process.env.CLAUDE_CLI ?? "claude",
+    nodeVersion: process.version,
+    uptime: Math.floor(process.uptime()),
+    maxConcurrent: parseInt(process.env.MAX_CONCURRENT_EXECUTIONS ?? "5"),
+    claudeTimeoutMs: parseInt(process.env.CLAUDE_TIMEOUT_MS ?? "1800000"),
+    platform: process.platform,
+    arch: process.arch,
+    pid: process.pid,
+    memoryMB: Math.round(mem.rss / 1048576),
+    heapUsedMB: Math.round(mem.heapUsed / 1048576),
+    heapTotalMB: Math.round(mem.heapTotal / 1048576),
+    chainCount,
+    pipelineCount,
+    dbSizes: dbFiles,
+    dbTotalBytes: totalDbBytes,
+    blobBytes,
+    blobSessionCount,
+  });
+});
 
 // GET /config — current server configuration
 app.get("/config", (_req, res) => {
@@ -1002,6 +1098,8 @@ app.get("/config", (_req, res) => {
     blobChatModel: process.env.BLOB_CHAT_MODEL ?? "claude-sonnet-4-6",
     blobStepModel: process.env.BLOB_STEP_MODEL ?? "claude-sonnet-4-6",
     blobAutoCheckSec: process.env.BLOB_AUTO_CHECK_SEC ?? "60",
+    maxContextChars: process.env.MAX_CONTEXT_CHARS ?? "50000",
+    maxChatContextChars: process.env.MAX_CHAT_CONTEXT_CHARS ?? "8000",
     resendApiKey: process.env.RESEND_API_KEY ? "***" : "",
     resendFrom: process.env.RESEND_FROM ?? "",
   });
@@ -1047,6 +1145,8 @@ app.put("/config", (req, res) => {
       blobChatModel: "BLOB_CHAT_MODEL",
       blobStepModel: "BLOB_STEP_MODEL",
       blobAutoCheckSec: "BLOB_AUTO_CHECK_SEC",
+      maxContextChars: "MAX_CONTEXT_CHARS",
+      maxChatContextChars: "MAX_CHAT_CONTEXT_CHARS",
       resendApiKey: "RESEND_API_KEY",
       resendFrom: "RESEND_FROM",
     };
@@ -1334,13 +1434,44 @@ app.post("/blobs/:id/execute-branch", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
 
   const { runClaude } = await import("./claude-runner.js");
+  const stepOutputs: Array<{ label: string; output: string }> = [];
 
   for (const step of steps) {
     res.write(`data: ${JSON.stringify({ type: "step_start", stepId: step.id, label: step.stepType })}\n\n`);
 
     try {
+      // Build enriched prompt with previous step outputs + knowledge
+      const parts: string[] = [];
+
+      const maxPrev = parseInt(process.env.BLOB_MAX_PREV_OUTPUTS ?? "5", 10);
+      const maxCharsOut = parseInt(process.env.BLOB_MAX_CHARS_PER_OUTPUT ?? "2000", 10);
+      if (stepOutputs.length > 0) {
+        parts.push("## Previous Steps");
+        for (const prev of stepOutputs.slice(-maxPrev)) {
+          const truncated = prev.output.length > maxCharsOut ? prev.output.slice(0, maxCharsOut) + "\n[truncated]" : prev.output;
+          parts.push(`### ${prev.label}\n${truncated}`);
+        }
+      }
+
+      try {
+        const allKnowledge = loadKnowledge();
+        if (allKnowledge.length > 0) {
+          const relevant = findRelevantKnowledge(step.prompt, allKnowledge);
+          if (relevant.length > 0) {
+            parts.push("## Relevant Knowledge");
+            for (const k of relevant.slice(0, 3)) {
+              parts.push(`- **${k.concept}**: ${k.facts.slice(0, 2).join("; ")}`);
+            }
+          }
+        }
+      } catch { /* knowledge may not exist */ }
+
+      const enrichedPrompt = parts.length > 0
+        ? parts.join("\n\n") + "\n\n## Current Task\n" + step.prompt
+        : step.prompt;
+
       let output = "";
-      const result = await runClaude(step.prompt, {
+      const result = await runClaude(enrichedPrompt, {
         id: step.id,
         type: (step.stepType as "agent") ?? "agent",
         model: step.model ?? process.env.BLOB_STEP_MODEL ?? "claude-sonnet-4-6",
@@ -1352,6 +1483,9 @@ app.post("/blobs/:id/execute-branch", async (req, res) => {
         output += chunk;
         res.write(`data: ${JSON.stringify({ type: "chunk", stepId: step.id, text: chunk })}\n\n`);
       });
+
+      // Accumulate output for next step's context
+      stepOutputs.push({ label: step.stepType, output });
 
       res.write(`data: ${JSON.stringify({
         type: "step_done",
@@ -1462,10 +1596,42 @@ app.post("/blobs/:id/chat", async (req, res) => {
     const mcpSection = mcpList.length > 0
       ? `\n\nAvailable MCP servers (use mcp_call pre-tool in steps): ${mcpList.join(", ")}. You can instruct steps to use these tools.`
       : "";
-    const defaultPrompt = `You are the BLOB — an organic AI assistant that lives on an infinite canvas. You help users by growing branches of workflows, research chains, and knowledge graphs. Be concise and helpful. When the user's request requires real work (research, code, analysis), tell them what you'll build. For simple questions, answer directly.${mcpSection}`;
+    // Inject relevant knowledge into system prompt
+    let knowledgeSection = "";
+    try {
+      const allKnowledge = loadKnowledge();
+      if (allKnowledge.length > 0) {
+        const relevant = findRelevantKnowledge(message, allKnowledge);
+        if (relevant.length > 0) {
+          const maxKnowledge = parseInt(process.env.BLOB_MAX_KNOWLEDGE_ENTRIES ?? "8", 10);
+          const kLines = relevant.slice(0, maxKnowledge).map((k) => `- ${k.concept}: ${k.facts.slice(0, 3).join("; ")}`);
+          knowledgeSection = `\n\nRelevant knowledge from previous exploration:\n${kLines.join("\n")}`;
+        }
+      }
+    } catch { /* knowledge may not exist */ }
+
+    const defaultPrompt = `You are the BLOB — an organic AI assistant that lives on an infinite canvas. You help users by growing branches of workflows, research chains, and knowledge graphs. Be concise and helpful. When the user's request requires real work (research, code, analysis), tell them what you'll build. For simple questions, answer directly.${mcpSection}${knowledgeSection}`;
     const systemPrompt = customSystemPrompt ? `${defaultPrompt}\n\n## Custom Instructions\n${customSystemPrompt}` : defaultPrompt;
 
-    const contextStr = (context ?? []).map((m) => `${m.role}: ${m.content}`).join("\n");
+    // Build conversation context with budget limit
+    const maxChatCtx = parseInt(process.env.MAX_CHAT_CONTEXT_CHARS ?? "8000", 10);
+    let contextMessages = context ?? [];
+    if (maxChatCtx > 0 && contextMessages.length > 0) {
+      // Trim oldest messages until total chars fit within budget
+      let total = contextMessages.reduce((s, m) => s + m.role.length + m.content.length + 3, 0);
+      while (total > maxChatCtx && contextMessages.length > 1) {
+        const removed = contextMessages[0];
+        total -= removed.role.length + removed.content.length + 3;
+        contextMessages = contextMessages.slice(1);
+      }
+      // If single message still over budget, truncate its content
+      if (total > maxChatCtx && contextMessages.length === 1) {
+        const m = contextMessages[0];
+        const excess = total - maxChatCtx;
+        contextMessages = [{ role: m.role, content: m.content.slice(0, Math.max(200, m.content.length - excess)) + "\n[truncated]" }];
+      }
+    }
+    const contextStr = contextMessages.map((m) => `${m.role}: ${m.content}`).join("\n");
     const fullPrompt = contextStr ? `${systemPrompt}\n\nConversation:\n${contextStr}\nuser: ${message}\nassistant:` : `${systemPrompt}\n\nuser: ${message}\nassistant:`;
 
     let text = "";
@@ -1497,13 +1663,16 @@ app.post("/blobs/:id/chat", async (req, res) => {
 
 // POST /blobs/:id/execute-step — execute a single blob step via OCC executor
 app.post("/blobs/:id/execute-step", async (req, res) => {
-  const { stepType, prompt, model, tools } = req.body as {
+  const { stepType, prompt, model, tools, branchNodeId, previousOutputs, nodeId } = req.body as {
     stepType: string; prompt: string; model?: string; tools?: string[];
+    branchNodeId?: string;
+    previousOutputs?: Array<{ stepId: string; label: string; output: string }>;
+    nodeId?: string;
   };
   if (!prompt) return res.status(400).json({ error: "prompt required" });
 
   const blobExecId = `blob_${req.params.id}`;
-  const stepId = `step_${Date.now()}`;
+  const stepId = nodeId ?? `step_${Date.now()}`;
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -1519,9 +1688,42 @@ app.post("/blobs/:id/execute-step", async (req, res) => {
     const startTime = Date.now();
     let chunkBuffer = "";
 
+    // Build enriched prompt with branch context + knowledge
+    let enrichedPrompt = prompt;
+    if (branchNodeId || (previousOutputs && previousOutputs.length > 0)) {
+      const parts: string[] = [];
+
+      const maxPrevOutputs = parseInt(process.env.BLOB_MAX_PREV_OUTPUTS ?? "5", 10);
+      const maxCharsPerOutput = parseInt(process.env.BLOB_MAX_CHARS_PER_OUTPUT ?? "2000", 10);
+      if (previousOutputs && previousOutputs.length > 0) {
+        parts.push("## Previous Steps in This Branch");
+        for (const prev of previousOutputs.slice(-maxPrevOutputs)) {
+          const truncated = prev.output.length > maxCharsPerOutput ? prev.output.slice(0, maxCharsPerOutput) + "\n[truncated]" : prev.output;
+          parts.push(`### ${prev.label}\n${truncated}`);
+        }
+      }
+
+      try {
+        const allKnowledge = loadKnowledge();
+        if (allKnowledge.length > 0) {
+          const relevant = findRelevantKnowledge(prompt, allKnowledge);
+          if (relevant.length > 0) {
+            parts.push("## Relevant Knowledge");
+            for (const k of relevant.slice(0, 5)) {
+              parts.push(`- **${k.concept}**: ${k.facts.slice(0, 3).join("; ")}`);
+            }
+          }
+        }
+      } catch { /* knowledge may not exist */ }
+
+      if (parts.length > 0) {
+        enrichedPrompt = parts.join("\n\n") + "\n\n## Current Task\n" + prompt;
+      }
+    }
+
     emitSSE(blobExecId, { type: "step_started", executionId: blobExecId, stepId, label: prompt.slice(0, 50), timestamp: new Date().toISOString() });
 
-    const result = await runClaude(prompt, {
+    const result = await runClaude(enrichedPrompt, {
       id: `blob-step-${Date.now()}`,
       type: (stepType as "agent") ?? "agent",
       model: model ?? process.env.BLOB_STEP_MODEL ?? "claude-sonnet-4-6",

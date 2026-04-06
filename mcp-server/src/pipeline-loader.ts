@@ -17,6 +17,7 @@ const ChainRefSchema = z.object({
   depends_on: z.array(z.string()).optional().default([]),
   condition: z.string().optional(),
   inputs: z.record(z.string(), z.string()).default({}),
+  summarize_output: z.union([z.boolean(), z.number()]).optional(),
 });
 
 const PipelineSchema = z.object({

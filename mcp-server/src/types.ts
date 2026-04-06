@@ -246,6 +246,7 @@ export interface ChainDefinition {
   inputs?: ChainInput[];
   steps: ChainStep[];
   output: string; // output_var to return as chain result
+  max_context_chars?: number; // auto-budget: summarize old vars when exceeded (default 50000, 0 = disabled)
 }
 
 // ─── Execution state ──────────────────────────────────────────────────────────
@@ -288,6 +289,7 @@ export interface PipelineChainRef {
   depends_on?: string[];                // IDs of previous pipeline chains
   condition?: string;                   // skip if falsy
   inputs: Record<string, string>;       // mapping: chain_input_name → "{input.var}" or "{other_chain_id}" or literal
+  summarize_output?: boolean | number;  // true = Haiku summarize, number = truncate to N chars
 }
 
 export interface PipelineDefinition {

@@ -685,11 +685,41 @@ export function BlobCanvas() {
 
   // ─── Execute a blob step via SSE streaming ──────────────────
   const executeStep = useCallback(async (nodeId: string) => {
-    const node = useBlobStore.getState().nodes.get(nodeId);
+    const state = useBlobStore.getState();
+    const node = state.nodes.get(nodeId);
     if (!node || node.data.kind !== "step") return;
 
-    useBlobStore.getState().updateNode(nodeId, { status: "running" });
+    state.updateNode(nodeId, { status: "running" });
     const stepData = node.data;
+
+    // Collect branch context: walk backward to find previous step outputs
+    const previousOutputs: Array<{ stepId: string; label: string; output: string }> = [];
+    let branchNodeId: string | null = null;
+    {
+      let currentId = nodeId;
+      const visited = new Set<string>();
+      while (currentId && !visited.has(currentId)) {
+        visited.add(currentId);
+        let parentId: string | null = null;
+        for (const [, edge] of state.edges) {
+          if (edge.to === currentId) { parentId = edge.from; break; }
+        }
+        if (!parentId) break;
+        const parentNode = state.nodes.get(parentId);
+        if (!parentNode) break;
+        if (parentNode.type === "step" && parentNode.data.kind === "step" && (parentNode.data as Record<string, unknown>).output) {
+          previousOutputs.unshift({
+            stepId: parentNode.id,
+            label: parentNode.label,
+            output: String((parentNode.data as Record<string, unknown>).output),
+          });
+        } else if (parentNode.type === "branch") {
+          branchNodeId = parentNode.id;
+          break;
+        }
+        currentId = parentId;
+      }
+    }
 
     try {
       const res = await fetch(`/blobs/${activeSessionId}/execute-step`, {
@@ -699,6 +729,9 @@ export function BlobCanvas() {
           stepType: stepData.stepType,
           prompt: stepData.prompt,
           model: stepData.model,
+          nodeId,
+          branchNodeId,
+          previousOutputs: previousOutputs.length > 0 ? previousOutputs : undefined,
         }),
       });
 

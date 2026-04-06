@@ -130,7 +130,9 @@
   top: 50%; z-index: 30;
   width: 24px; height: 64px;
   border: 1px solid var(--glass-border);
-  background: var(--m-bg);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   color: var(--m-text2);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;

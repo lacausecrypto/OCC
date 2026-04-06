@@ -80,5 +80,18 @@ export function useCanvasRenderer(
     return () => { unsub1(); unsub2(); unsub3(); };
   }, [render]);
 
+  // Re-render when container resizes (sidebar open/close transitions)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const container = canvas?.parentElement;
+    if (!container) return;
+
+    const ro = new ResizeObserver(() => {
+      render();
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [canvasRef, render]);
+
   return { render };
 }

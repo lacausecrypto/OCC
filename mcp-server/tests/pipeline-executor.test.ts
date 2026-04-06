@@ -16,13 +16,32 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-// Mock executor
-vi.mock("../src/executor.js", () => ({
-  executeChain: vi.fn(async (chain: any, input: any) => {
-    // Simulate chain execution: return a result based on chain name + input
+// vi.hoisted ensures these are available when vi.mock factories run (hoisted to top)
+const { mockExecuteChain, mockRunClaude } = vi.hoisted(() => ({
+  mockExecuteChain: vi.fn(async (chain: any, input: any) => {
     const inputSummary = Object.values(input).join(",");
     return `Result of ${chain.name} with ${inputSummary || "no input"}`;
   }),
+  mockRunClaude: vi.fn(),
+}));
+
+// Mock executor
+vi.mock("../src/executor.js", () => ({
+  executeChain: mockExecuteChain,
+}));
+
+// Mock claude-runner (for summarize_output: true which dynamically imports runClaude)
+vi.mock("../src/claude-runner.js", () => ({
+  runClaude: mockRunClaude,
+  validateClaudeBinary: vi.fn(),
+  getRunningExecutionCount: vi.fn(() => 0),
+  canStartExecution: vi.fn(() => true),
+  incrementRunningCount: vi.fn(),
+  decrementRunningCount: vi.fn(),
+  runStepWithRetry: vi.fn(),
+  applyContextStrategy: vi.fn(),
+  autoCompressVars: vi.fn(),
+  MAX_CONCURRENT_EXECUTIONS: 3,
 }));
 
 // Mock loader
@@ -317,5 +336,256 @@ describe("resolveInputMapping (via executePipeline)", () => {
     const { emit } = collectEvents();
     const result = await executePipeline(pipeline, {}, emit);
     expect(typeof result).toBe("string");
+  });
+});
+
+// ─── Inter-chain summarization ────────────────────────────────────────────
+
+describe("executePipeline: inter-chain summarization", () => {
+  beforeEach(() => {
+    // Reset mocks to default behavior before each summarization test
+    mockExecuteChain.mockImplementation(async (chain: any, input: any) => {
+      const inputSummary = Object.values(input).join(",");
+      return `Result of ${chain.name} with ${inputSummary || "no input"}`;
+    });
+    mockRunClaude.mockReset();
+  });
+
+  it("no summarize_output — passthrough (no compression applied)", async () => {
+    const output1000 = "x".repeat(1000);
+    mockExecuteChain.mockResolvedValueOnce(output1000);
+
+    const pipeline: PipelineDefinition = {
+      name: "passthrough-test",
+      chains: [
+        { id: "c1", chain: "producer", inputs: {} },
+      ],
+      output: "c1",
+    };
+    const { events, emit } = collectEvents();
+    const result = await executePipeline(pipeline, {}, emit);
+
+    // Result should be exactly the 1000-char output — no truncation or summarization
+    expect(result).toBe(output1000);
+    expect(result).toHaveLength(1000);
+    // No truncation/summarization log events
+    const compressionLogs = events.filter(
+      (e) => e.type === "step_log" && "message" in e &&
+        ((e as any).message.includes("truncated") || (e as any).message.includes("summarized"))
+    );
+    expect(compressionLogs).toHaveLength(0);
+  });
+
+  it("summarize_output: 200 — truncates to 200 chars with footer", async () => {
+    const output5000 = "A".repeat(5000);
+    mockExecuteChain.mockResolvedValueOnce(output5000);
+
+    const pipeline: PipelineDefinition = {
+      name: "truncate-test",
+      chains: [
+        { id: "c1", chain: "producer", summarize_output: 200, inputs: {} },
+      ],
+      output: "c1",
+    };
+    const { events, emit } = collectEvents();
+    const result = await executePipeline(pipeline, {}, emit);
+
+    // Result should be truncated: 200 chars of content + footer
+    expect(result.startsWith("A".repeat(200))).toBe(true);
+    expect(result).toContain("[truncated from 5000 chars]");
+    expect(result.length).toBeLessThan(5000);
+
+    // Should have a truncation log event
+    const truncLogs = events.filter(
+      (e) => e.type === "step_log" && "message" in e &&
+        (e as any).message.includes("Output truncated")
+    );
+    expect(truncLogs).toHaveLength(1);
+  });
+
+  it("summarize_output: true — attempts Haiku summarize via runClaude", async () => {
+    // Output must be > 5000 chars (the threshold for summarize_output: true)
+    const output8000 = "B".repeat(8000);
+    mockExecuteChain.mockResolvedValueOnce(output8000);
+
+    // Mock runClaude to produce a summary via onChunk callback
+    mockRunClaude.mockImplementation(async (prompt: string, step: any, onChunk: (chunk: string) => void) => {
+      onChunk("This is the summary of the output.");
+    });
+
+    const pipeline: PipelineDefinition = {
+      name: "summarize-test",
+      chains: [
+        { id: "c1", chain: "producer", summarize_output: true, inputs: {} },
+      ],
+      output: "c1",
+    };
+    const { events, emit } = collectEvents();
+    const result = await executePipeline(pipeline, {}, emit);
+
+    // runClaude should have been called
+    expect(mockRunClaude).toHaveBeenCalledTimes(1);
+    // Verify it was called with a summarize prompt
+    const promptArg = mockRunClaude.mock.calls[0][0];
+    expect(promptArg).toContain("Summarize concisely");
+    expect(promptArg).toContain(output8000);
+    // Verify the step arg uses claude-haiku-4-5 model
+    const stepArg = mockRunClaude.mock.calls[0][1];
+    expect(stepArg.model).toBe("claude-haiku-4-5");
+
+    // Result should be the summary
+    expect(result).toBe("This is the summary of the output.");
+
+    // Should have a summarization log event
+    const sumLogs = events.filter(
+      (e) => e.type === "step_log" && "message" in e &&
+        (e as any).message.includes("Output summarized")
+    );
+    expect(sumLogs).toHaveLength(1);
+  });
+
+  it("auto-truncate at 100k when no summarize_output set", async () => {
+    const output200k = "C".repeat(200000);
+    mockExecuteChain.mockResolvedValueOnce(output200k);
+
+    const pipeline: PipelineDefinition = {
+      name: "auto-truncate-test",
+      chains: [
+        { id: "c1", chain: "producer", inputs: {} },
+        // No summarize_output set
+      ],
+      output: "c1",
+    };
+    const { events, emit } = collectEvents();
+    const result = await executePipeline(pipeline, {}, emit);
+
+    // Should be auto-truncated to 100k + footer
+    expect(result.startsWith("C".repeat(100))).toBe(true);
+    expect(result).toContain("[auto-truncated from 200000 chars]");
+    // The content part should be 100k chars
+    const contentPart = result.split("\n[auto-truncated")[0];
+    expect(contentPart).toHaveLength(100000);
+
+    // Should have auto-truncation log event
+    const autoLogs = events.filter(
+      (e) => e.type === "step_log" && "message" in e &&
+        (e as any).message.includes("auto-truncated")
+    );
+    expect(autoLogs).toHaveLength(1);
+  });
+
+  it("short output not compressed even with summarize_output: true (threshold 500)", async () => {
+    const output300 = "D".repeat(300);
+    mockExecuteChain.mockResolvedValueOnce(output300);
+
+    const pipeline: PipelineDefinition = {
+      name: "short-output-test",
+      chains: [
+        { id: "c1", chain: "producer", summarize_output: true, inputs: {} },
+      ],
+      output: "c1",
+    };
+    const { events, emit } = collectEvents();
+    const result = await executePipeline(pipeline, {}, emit);
+
+    // Output is 300 chars < 500 threshold, so no compression at all
+    expect(result).toBe(output300);
+    expect(result).toHaveLength(300);
+    // runClaude should NOT have been called
+    expect(mockRunClaude).not.toHaveBeenCalled();
+    // No truncation or summarization log events
+    const compressionLogs = events.filter(
+      (e) => e.type === "step_log" && "message" in e &&
+        ((e as any).message.includes("truncated") || (e as any).message.includes("summarized"))
+    );
+    expect(compressionLogs).toHaveLength(0);
+  });
+
+  it("full result preserved in chainStatus.result even when chainResults is compressed", async () => {
+    const output5000 = "E".repeat(5000);
+    mockExecuteChain.mockResolvedValueOnce(output5000);
+
+    const pipeline: PipelineDefinition = {
+      name: "preserve-full-test",
+      chains: [
+        { id: "c1", chain: "producer", summarize_output: 200, inputs: {} },
+      ],
+      output: "c1",
+    };
+    const { events, emit } = collectEvents();
+    await executePipeline(pipeline, {}, emit);
+
+    // The returned result (from chainResults) is truncated
+    // But the execution record should have the full result in chainStatus
+    const execution = getPipelineExecution(
+      events.find((e) => e.type === "execution_started")!.executionId
+    );
+    expect(execution).toBeDefined();
+    // chainStatus.result should have the FULL original output
+    expect(execution!.chains["c1"].result).toBe(output5000);
+    expect(execution!.chains["c1"].result).toHaveLength(5000);
+    // But the pipeline result (from chainResults map used for downstream/output) is truncated
+    expect(execution!.result).toContain("[truncated from 5000 chars]");
+    expect(execution!.result!.length).toBeLessThan(5000);
+  });
+
+  it("summarize_output: true falls back to truncation when runClaude fails", async () => {
+    const output8000 = "F".repeat(8000);
+    mockExecuteChain.mockResolvedValueOnce(output8000);
+
+    // Mock runClaude to throw an error
+    mockRunClaude.mockRejectedValueOnce(new Error("Claude API unavailable"));
+
+    const pipeline: PipelineDefinition = {
+      name: "summarize-fallback-test",
+      chains: [
+        { id: "c1", chain: "producer", summarize_output: true, inputs: {} },
+      ],
+      output: "c1",
+    };
+    const { events, emit } = collectEvents();
+    const result = await executePipeline(pipeline, {}, emit);
+
+    // Should fall back to truncation at 5000 chars (the threshold for summarize_output: true)
+    expect(result).toContain("[truncated — summarization failed]");
+    expect(result.startsWith("F".repeat(100))).toBe(true);
+
+    // Should have a fallback log event
+    const fallbackLogs = events.filter(
+      (e) => e.type === "step_log" && "message" in e &&
+        (e as any).message.includes("Summarization failed")
+    );
+    expect(fallbackLogs).toHaveLength(1);
+  });
+
+  it("auto-truncate does NOT apply when summarize_output is set", async () => {
+    // Even if the output is huge (> 100k), when summarize_output is set,
+    // auto-truncation should be skipped (the summarize_output logic handles it)
+    const output200k = "G".repeat(200000);
+    mockExecuteChain.mockResolvedValueOnce(output200k);
+
+    // Mock runClaude to produce a summary
+    mockRunClaude.mockImplementation(async (prompt: string, step: any, onChunk: (chunk: string) => void) => {
+      onChunk("Summarized 200k chars of G's.");
+    });
+
+    const pipeline: PipelineDefinition = {
+      name: "no-auto-truncate-with-summarize",
+      chains: [
+        { id: "c1", chain: "producer", summarize_output: true, inputs: {} },
+      ],
+      output: "c1",
+    };
+    const { events, emit } = collectEvents();
+    const result = await executePipeline(pipeline, {}, emit);
+
+    // Should be summarized, NOT auto-truncated
+    expect(result).toBe("Summarized 200k chars of G's.");
+    // No auto-truncation log
+    const autoLogs = events.filter(
+      (e) => e.type === "step_log" && "message" in e &&
+        (e as any).message.includes("auto-truncated")
+    );
+    expect(autoLogs).toHaveLength(0);
   });
 });

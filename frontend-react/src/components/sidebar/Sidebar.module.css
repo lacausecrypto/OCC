@@ -515,6 +515,7 @@
   transition: transform 0.2s ease;
 }
 
+
 /* ─── Responsive ─── */
 @media (max-height: 700px) {
   .section {

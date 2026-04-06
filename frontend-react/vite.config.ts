@@ -35,6 +35,7 @@ export default defineConfig({
       "/generate-chain": { target: OCC_BACKEND, changeOrigin: true },
       "/workflow-chat": { target: OCC_BACKEND, changeOrigin: true },
       "/download": { target: OCC_BACKEND, changeOrigin: true },
+      "/cache": { target: OCC_BACKEND, changeOrigin: true },
       // SSE event stream
       "/events": {
         target: OCC_BACKEND,
