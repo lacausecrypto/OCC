@@ -238,7 +238,13 @@ const ChainSchema = z.object({
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export function getChainsDir(): string {
-  return process.env.CHAINS_DIR ?? path.join(process.cwd(), "..", "chains");
+  if (process.env.CHAINS_DIR) return process.env.CHAINS_DIR;
+  // Resolve relative to this file's location (src/ or dist/), not cwd
+  // dist/loader.js → ../chains  |  src/loader.ts → ../chains
+  const fromFile = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "..", "chains");
+  if (fs.existsSync(fromFile)) return fromFile;
+  // Fallback: relative to cwd (for CLI usage)
+  return path.join(process.cwd(), "..", "chains");
 }
 
 /** Sanitize a chain/pipeline name to prevent path traversal */
