@@ -6,6 +6,33 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useWorkflowChatStore, type WFMessage, type WFSession } from "../../stores/workflowChat";
 
+// ─── CSS Keyframes (injected once) ───────────────────────────────────────────
+
+const WFC_STYLE_ID = "wfc-animations";
+if (typeof document !== "undefined" && !document.getElementById(WFC_STYLE_ID)) {
+  const style = document.createElement("style");
+  style.id = WFC_STYLE_ID;
+  style.textContent = `
+    @keyframes wfc-slidein-right {
+      from { opacity: 0; transform: translateX(12px) scale(0.97); }
+      to { opacity: 1; transform: translateX(0) scale(1); }
+    }
+    @keyframes wfc-slidein-left {
+      from { opacity: 0; transform: translateX(-12px) scale(0.97); }
+      to { opacity: 1; transform: translateX(0) scale(1); }
+    }
+    @keyframes wfc-fadein {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes wfc-pulse {
+      0%, 100% { opacity: 0.6; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.1); }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 // ─── Unicode Thinking Loader ─────────────────────────────────────────────────
 
 const THINKING_PHASES: Array<{ frames: string[]; label: string }> = [
@@ -28,32 +55,62 @@ const THINKING_PHASES: Array<{ frames: string[]; label: string }> = [
 
 function ThinkingLoader({ startedAt }: { startedAt: number }) {
   const [tick, setTick] = useState(0);
+  const [dots, setDots] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 120);
+    const id = setInterval(() => setTick((t) => t + 1), 100);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    const id = setInterval(() => setDots((d) => (d + 1) % 4), 500);
     return () => clearInterval(id);
   }, []);
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0);
-  const phaseIdx = Math.floor(tick / 25) % THINKING_PHASES.length;
+  const phaseIdx = Math.floor(tick / 30) % THINKING_PHASES.length;
   const phase = THINKING_PHASES[phaseIdx];
   const frameIdx = tick % phase.frames.length;
+  const progressInPhase = (tick % 30) / 30;
 
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
-      background: "var(--glass-tint-subtle)", borderRadius: 10,
-      border: "1px solid var(--m-border)",
+      padding: "10px 14px", borderRadius: 12,
+      background: "var(--glass-tint-subtle)", border: "1px solid var(--m-border)",
+      animation: "wfc-fadein 0.3s ease-out",
     }}>
-      <span style={{ fontSize: 18, fontFamily: "monospace", width: 20, textAlign: "center", color: "var(--m-accent)" }}>
-        {phase.frames[frameIdx]}
-      </span>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 12, color: "var(--m-text)", fontWeight: 500 }}>
-          {phase.label}
+      {/* Spinner + label row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{
+          fontSize: 20, fontFamily: "var(--m-font-mono, monospace)",
+          width: 24, textAlign: "center", color: "var(--m-accent)",
+          animation: "wfc-pulse 1.5s ease-in-out infinite",
+        }}>
+          {phase.frames[frameIdx]}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 11, color: "var(--m-text)", fontWeight: 600,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            {phase.label}
+          </div>
+          <div style={{ fontSize: 9, color: "var(--m-text2)", marginTop: 2, display: "flex", gap: 8, alignItems: "center" }}>
+            <span>{elapsed}s</span>
+            <span style={{ letterSpacing: 2 }}>{"•".repeat(dots + 1).padEnd(4, "\u2008")}</span>
+          </div>
         </div>
-        <div style={{ fontSize: 10, color: "var(--m-text2)", marginTop: 2 }}>
-          {elapsed}s elapsed
-        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{
+        height: 2, borderRadius: 1, marginTop: 8,
+        background: "var(--m-border)", overflow: "hidden",
+      }}>
+        <div style={{
+          height: "100%", borderRadius: 1,
+          background: "var(--m-accent)",
+          width: `${progressInPhase * 100}%`,
+          transition: "width 0.1s linear",
+        }} />
       </div>
     </div>
   );
@@ -183,40 +240,46 @@ function MessageBubble({ msg }: { msg: WFMessage }) {
     <div style={{
       display: "flex", flexDirection: "column",
       alignItems: isUser ? "flex-end" : "flex-start",
-      marginBottom: 8,
+      marginBottom: 10,
+      animation: isUser ? "wfc-slidein-right 0.25s ease-out" : "wfc-slidein-left 0.3s ease-out",
     }}>
       <div style={{
-        maxWidth: "88%", padding: "8px 12px", borderRadius: 12,
-        fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
+        maxWidth: "88%", padding: "8px 12px", borderRadius: 14,
+        fontSize: 12, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word",
         ...(isUser ? {
           background: "var(--m-accent)",
           color: "#fff",
           borderBottomRightRadius: 4,
+          boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
         } : isSystem ? {
           background: "var(--glass-tint-subtle)",
           color: "var(--c-warning)",
           border: "1px solid var(--m-border)",
-          fontSize: 11,
+          fontSize: 10, fontStyle: "italic",
           borderBottomLeftRadius: 4,
         } : {
           background: "var(--glass-tint)",
           color: "var(--m-text)",
           border: "1px solid var(--m-border)",
           borderBottomLeftRadius: 4,
+          boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
         }),
       }}>
         {msg.content.replace(/\s*\[READY_TO_BUILD\]\s*/g, "").trim()}
       </div>
       <div style={{
-        fontSize: 9, color: "var(--m-text2)", marginTop: 2,
+        fontSize: 9, color: "var(--m-text2)", marginTop: 3, padding: "0 4px",
         display: "flex", gap: 6, alignItems: "center",
+        animation: "wfc-fadein 0.4s ease-out 0.15s both",
       }}>
         <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
         {msg.inputTokens != null && (
-          <span>{msg.inputTokens}+{msg.outputTokens} tok</span>
+          <span style={{ opacity: 0.7 }}>{msg.inputTokens}+{msg.outputTokens} tok</span>
         )}
         {msg.createdNodes && msg.createdNodes.length > 0 && (
-          <span style={{ color: "var(--c-success)" }}>{msg.createdNodes.length} nodes created</span>
+          <span style={{ color: "var(--c-success)", fontWeight: 600 }}>
+            {"\u2713"} {msg.createdNodes.length} nodes
+          </span>
         )}
       </div>
     </div>
