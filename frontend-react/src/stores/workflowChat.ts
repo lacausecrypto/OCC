@@ -5,6 +5,7 @@
 import { create } from "zustand";
 import { useCanvasStore } from "./canvas";
 import { useServerStore } from "./server";
+import { useAppStore } from "./app";
 import type { StepAdvancedConfig } from "../types/canvas";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -39,7 +40,8 @@ export interface WFPlan {
 }
 
 interface WorkflowChatState {
-  // Messages
+  // Session isolation — each chain/pipeline/blob gets its own chat history
+  canvasKey: string;
   messages: WFMessage[];
   input: string;
   streaming: boolean;
@@ -61,6 +63,8 @@ interface WorkflowChatState {
   setPlannerSystemPrompt: (v: string) => void;
   sendMessage: () => Promise<void>;
   clearMessages: () => void;
+  /** Switch session — saves current messages, loads target session */
+  setCanvasKey: (key: string) => void;
 }
 
 // ─── Default prompts ────────────────────────────────────────────────────────
@@ -82,7 +86,9 @@ NEVER:
 - Say "approuve" or "confirme" — just build when you have enough info
 - Refuse to build because of missing details — use smart defaults
 
-When you're ready to build, your response MUST contain one of: "I'll build", "Let me create", "Je crée", "Je construis", "Creating now", "Building now"`;
+When you have gathered enough information to build the workflow, end your response with the exact tag [READY_TO_BUILD].
+Do NOT include [READY_TO_BUILD] if you still need clarification from the user.
+This tag signals the system to proceed to the build phase automatically.`;
 
 const DEFAULT_PLANNER_PROMPT = `You are a chain planner. Given a conversation, produce a JSON plan that creates canvas nodes.
 
@@ -114,6 +120,36 @@ Output format:
   ]
 }`;
 
+// ─── Session persistence (localStorage, annotation-style) ──────────────────
+
+const WFC_STORAGE_KEY = "occ-wfc-sessions";
+
+function loadMessagesForKey(key: string): WFMessage[] {
+  try {
+    const all = JSON.parse(localStorage.getItem(WFC_STORAGE_KEY) ?? "{}");
+    return Array.isArray(all[key]) ? all[key] : [];
+  } catch { return []; }
+}
+
+function saveMessagesForKey(key: string, messages: WFMessage[]): void {
+  try {
+    const all = JSON.parse(localStorage.getItem(WFC_STORAGE_KEY) ?? "{}");
+    if (messages.length > 0) {
+      // Keep only last 50 messages per session to avoid localStorage bloat
+      all[key] = messages.slice(-50);
+    } else {
+      delete all[key];
+    }
+    localStorage.setItem(WFC_STORAGE_KEY, JSON.stringify(all));
+  } catch { /* localStorage full or unavailable */ }
+}
+
+function listSessionKeys(): string[] {
+  try {
+    return Object.keys(JSON.parse(localStorage.getItem(WFC_STORAGE_KEY) ?? "{}"));
+  } catch { return []; }
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 let _nextId = 0;
@@ -130,7 +166,32 @@ function getHeaders(): Record<string, string> {
  * Detect if the assistant response signals readiness to build.
  * Supports English and French patterns.
  */
+/** Strip the [READY_TO_BUILD] tag from displayed text */
+function stripBuildTag(text: string): string {
+  return text.replace(/\s*\[READY_TO_BUILD\]\s*/g, "").trim();
+}
+
+/** Build a text summary of the current canvas state for the planner */
+function buildCanvasContext(): string {
+  const canvasState = useCanvasStore.getState();
+  const appState = useAppStore.getState();
+  const nodes = [...canvasState.nodes.values()];
+  if (nodes.length === 0) return "Empty canvas — no steps exist yet.";
+  const edges = [...canvasState.edges.values()];
+  const lines = nodes.map((n) => {
+    const deps = edges.filter((e) => e.to === n.id).map((e) => {
+      const src = canvasState.nodes.get(e.from);
+      return src?.label ?? e.from;
+    });
+    return `- "${n.label}" (${n.type})${deps.length > 0 ? ` [depends on: ${deps.join(", ")}]` : ""}`;
+  });
+  return `Chain: "${appState.canvasChainName || "untitled"}"\nExisting steps (${nodes.length}):\n${lines.join("\n")}\nConnections: ${edges.length}`;
+}
+
 function shouldTriggerPlan(text: string): boolean {
+  // Primary: structured tag from LLM (reliable, language-agnostic)
+  if (text.includes("[READY_TO_BUILD]")) return true;
+  // Fallback: heuristic patterns for backward compat
   const lower = text.toLowerCase();
   const signals = [
     // English
@@ -156,6 +217,7 @@ function shouldTriggerPlan(text: string): boolean {
 // ─── Store ──────────────────────────────────────────────────────────────────
 
 export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
+  canvasKey: "_default",
   messages: [],
   input: "",
   streaming: false,
@@ -173,14 +235,27 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
   setPlannerModel: (v) => set({ plannerModel: v }),
   setChatSystemPrompt: (v) => set({ chatSystemPrompt: v }),
   setPlannerSystemPrompt: (v) => set({ plannerSystemPrompt: v }),
-  clearMessages: () => set({ messages: [] }),
+  clearMessages: () => {
+    const { canvasKey } = get();
+    set({ messages: [] });
+    saveMessagesForKey(canvasKey, []);
+  },
+
+  setCanvasKey: (key: string) => {
+    const { canvasKey, messages } = get();
+    if (key === canvasKey) return;
+    // Save current session
+    saveMessagesForKey(canvasKey, messages);
+    // Load target session
+    const loaded = loadMessagesForKey(key);
+    set({ canvasKey: key, messages: loaded, input: "" });
+  },
 
   sendMessage: async () => {
     const { input, messages, chatModel, plannerModel, chatSystemPrompt, plannerSystemPrompt } = get();
     const text = input.trim();
     if (!text || get().streaming) return;
 
-    // Add user message
     const userMsg: WFMessage = {
       id: uid(), role: "user", content: text,
       timestamp: new Date().toISOString(),
@@ -188,14 +263,17 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
     set({ messages: [...messages, userMsg], input: "", streaming: true, thinkingStartedAt: Date.now() });
 
     const headers = getHeaders();
-
-    // Build context (last 20 messages)
-    const context = [...get().messages].slice(-20).map((m) => ({
-      role: m.role, content: m.content,
-    }));
+    const context = [...get().messages].slice(-20).map((m) => ({ role: m.role, content: m.content }));
+    const canvasCtx = buildCanvasContext();
 
     try {
-      // ── Stage 1: Chat response (fast) ──────────────────────────
+      // ── Stage 1: Chat response (SSE streaming) ────────────────
+      const assistantMsg: WFMessage = {
+        id: uid(), role: "assistant", content: "",
+        timestamp: new Date().toISOString(),
+      };
+      set({ messages: [...get().messages, assistantMsg] });
+
       const chatRes = await fetch("/workflow-chat", {
         method: "POST", headers,
         body: JSON.stringify({
@@ -204,48 +282,84 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
           context,
           systemPrompt: chatSystemPrompt,
           model: chatModel,
+          canvasContext: canvasCtx,
         }),
       });
 
-      if (!chatRes.ok) throw new Error(`Chat failed: ${chatRes.status}`);
-      const chatData = await chatRes.json() as {
-        text: string; inputTokens?: number; outputTokens?: number;
-      };
+      if (!chatRes.ok || !chatRes.body) throw new Error(`Chat failed: ${chatRes.status}`);
 
-      const assistantMsg: WFMessage = {
-        id: uid(), role: "assistant", content: chatData.text,
-        timestamp: new Date().toISOString(),
-        inputTokens: chatData.inputTokens,
-        outputTokens: chatData.outputTokens,
-      };
-      set({ messages: [...get().messages, assistantMsg] });
+      // Stream response tokens
+      const reader = chatRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let fullText = "";
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let chunkBuf = "";
+      let lastFlush = Date.now();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.type === "chunk") {
+              fullText += evt.text;
+              chunkBuf += evt.text;
+              // Clear thinking indicator on first chunk
+              if (get().thinkingStartedAt) set({ thinkingStartedAt: null });
+              // Debounce state updates (~100ms)
+              if (Date.now() - lastFlush > 100) {
+                set({ messages: get().messages.map((m) => m.id === assistantMsg.id ? { ...m, content: stripBuildTag(fullText) } : m) });
+                chunkBuf = "";
+                lastFlush = Date.now();
+              }
+            } else if (evt.type === "done") {
+              fullText = evt.text ?? fullText;
+              inputTokens = evt.inputTokens ?? 0;
+              outputTokens = evt.outputTokens ?? 0;
+            } else if (evt.type === "error") {
+              throw new Error(evt.error);
+            }
+          } catch (e) {
+            if (e instanceof Error && !e.message.includes("JSON")) throw e;
+          }
+        }
+      }
+
+      // Final update with clean text + token counts
+      set({
+        messages: get().messages.map((m) =>
+          m.id === assistantMsg.id
+            ? { ...m, content: stripBuildTag(fullText), inputTokens, outputTokens }
+            : m,
+        ),
+      });
 
       // ── Stage 2: Plan (generates nodes) ────────────────────────
-      // Trigger plan if:
-      // 1. Assistant signals readiness, OR
-      // 2. User explicitly asks to build (affirmative after plan discussion)
       const userLower = text.toLowerCase();
       const userWantsBuild = /^(oui|yes|go|ok|do it|vas-y|vasy|fais[- ]le|crée|create|build|lance|génère|approve|approuve|let's go|c'est bon|permission|accepte)/i.test(userLower)
         || userLower.includes("crée") || userLower.includes("build it") || userLower.includes("go ahead");
 
-      const assistantReady = shouldTriggerPlan(chatData.text);
-
-      // Also trigger if this is message #2+ and user gives a short affirmative
+      const assistantReady = shouldTriggerPlan(fullText);
       const hasHistory = get().messages.length >= 3;
       const shortAffirmative = text.length < 40 && userWantsBuild && hasHistory;
 
       if (assistantReady || shortAffirmative) {
-        const fullContext = [...get().messages].slice(-20).map((m) => ({
-          role: m.role, content: m.content,
-        }));
+        const fullContext = [...get().messages].slice(-20).map((m) => ({ role: m.role, content: m.content }));
 
-        // Add system message to indicate planning
         const planningMsg: WFMessage = {
           id: uid(), role: "system",
           content: "Building chain on canvas...",
           timestamp: new Date().toISOString(),
         };
-        set({ messages: [...get().messages, planningMsg] });
+        set({ messages: [...get().messages, planningMsg], thinkingStartedAt: Date.now() });
 
         const planRes = await fetch("/workflow-chat", {
           method: "POST", headers,
@@ -255,6 +369,7 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
             context: fullContext,
             systemPrompt: plannerSystemPrompt,
             model: plannerModel,
+            canvasContext: canvasCtx,
           }),
         });
 
@@ -264,7 +379,6 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
           try {
             plan = JSON.parse(rawText) as WFPlan;
           } catch {
-            // Try to extract JSON from the response (sometimes wrapped in markdown)
             const jsonMatch = rawText.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
               plan = JSON.parse(jsonMatch[0]) as WFPlan;
@@ -275,37 +389,27 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
 
           if (plan.steps?.length > 0) {
             const createdIds = applyPlanToCanvas(plan);
-            // Update assistant message with created node IDs
             set({
               messages: get().messages.map((m) =>
-                m.id === assistantMsg.id
-                  ? { ...m, createdNodes: createdIds }
-                  : m,
+                m.id === assistantMsg.id ? { ...m, createdNodes: createdIds } : m,
               ),
             });
-
-            // Replace the "Building..." message with success
             set({
               messages: get().messages.map((m) =>
                 m.id === planningMsg.id
-                  ? { ...m, content: `✓ Created ${createdIds.length} steps on canvas${plan.chainName ? ` — "${plan.chainName}"` : ""}. You can now edit, connect, and run the chain.` }
+                  ? { ...m, content: `\u2713 Created ${createdIds.length} steps on canvas${plan.chainName ? ` \u2014 "${plan.chainName}"` : ""}. You can now edit, connect, and run the chain.` }
                   : m,
               ),
             });
           } else if (plan.directResponse) {
             set({
               messages: get().messages.map((m) =>
-                m.id === planningMsg.id
-                  ? { ...m, content: plan.directResponse! }
-                  : m,
+                m.id === planningMsg.id ? { ...m, content: plan.directResponse! } : m,
               ),
             });
           }
         } else {
-          // Plan request failed — remove the "Building..." message
-          set({
-            messages: get().messages.filter((m) => m.id !== planningMsg.id),
-          });
+          set({ messages: get().messages.filter((m) => m.id !== planningMsg.id) });
         }
       }
     } catch (err) {
@@ -320,6 +424,24 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
     }
   },
 }));
+
+// Auto-switch workflow chat session when canvas chain changes
+useAppStore.subscribe((state) => {
+  const key = state.pipelineName
+    ? `pipeline:${state.pipelineName}`
+    : state.canvasChainName
+      ? `chain:${state.canvasChainName}`
+      : "_new";
+  const current = useWorkflowChatStore.getState().canvasKey;
+  if (key !== current) {
+    useWorkflowChatStore.getState().setCanvasKey(key);
+  }
+});
+
+// Auto-save messages on every change (debounced via subscriber)
+useWorkflowChatStore.subscribe((state) => {
+  saveMessagesForKey(state.canvasKey, state.messages);
+});
 
 // ─── Apply plan to canvas ───────────────────────────────────────────────────
 

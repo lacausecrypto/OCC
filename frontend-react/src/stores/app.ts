@@ -9,6 +9,7 @@ import { useServerStore } from "./server";
 import { useCanvasExecStore } from "./canvasExec";
 import { useMonitorStore } from "./monitor";
 import { useAnnotationStore } from "./annotations";
+import { useWorkflowChatStore } from "./workflowChat";
 import { fetchChainJson } from "../api/chains";
 import { fetchPipelineJson } from "../api/pipelines";
 import type { TabId } from "../components/layout/MainTabs";
@@ -101,8 +102,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().canvasLoading) return;
     set({ canvasLoading: true, canvasChainName: name, pipelineName: null, pipelineViewMode: "stages" });
 
-    // Switch annotations to this chain
+    // Switch annotations + workflow chat to this chain
     useAnnotationStore.getState().setCanvasKey(`chain:${name}`);
+    useWorkflowChatStore.getState().setCanvasKey(`chain:${name}`);
 
     // Clear canvas + execution state
     const cs = useCanvasStore.getState();
@@ -229,6 +231,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ canvasLoading: true, pipelineName: name, pipelineViewMode: "stages" });
 
     useAnnotationStore.getState().setCanvasKey(`pipeline:${name}`);
+    useWorkflowChatStore.getState().setCanvasKey(`pipeline:${name}`);
 
     const cs = useCanvasStore.getState();
     cs.clear();
@@ -302,6 +305,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ canvasLoading: true, pipelineName: name, pipelineViewMode: "decomposed" });
 
     useAnnotationStore.getState().setCanvasKey(`pipeline-decomposed:${name}`);
+    useWorkflowChatStore.getState().setCanvasKey(`pipeline:${name}`);
 
     const cs = useCanvasStore.getState();
     cs.clear();
@@ -528,7 +532,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // ─── Create new blank chain ──────────────────────────────────
   createNewChain: () => {
-    useAnnotationStore.getState().setCanvasKey(`new-chain:${Date.now()}`);
+    const newKey = `new-chain:${Date.now()}`;
+    useAnnotationStore.getState().setCanvasKey(newKey);
+    useWorkflowChatStore.getState().setCanvasKey(newKey);
     const cs = useCanvasStore.getState();
     cs.clear();
     useCanvasExecStore.getState().clearExecState();
