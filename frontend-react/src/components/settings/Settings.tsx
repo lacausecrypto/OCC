@@ -657,7 +657,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>Max Concurrent Executions <InfoTip text={"How many chains/pipelines can run at the same time.\n\nMin: 1 | Max: 20 | Default: 5\n\nHigher values speed up pipelines with parallel chains but increase CPU/memory usage. Each slot holds one Claude CLI process. Set to 1 for sequential-only execution."} /></div>
                 <div className={styles.rowDesc}>Parallel chain execution slots</div>
               </div>
-              <input className={styles.rowInput} type="number" min={1} max={20} value={config?.maxConcurrentExecutions ?? "5"} onChange={(e) => updateConfig("maxConcurrentExecutions", e.target.value)} onBlur={saveConfig} style={{ width: 60, textAlign: "center" }} />
+              <input className={styles.rowInput} type="number" min={1} max={20} value={config?.maxConcurrentExecutions ?? "5"} onChange={(e) => updateConfig("maxConcurrentExecutions", e.target.value)} onBlur={() => saveConfig()} style={{ width: 60, textAlign: "center" }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-red-bg)" }}>T</div>
@@ -665,7 +665,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>Claude Timeout (ms) <InfoTip text={"Maximum time (in milliseconds) a single Claude CLI call can run before being killed.\n\nDefault: 1800000 (30 min) | Min: 10000\n\n60000 = 1 min, 300000 = 5 min, 1800000 = 30 min.\nComplex steps (deep research, long code generation) need higher values. Steps that hit this limit will fail with a timeout error and can be retried."} /></div>
                 <div className={styles.rowDesc}>Max duration per LLM call</div>
               </div>
-              <input className={styles.rowInput} type="number" step={60000} value={config?.claudeTimeoutMs ?? "1800000"} onChange={(e) => updateConfig("claudeTimeoutMs", e.target.value)} onBlur={saveConfig} style={{ width: 100, textAlign: "center" }} />
+              <input className={styles.rowInput} type="number" step={60000} value={config?.claudeTimeoutMs ?? "1800000"} onChange={(e) => updateConfig("claudeTimeoutMs", e.target.value)} onBlur={() => saveConfig()} style={{ width: 100, textAlign: "center" }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-cyan-bg)" }}>L</div>
@@ -697,7 +697,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>Claude CLI Path <InfoTip text={"Path to the Claude CLI binary on the server.\n\nDefault: \"claude\" (uses PATH lookup)\n\nExamples: claude, /usr/local/bin/claude, /home/user/.local/bin/claude\n\nThe binary must support: claude -p \"prompt\" --output-format stream-json. Requires server restart."} /></div>
                 <div className={styles.rowDesc}>Binary path for Claude CLI</div>
               </div>
-              <input className={styles.rowInput} value={config?.claudeCli ?? "claude"} onChange={(e) => updateConfig("claudeCli", e.target.value)} onBlur={saveConfig} style={{ width: 120 }} />
+              <input className={styles.rowInput} value={config?.claudeCli ?? "claude"} onChange={(e) => updateConfig("claudeCli", e.target.value)} onBlur={() => saveConfig()} style={{ width: 120 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-orange-bg)" }}>A</div>
@@ -705,7 +705,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>Execution Max Age (days) <InfoTip text={"Executions older than this are automatically deleted from the SQLite database on server startup.\n\nMin: 1 | Max: 365 | Default: 7\n\nLower values save disk space. Higher values keep history longer for debugging. Running executions are never deleted."} /></div>
                 <div className={styles.rowDesc}>Auto-delete old executions</div>
               </div>
-              <input className={styles.rowInput} type="number" min={1} max={365} value={config?.executionMaxAgeDays ?? "7"} onChange={(e) => updateConfig("executionMaxAgeDays", e.target.value)} onBlur={saveConfig} style={{ width: 60, textAlign: "center" }} />
+              <input className={styles.rowInput} type="number" min={1} max={365} value={config?.executionMaxAgeDays ?? "7"} onChange={(e) => updateConfig("executionMaxAgeDays", e.target.value)} onBlur={() => saveConfig()} style={{ width: 60, textAlign: "center" }} />
             </div>
           </div>
           <div className={styles.sectionCard}>
@@ -716,7 +716,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>Chain Context Budget <InfoTip text={"Maximum total characters across all step variables in a chain execution.\n\nWhen exceeded, older step outputs are auto-summarized via Haiku (15s timeout, fallback to truncation at 1000 chars). The 3 most recent outputs and all input.* variables are always protected.\n\nMin: 0 (disabled) | Default: 50000\n\nRecommended: 30000-80000. Lower = cheaper but may lose context. Higher = more context but costs more tokens. Can be overridden per chain via max_context_chars in YAML."} /></div>
                 <div className={styles.rowDesc}>Max chars in chain vars before auto-summarize (0 = disabled)</div>
               </div>
-              <input className={styles.rowInput} type="number" step={5000} min={0} value={config?.maxContextChars ?? "50000"} onChange={(e) => updateConfig("maxContextChars", e.target.value)} onBlur={saveConfig} style={{ width: 80, textAlign: "center" }} />
+              <input className={styles.rowInput} type="number" step={5000} min={0} value={config?.maxContextChars ?? "50000"} onChange={(e) => updateConfig("maxContextChars", e.target.value)} onBlur={() => saveConfig()} style={{ width: 80, textAlign: "center" }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-green-bg)" }}>{"\u{1F4AC}"}</div>
@@ -724,7 +724,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>Chat Context Budget <InfoTip text={"Maximum total characters for BLOB chat conversation history sent to the LLM.\n\nWhen exceeded, the oldest messages are dropped until under budget. If a single message is still too long, it gets truncated.\n\nMin: 0 (unlimited) | Default: 8000\n\nRecommended: 5000-15000. Prevents accidentally sending huge outputs pasted in chat to Haiku. Higher values give the chat more memory of past conversation."} /></div>
                 <div className={styles.rowDesc}>Max chars for BLOB chat conversation history (0 = unlimited)</div>
               </div>
-              <input className={styles.rowInput} type="number" step={1000} min={0} value={config?.maxChatContextChars ?? "8000"} onChange={(e) => updateConfig("maxChatContextChars", e.target.value)} onBlur={saveConfig} style={{ width: 80, textAlign: "center" }} />
+              <input className={styles.rowInput} type="number" step={1000} min={0} value={config?.maxChatContextChars ?? "8000"} onChange={(e) => updateConfig("maxChatContextChars", e.target.value)} onBlur={() => saveConfig()} style={{ width: 80, textAlign: "center" }} />
             </div>
           </div>
           {configDirty && <div className={styles.sectionHint} style={{ color: "var(--m-accent)" }}>Changes saved — some settings require server restart.</div>}
@@ -790,27 +790,27 @@ export function Settings() {
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--m-text2)" }}>C</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>Chains Directory <InfoTip text={"Filesystem path where chain YAML definitions are stored.\n\nDefault: ./chains\n\nThe server reads all .yaml files from this directory. Each file defines one chain with its steps, prompts, and configuration. Use an absolute path for production.\n\nRequires server restart."} /></div></div>
-              <input className={styles.rowInput} value={config?.chainsDir ?? "./chains"} onChange={(e) => updateConfig("chainsDir", e.target.value)} onBlur={saveConfig} style={{ width: 160 }} />
+              <input className={styles.rowInput} value={config?.chainsDir ?? "./chains"} onChange={(e) => updateConfig("chainsDir", e.target.value)} onBlur={() => saveConfig()} style={{ width: 160 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--m-text2)" }}>P</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>Pipelines Directory <InfoTip text={"Filesystem path where pipeline YAML definitions are stored.\n\nDefault: ./pipelines\n\nPipelines orchestrate multiple chains in sequence or parallel. Each .yaml file defines one pipeline with chain references, dependencies, and input mappings.\n\nRequires server restart."} /></div></div>
-              <input className={styles.rowInput} value={config?.pipelinesDir ?? "./pipelines"} onChange={(e) => updateConfig("pipelinesDir", e.target.value)} onBlur={saveConfig} style={{ width: 160 }} />
+              <input className={styles.rowInput} value={config?.pipelinesDir ?? "./pipelines"} onChange={(e) => updateConfig("pipelinesDir", e.target.value)} onBlur={() => saveConfig()} style={{ width: 160 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--m-text2)" }}>W</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>Workspace <InfoTip text={"Root directory for file operations (read_file, write_file pre-tools).\n\nDefault: . (current working directory)\n\nPre-tools with file access are sandboxed to this directory. Paths outside it are blocked. Use a dedicated folder for security in production.\n\nRequires server restart."} /></div><div className={styles.rowDesc}>File operations sandbox</div></div>
-              <input className={styles.rowInput} value={config?.workspaceDir ?? "."} onChange={(e) => updateConfig("workspaceDir", e.target.value)} onBlur={saveConfig} style={{ width: 160 }} />
+              <input className={styles.rowInput} value={config?.workspaceDir ?? "."} onChange={(e) => updateConfig("workspaceDir", e.target.value)} onBlur={() => saveConfig()} style={{ width: 160 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-cyan-bg)" }}>O</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>CORS Origin <InfoTip text={"Which origins are allowed to call the REST API (Access-Control-Allow-Origin header).\n\nDefault: empty (same-origin only)\n\n* = allow all origins (dev only, insecure). For production, set your frontend URL (e.g. https://my-app.com).\n\nRequires server restart."} /></div><div className={styles.rowDesc}>Allowed origin (* for all)</div></div>
-              <input className={styles.rowInput} value={config?.corsOrigin ?? ""} onChange={(e) => updateConfig("corsOrigin", e.target.value)} onBlur={saveConfig} placeholder="*" style={{ width: 160 }} />
+              <input className={styles.rowInput} value={config?.corsOrigin ?? ""} onChange={(e) => updateConfig("corsOrigin", e.target.value)} onBlur={() => saveConfig()} placeholder="*" style={{ width: 160 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-green-bg)" }}>H</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>Public Host <InfoTip text={"Public hostname used for gate approval callback URLs.\n\nDefault: localhost\n\nWhen a gate step waits for human approval, it generates an approval link using this hostname. Set to your actual domain/IP if the server is remote.\n\nRequires server restart."} /></div><div className={styles.rowDesc}>Hostname for approval callbacks</div></div>
-              <input className={styles.rowInput} value={config?.publicHost ?? "localhost"} onChange={(e) => updateConfig("publicHost", e.target.value)} onBlur={saveConfig} placeholder="localhost" style={{ width: 160 }} />
+              <input className={styles.rowInput} value={config?.publicHost ?? "localhost"} onChange={(e) => updateConfig("publicHost", e.target.value)} onBlur={() => saveConfig()} placeholder="localhost" style={{ width: 160 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-red-bg)" }}>R</div>
@@ -820,9 +820,9 @@ export function Settings() {
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <span style={{ fontSize: 11, opacity: 0.6 }}>Exec</span>
-                <input className={styles.rowInput} type="number" min={1} max={1000} value={config?.rateLimitExec ?? "20"} onChange={(e) => updateConfig("rateLimitExec", e.target.value)} onBlur={saveConfig} style={{ width: 55, textAlign: "center" }} />
+                <input className={styles.rowInput} type="number" min={1} max={1000} value={config?.rateLimitExec ?? "20"} onChange={(e) => updateConfig("rateLimitExec", e.target.value)} onBlur={() => saveConfig()} style={{ width: 55, textAlign: "center" }} />
                 <span style={{ fontSize: 11, opacity: 0.6 }}>Gen</span>
-                <input className={styles.rowInput} type="number" min={1} max={100} value={config?.rateLimitGen ?? "5"} onChange={(e) => updateConfig("rateLimitGen", e.target.value)} onBlur={saveConfig} style={{ width: 55, textAlign: "center" }} />
+                <input className={styles.rowInput} type="number" min={1} max={100} value={config?.rateLimitGen ?? "5"} onChange={(e) => updateConfig("rateLimitGen", e.target.value)} onBlur={() => saveConfig()} style={{ width: 55, textAlign: "center" }} />
               </div>
             </div>
             <div className={styles.row}><div className={styles.rowIcon} style={{ background: "var(--icon-orange-bg)" }}>S</div><div className={styles.rowBody}><div className={styles.rowLabel}>SSRF Protection <InfoTip text={"Blocks HTTP requests to private/internal IP addresses from pre-tools (http_fetch, web_search, etc.).\n\nAlways enabled. Prevents Server-Side Request Forgery attacks. Blocked ranges: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, ::1, fc00::/7."} /></div><div className={styles.rowDesc}>Blocks private IPs</div></div><span className={styles.rowValue}>Enabled</span></div>
@@ -837,32 +837,32 @@ export function Settings() {
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-orange-bg)" }}>M</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>Main Database <InfoTip text={"SQLite database for execution history and step checkpoints.\n\nDefault: ./occ.db\n\nStores all chain/pipeline executions, step results, tokens, and timing data. Uses WAL mode for concurrent reads. Can grow to several hundred MB with heavy usage.\n\nRequires server restart."} /></div><div className={styles.rowDesc}>OCC_DB — executions & checkpoints</div></div>
-              <input className={styles.rowInput} value={config?.occDb ?? "./occ.db"} onChange={(e) => updateConfig("occDb", e.target.value)} onBlur={saveConfig} style={{ width: 180 }} />
+              <input className={styles.rowInput} value={config?.occDb ?? "./occ.db"} onChange={(e) => updateConfig("occDb", e.target.value)} onBlur={() => saveConfig()} style={{ width: 180 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-cyan-bg)" }}>Q</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>Queue Database <InfoTip text={"SQLite database for the job queue (queued, running, completed, errored jobs).\n\nDefault: ./occ-queue.db\n\nSeparated from the main DB for performance. Queue entries are purged automatically. Requires server restart."} /></div><div className={styles.rowDesc}>OCC_QUEUE_DB — job queue</div></div>
-              <input className={styles.rowInput} value={config?.occQueueDb ?? "./occ-queue.db"} onChange={(e) => updateConfig("occQueueDb", e.target.value)} onBlur={saveConfig} style={{ width: 180 }} />
+              <input className={styles.rowInput} value={config?.occQueueDb ?? "./occ-queue.db"} onChange={(e) => updateConfig("occQueueDb", e.target.value)} onBlur={() => saveConfig()} style={{ width: 180 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-green-bg)" }}>S</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>State Database <InfoTip text={"SQLite database for the state_save/state_load pre-tools.\n\nDefault: empty (uses temp directory)\n\nAllows chain steps to persist key-value state between executions. Useful for caching API tokens, tracking progress, or storing intermediate results.\n\nRequires server restart."} /></div><div className={styles.rowDesc}>OCC_STATE_DB — state_save/state_load</div></div>
-              <input className={styles.rowInput} value={config?.occStateDb ?? ""} onChange={(e) => updateConfig("occStateDb", e.target.value)} onBlur={saveConfig} placeholder="/tmp/occ-state.db" style={{ width: 180 }} />
+              <input className={styles.rowInput} value={config?.occStateDb ?? ""} onChange={(e) => updateConfig("occStateDb", e.target.value)} onBlur={() => saveConfig()} placeholder="/tmp/occ-state.db" style={{ width: 180 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-purple-bg)" }}>V</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>Vector Database <InfoTip text={"SQLite database for vector embeddings (semantic search pre-tool).\n\nDefault: empty (uses temp directory)\n\nStores text embeddings for similarity search. Used by the semantic_search and vector_store pre-tools. Requires server restart."} /></div><div className={styles.rowDesc}>OCC_VECTOR_DB — embeddings</div></div>
-              <input className={styles.rowInput} value={config?.occVectorDb ?? ""} onChange={(e) => updateConfig("occVectorDb", e.target.value)} onBlur={saveConfig} placeholder="/tmp/occ-vectors.db" style={{ width: 180 }} />
+              <input className={styles.rowInput} value={config?.occVectorDb ?? ""} onChange={(e) => updateConfig("occVectorDb", e.target.value)} onBlur={() => saveConfig()} placeholder="/tmp/occ-vectors.db" style={{ width: 180 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-red-bg)" }}>C</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>Semantic Cache DB <InfoTip text={"SQLite database for semantic caching of LLM responses.\n\nDefault: empty (disabled)\n\nWhen set, similar prompts can return cached responses instead of calling Claude again. Reduces costs for repetitive queries. Requires server restart."} /></div></div>
-              <input className={styles.rowInput} value={config?.occSemanticCacheDb ?? ""} onChange={(e) => updateConfig("occSemanticCacheDb", e.target.value)} onBlur={saveConfig} placeholder="/tmp/occ-semantic-cache.db" style={{ width: 180 }} />
+              <input className={styles.rowInput} value={config?.occSemanticCacheDb ?? ""} onChange={(e) => updateConfig("occSemanticCacheDb", e.target.value)} onBlur={() => saveConfig()} placeholder="/tmp/occ-semantic-cache.db" style={{ width: 180 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--m-text2)" }}>G</div>
               <div className={styles.rowBody}><div className={styles.rowLabel}>Graph Database <InfoTip text={"SQLite database for knowledge graph triples (knowledge_graph pre-tool).\n\nDefault: empty (disabled)\n\nStores subject-predicate-object triples for structured knowledge queries. Used by the triples_query pre-tool. Requires server restart."} /></div></div>
-              <input className={styles.rowInput} value={config?.occGraphDb ?? ""} onChange={(e) => updateConfig("occGraphDb", e.target.value)} onBlur={saveConfig} placeholder="/tmp/occ-graph.db" style={{ width: 180 }} />
+              <input className={styles.rowInput} value={config?.occGraphDb ?? ""} onChange={(e) => updateConfig("occGraphDb", e.target.value)} onBlur={() => saveConfig()} placeholder="/tmp/occ-graph.db" style={{ width: 180 }} />
             </div>
           </div>
           {configDirty && <div className={styles.sectionHint} style={{ color: "var(--m-accent)" }}>Saved — restart server to apply storage changes.</div>}
@@ -878,7 +878,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>Resend API Key <InfoTip text={"API key for the Resend email service (resend.com).\n\nRequired for the send_email pre-tool. Get a key from resend.com/api-keys.\n\nFormat: re_xxxxxxxxx. Leave empty to disable email features. Stored encrypted on disk.\n\nRequires server restart."} /></div>
                 <div className={styles.rowDesc}>For email pre-tool notifications</div>
               </div>
-              <input className={styles.rowInput} type="password" value={config?.resendApiKey ?? ""} onChange={(e) => updateConfig("resendApiKey", e.target.value)} onBlur={saveConfig} placeholder="re_xxxxx" style={{ width: 180 }} />
+              <input className={styles.rowInput} type="password" value={config?.resendApiKey ?? ""} onChange={(e) => updateConfig("resendApiKey", e.target.value)} onBlur={() => saveConfig()} placeholder="re_xxxxx" style={{ width: 180 }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-green-bg)" }}>F</div>
@@ -886,7 +886,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>From Address <InfoTip text={"The sender email address for outgoing emails.\n\nMust be a verified domain in your Resend account. Example: noreply@yourdomain.com, alerts@company.io.\n\nEmails sent by the send_email pre-tool will appear from this address.\n\nRequires server restart."} /></div>
                 <div className={styles.rowDesc}>Sender email address</div>
               </div>
-              <input className={styles.rowInput} value={config?.resendFrom ?? ""} onChange={(e) => updateConfig("resendFrom", e.target.value)} onBlur={saveConfig} placeholder="noreply@yourdomain.com" style={{ width: 200 }} />
+              <input className={styles.rowInput} value={config?.resendFrom ?? ""} onChange={(e) => updateConfig("resendFrom", e.target.value)} onBlur={() => saveConfig()} placeholder="noreply@yourdomain.com" style={{ width: 200 }} />
             </div>
           </div>
           <div className={styles.sectionHint}>Optional — used by the email pre-tool in chains. Provider: Resend.</div>
@@ -1040,7 +1040,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>Autonomous Check Interval <InfoTip text={"How often (in seconds) the autonomous BLOB engine checks for knowledge gaps and generates exploration plans.\n\nMin: 10 | Max: 3600 | Default: 60\n\nThe engine won't run more than 10 times per hour regardless of this value. Minimum enforced interval is 6 minutes between actual runs.\n\nRequires server restart."} /></div>
                 <div className={styles.rowDesc}>Seconds between autonomous polls</div>
               </div>
-              <input className={styles.rowInput} type="number" min={10} max={3600} value={config?.blobAutoCheckSec ?? "60"} onChange={(e) => updateConfig("blobAutoCheckSec", e.target.value)} onBlur={saveConfig} style={{ width: 80, textAlign: "center" }} />
+              <input className={styles.rowInput} type="number" min={10} max={3600} value={config?.blobAutoCheckSec ?? "60"} onChange={(e) => updateConfig("blobAutoCheckSec", e.target.value)} onBlur={() => saveConfig()} style={{ width: 80, textAlign: "center" }} />
             </div>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--m-text2)" }}>D</div>
@@ -1048,7 +1048,7 @@ export function Settings() {
                 <div className={styles.rowLabel}>BLOB Directory <InfoTip text={"Filesystem path where BLOB session data is stored (graphs, knowledge, autonomous plans).\n\nDefault: ./blobs\n\nEach session creates files: {sessionId}.json (graph), knowledge.json (shared), index.json (session list). Use an absolute path for production.\n\nRequires server restart."} /></div>
                 <div className={styles.rowDesc}>Storage for session graphs</div>
               </div>
-              <input className={styles.rowInput} value={config?.blobDir ?? "./blobs"} onChange={(e) => updateConfig("blobDir", e.target.value)} onBlur={saveConfig} style={{ width: 160 }} />
+              <input className={styles.rowInput} value={config?.blobDir ?? "./blobs"} onChange={(e) => updateConfig("blobDir", e.target.value)} onBlur={() => saveConfig()} style={{ width: 160 }} />
             </div>
           </div>
           {configDirty && <div className={styles.sectionHint} style={{ color: "var(--m-accent)" }}>Saved — restart server to apply BLOB changes.</div>}

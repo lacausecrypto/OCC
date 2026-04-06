@@ -136,10 +136,7 @@ function formatDownloads(n?: number): string {
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function HuggingFaceSection() {
-  const [tokenInput, setTokenInput] = useState("");
   const [tokenSaved, setTokenSaved] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showRateLimits, setShowRateLimits] = useState(false);
   const [search, setSearch] = useState("");
@@ -190,19 +187,6 @@ export function HuggingFaceSection() {
   useEffect(() => { setVisibleCount(PAGE_SIZE); }, [search, filterTag, tierFilter]);
   useEffect(() => { setHubVisibleCount(PAGE_SIZE); }, [search]);
 
-  const handleTest = async () => {
-    setTesting(true); setTestResult(null);
-    try {
-      const res = await fetch("/huggingface/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: tokenInput || undefined }),
-      });
-      setTestResult(await res.json() as { ok: boolean; error?: string });
-    } catch (err) { setTestResult({ ok: false, error: (err as Error).message }); }
-    setTesting(false);
-  };
-
   const toggleModel = (modelId: string) => {
     setSelectedModels(prev => {
       const next = new Set(prev);
@@ -214,7 +198,7 @@ export function HuggingFaceSection() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: "huggingface", name: "HuggingFace", type: "huggingface",
-          apiKey: tokenInput || "", baseUrl: "https://router.huggingface.co/v1",
+          apiKey: "", baseUrl: "https://router.huggingface.co/v1",
           enabled: true, models,
         }),
       }).then(() => {
@@ -233,11 +217,11 @@ export function HuggingFaceSection() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: "huggingface", name: "HuggingFace", type: "huggingface",
-          apiKey: tokenInput || "", baseUrl: "https://router.huggingface.co/v1",
+          apiKey: "", baseUrl: "https://router.huggingface.co/v1",
           enabled: true, models,
         }),
       });
-      setRegistered(true); setTokenSaved(!!tokenInput);
+      setRegistered(true); setTokenSaved(true);
       window.dispatchEvent(new Event("occ-providers-changed"));
       setTimeout(() => setRegistered(false), 3000);
     } catch { /* */ }
