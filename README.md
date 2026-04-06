@@ -15,6 +15,12 @@
 
 Multi-model workflow engine built on Claude. Define chains in YAML, run them with parallel execution, build visually in a React canvas, access via MCP, REST API, or CLI.
 
+<p align="center">
+  <video src="https://github.com/lacausecrypto/OCC/raw/main/demo.mp4" width="720" autoplay loop muted playsinline>
+    Your browser does not support the video tag.
+  </video>
+</p>
+
 ```
 $ occ run deep-researcher --input topic="quantum computing"
 [START] Chain: deep-researcher
