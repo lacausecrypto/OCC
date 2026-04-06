@@ -112,7 +112,7 @@ describe("BLOB Context Enrichment", () => {
     app = restModule.app;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     if (originalChainsDir === undefined) delete process.env.CHAINS_DIR;
     else process.env.CHAINS_DIR = originalChainsDir;
@@ -124,7 +124,12 @@ describe("BLOB Context Enrichment", () => {
     else process.env.OCC_API_KEY = originalApiKey;
     if (originalBlobDir === undefined) delete process.env.BLOB_DIR;
     else process.env.BLOB_DIR = originalBlobDir;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    // Close SQLite DBs before cleanup — prevents EBUSY on Windows
+    try { const { closeStorage } = await import("../src/storage.js"); closeStorage(); } catch { /* */ }
+    try { const { closeQueue } = await import("../src/queue.js"); closeQueue(); } catch { /* */ }
+    // Small delay for Windows file handle release
+    await new Promise(r => setTimeout(r, process.platform === "win32" ? 200 : 0));
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows */ }
   });
 
   // ─── Helper: parse SSE response text into events ─────────────────────────
