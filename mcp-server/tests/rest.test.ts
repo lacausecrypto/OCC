@@ -738,22 +738,30 @@ output: result
     });
 
     it("returns 403 for paths outside allowed directories", async () => {
-      const res = await request(app).get("/download?path=/etc/passwd");
-      expect(res.status).toBe(403);
-      expect(res.body).toEqual({ error: "Path not allowed" });
+      // Create a real file outside tmpdir/WORKSPACE_DIR
+      const outsideDir = fs.mkdtempSync(path.join(os.homedir(), ".occ-test-forbidden-"));
+      const forbiddenFile = path.join(outsideDir, "secret.txt");
+      fs.writeFileSync(forbiddenFile, "secret");
+      try {
+        const res = await request(app).get(`/download?path=${encodeURIComponent(forbiddenFile)}`);
+        expect(res.status).toBe(403);
+        expect(res.body).toEqual({ error: "Path not allowed" });
+      } finally {
+        fs.rmSync(outsideDir, { recursive: true, force: true });
+      }
     });
 
-    it("returns 404 for non-existent file in /tmp", async () => {
+    it("returns 404 for non-existent file in tmpdir", async () => {
+      const nonExistent = path.join(os.tmpdir(), "nonexistent-file-12345.pdf");
       const res = await request(app).get(
-        `/download?path=${encodeURIComponent("/tmp/nonexistent-file-12345.pdf")}`,
+        `/download?path=${encodeURIComponent(nonExistent)}`,
       );
       expect(res.status).toBe(404);
       expect(res.body).toEqual({ error: "File not found" });
     });
 
-    it("serves a file from /tmp", async () => {
-      // Use /tmp directly (not os.tmpdir() which may resolve to /private/tmp on macOS)
-      const tmpFile = `/tmp/occ-test-download-${Date.now()}.csv`;
+    it("serves a file from tmpdir", async () => {
+      const tmpFile = path.join(os.tmpdir(), `occ-test-download-${Date.now()}.csv`);
       fs.writeFileSync(tmpFile, "col1,col2\na,b\n");
       try {
         const res = await request(app).get(
