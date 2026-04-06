@@ -41,8 +41,8 @@ function ThinkingLoader({ startedAt }: { startedAt: number }) {
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
-      background: "rgba(10, 132, 255, 0.04)", borderRadius: 10,
-      border: "1px solid rgba(10, 132, 255, 0.1)",
+      background: "var(--glass-tint-subtle)", borderRadius: 10,
+      border: "1px solid var(--m-border)",
     }}>
       <span style={{ fontSize: 18, fontFamily: "monospace", width: 20, textAlign: "center", color: "var(--m-accent)" }}>
         {phase.frames[frameIdx]}
@@ -83,12 +83,12 @@ function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
   return (
     <div style={{
       position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-      background: "var(--m-bg, #111)", zIndex: 10, display: "flex", flexDirection: "column",
+      background: "var(--m-bg)", zIndex: 10, display: "flex", flexDirection: "column",
     }}>
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "12px 14px", borderBottom: "1px solid var(--m-border, #333)",
+        padding: "12px 14px", borderBottom: "1px solid var(--m-border)",
       }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: "var(--m-text)" }}>Workflow Chat Config</span>
         <button onClick={() => setConfigOpen(false)}
@@ -98,7 +98,7 @@ function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: "flex", borderBottom: "1px solid var(--m-border, #333)" }}>
+      <div style={{ display: "flex", borderBottom: "1px solid var(--m-border)" }}>
         {(["chat", "planner"] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)}
             style={{
@@ -121,7 +121,7 @@ function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
             <select value={chatModel} onChange={(e) => setChatModel(e.target.value)}
               style={{
                 width: "100%", padding: "6px 8px", fontSize: 12, marginBottom: 12,
-                background: "var(--m-bg2, #1a1a1a)", border: "1px solid var(--m-border, #333)",
+                background: "var(--m-surface)", border: "1px solid var(--m-border)",
                 borderRadius: 6, color: "var(--m-text)",
               }}>
               {modelOptions.map((m) => (
@@ -136,7 +136,7 @@ function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
               rows={14}
               style={{
                 width: "100%", padding: 8, fontSize: 11, lineHeight: 1.5,
-                background: "var(--m-bg2, #1a1a1a)", border: "1px solid var(--m-border, #333)",
+                background: "var(--m-surface)", border: "1px solid var(--m-border)",
                 borderRadius: 6, color: "var(--m-text)", resize: "vertical", fontFamily: "monospace",
               }} />
           </>
@@ -148,7 +148,7 @@ function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
             <select value={plannerModel} onChange={(e) => setPlannerModel(e.target.value)}
               style={{
                 width: "100%", padding: "6px 8px", fontSize: 12, marginBottom: 12,
-                background: "var(--m-bg2, #1a1a1a)", border: "1px solid var(--m-border, #333)",
+                background: "var(--m-surface)", border: "1px solid var(--m-border)",
                 borderRadius: 6, color: "var(--m-text)",
               }}>
               {modelOptions.map((m) => (
@@ -163,7 +163,7 @@ function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
               rows={14}
               style={{
                 width: "100%", padding: 8, fontSize: 11, lineHeight: 1.5,
-                background: "var(--m-bg2, #1a1a1a)", border: "1px solid var(--m-border, #333)",
+                background: "var(--m-surface)", border: "1px solid var(--m-border)",
                 borderRadius: 6, color: "var(--m-text)", resize: "vertical", fontFamily: "monospace",
               }} />
           </>
@@ -189,15 +189,19 @@ function MessageBubble({ msg }: { msg: WFMessage }) {
         maxWidth: "88%", padding: "8px 12px", borderRadius: 12,
         fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
         ...(isUser ? {
-          background: "var(--m-accent, #0a84ff)", color: "#fff",
+          background: "var(--m-accent)",
+          color: "#fff",
           borderBottomRightRadius: 4,
         } : isSystem ? {
-          background: "rgba(255, 159, 10, 0.08)", color: "#ff9f0a",
-          border: "1px solid rgba(255, 159, 10, 0.15)", fontSize: 11,
+          background: "var(--glass-tint-subtle)",
+          color: "var(--c-warning)",
+          border: "1px solid var(--m-border)",
+          fontSize: 11,
           borderBottomLeftRadius: 4,
         } : {
-          background: "rgba(255,255,255,0.05)", color: "var(--m-text)",
-          border: "1px solid var(--m-border, #333)",
+          background: "var(--glass-tint)",
+          color: "var(--m-text)",
+          border: "1px solid var(--m-border)",
           borderBottomLeftRadius: 4,
         }),
       }}>
@@ -212,7 +216,7 @@ function MessageBubble({ msg }: { msg: WFMessage }) {
           <span>{msg.inputTokens}+{msg.outputTokens} tok</span>
         )}
         {msg.createdNodes && msg.createdNodes.length > 0 && (
-          <span style={{ color: "#30d158" }}>{msg.createdNodes.length} nodes created</span>
+          <span style={{ color: "var(--c-success)" }}>{msg.createdNodes.length} nodes created</span>
         )}
       </div>
     </div>
@@ -282,12 +286,12 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
       {sessionsOpen && (
         <div style={{
           width: 130, flexShrink: 0, display: "flex", flexDirection: "column",
-          borderRight: "1px solid var(--glass-border, rgba(255,255,255,0.06))",
-          background: "rgba(0,0,0,0.12)",
+          borderRight: "1px solid var(--glass-border)",
+          background: "var(--glass-tint-subtle)",
         }}>
           <div style={{
             padding: "8px 8px 5px", display: "flex", alignItems: "center", justifyContent: "space-between",
-            borderBottom: "1px solid var(--glass-border, rgba(255,255,255,0.06))",
+            borderBottom: "1px solid var(--glass-border)",
           }}>
             <span style={{ fontSize: 9, fontWeight: 700, color: "var(--m-text2)", letterSpacing: 0.5, textTransform: "uppercase" }}>
               {ctx.label}
@@ -340,7 +344,7 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
       <div style={{
         display: "flex", alignItems: "center", gap: 6,
         padding: "10px 12px",
-        borderBottom: "1px solid var(--glass-border, rgba(255,255,255,0.06))",
+        borderBottom: "1px solid var(--glass-border)",
         flexShrink: 0,
       }}>
         {/* Session info */}
@@ -371,7 +375,7 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
           </button>
           {messages.length > 0 && (
             <button onClick={clearMessages} title="Clear"
-              style={{ background: "none", border: "none", cursor: "pointer", color: "#ff375f", fontSize: 11, padding: 0, lineHeight: 1, opacity: 0.6 }}>
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--c-error)", fontSize: 11, padding: 0, lineHeight: 1, opacity: 0.6 }}>
               {"\u{1F5D1}"}
             </button>
           )}
@@ -415,7 +419,7 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
       {/* Input */}
       <div style={{
         display: "flex", gap: 6, padding: "10px 14px",
-        borderTop: "1px solid var(--m-border, #333)", flexShrink: 0,
+        borderTop: "1px solid var(--m-border)", flexShrink: 0,
       }}>
         <input
           ref={inputRef}
@@ -426,7 +430,7 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
           disabled={streaming}
           style={{
             flex: 1, padding: "8px 12px", fontSize: 12,
-            background: "var(--m-bg2, #1a1a1a)", border: "1px solid var(--m-border, #333)",
+            background: "var(--m-surface)", border: "1px solid var(--m-border)",
             borderRadius: 8, color: "var(--m-text)", outline: "none",
           }}
         />
@@ -435,7 +439,7 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
           disabled={streaming || !input.trim()}
           style={{
             padding: "8px 14px", fontSize: 14, fontWeight: 700,
-            background: streaming || !input.trim() ? "rgba(255,255,255,0.05)" : "var(--m-accent, #0a84ff)",
+            background: streaming || !input.trim() ? "var(--glass-tint)" : "var(--m-accent)",
             color: streaming || !input.trim() ? "var(--m-text2)" : "#fff",
             border: "none", borderRadius: 8, cursor: streaming ? "wait" : "pointer",
             minWidth: 40,
