@@ -404,7 +404,6 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
       let fullText = "";
       let inputTokens = 0;
       let outputTokens = 0;
-      let chunkBuf = "";
       let lastFlush = Date.now();
 
       while (true) {
@@ -420,13 +419,11 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
             const evt = JSON.parse(line.slice(6));
             if (evt.type === "chunk") {
               fullText += evt.text;
-              chunkBuf += evt.text;
               // Clear thinking indicator on first chunk
               if (get().thinkingStartedAt) set({ thinkingStartedAt: null });
               // Debounce state updates (~100ms)
               if (Date.now() - lastFlush > 100) {
                 set({ messages: get().messages.map((m) => m.id === assistantMsg.id ? { ...m, content: stripBuildTag(fullText) } : m) });
-                chunkBuf = "";
                 lastFlush = Date.now();
               }
             } else if (evt.type === "done") {

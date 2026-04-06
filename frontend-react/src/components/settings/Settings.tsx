@@ -200,10 +200,9 @@ function formatTokens(n: number): string {
 }
 
 function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode: "daily" | "weekly" }) {
-  if (!data || data.daily.length === 0) return <div className={styles.chartEmpty}>No execution data yet</div>;
-
-  // Aggregate daily → weekly if needed
+  // Aggregate daily → weekly if needed (hook must be called unconditionally)
   const chartData = useMemo(() => {
+    if (!data || data.daily.length === 0) return [];
     if (mode === "daily") return data.daily.slice(-14);
     const weekMap = new Map<string, DayDetailed>();
     for (const d of data.daily) {
@@ -220,7 +219,9 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
       weekMap.set(key, existing);
     }
     return [...weekMap.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(-8);
-  }, [data.daily, mode]);
+  }, [data, mode]);
+
+  if (chartData.length === 0) return <div className={styles.chartEmpty}>No execution data yet</div>;
 
   // Pad to at least 7 entries
   const padded = [...chartData];

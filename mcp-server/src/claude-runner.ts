@@ -625,7 +625,7 @@ export async function autoCompressVars(
   _compressFn?: (text: string) => Promise<string>,
 ): Promise<number> {
   const totalChars = () => Object.values(vars).reduce((s, v) => s + v.length, 0);
-  let current = totalChars();
+  const current = totalChars();
   if (current <= maxChars) return current;
 
   // Partition keys into protected, recent, and old

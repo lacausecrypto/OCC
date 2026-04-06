@@ -4,7 +4,7 @@
  * Configurable prompts, models, and animated Unicode loader.
  */
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useWorkflowChatStore, type WFMessage, type WFSession } from "../../stores/workflowChat";
+import { useWorkflowChatStore, type WFMessage } from "../../stores/workflowChat";
 
 // ─── CSS Keyframes (injected once) ───────────────────────────────────────────
 
