@@ -180,8 +180,16 @@ export function OllamaSection() {
           </div>
         </div>
         {status?.online && (
-          <button className={styles.schedBtn} onClick={handleRegisterProvider} title="Register as LLM provider">
-            Use in chains
+          <button onClick={handleRegisterProvider} title="Register as LLM provider"
+            style={{
+              padding: "5px 14px", fontSize: 11, fontWeight: 600, borderRadius: 8, cursor: "pointer",
+              background: "var(--m-accent)", color: "#fff", border: "none",
+              transition: "opacity 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.85"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
+          >
+            {"\u26D3"} Use in chains
           </button>
         )}
       </div>
@@ -189,38 +197,76 @@ export function OllamaSection() {
       {/* Installed models */}
       {installed.length > 0 && installed.map((m) => (
         <div key={m.name} className={styles.schedCard}>
+          <div style={{
+            width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+            background: "var(--glass-tint)", display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 14,
+          }}>
+            {"\u{1F9E0}"}
+          </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: "var(--m-text)" }}>{m.name}</div>
             <div style={{ fontSize: 10, color: "var(--m-text2)", display: "flex", gap: 8, marginTop: 2 }}>
               <span>{formatSize(m.size)}</span>
-              {m.details?.parameter_size && <span>{m.details.parameter_size}</span>}
-              {m.details?.quantization_level && <span>{m.details.quantization_level}</span>}
+              {m.details?.parameter_size && (
+                <span style={{
+                  padding: "0 5px", borderRadius: 4, fontSize: 9, fontWeight: 600,
+                  background: "var(--glass-tint)", color: "var(--m-text2)",
+                }}>{m.details.parameter_size}</span>
+              )}
+              {m.details?.quantization_level && (
+                <span style={{
+                  padding: "0 5px", borderRadius: 4, fontSize: 9,
+                  background: "var(--glass-tint)", color: "var(--m-text2)",
+                }}>{m.details.quantization_level}</span>
+              )}
               {m.details?.family && <span>{m.details.family}</span>}
             </div>
           </div>
-          <button className={styles.schedBtn} onClick={() => handleDelete(m.name)}
-            style={{ color: "var(--c-error)", borderColor: "var(--c-error)" }}>
-            Delete
+          <button onClick={() => handleDelete(m.name)}
+            style={{
+              padding: "4px 10px", fontSize: 10, fontWeight: 500, borderRadius: 6, cursor: "pointer",
+              background: "rgba(255,55,95,0.08)", color: "var(--c-error)",
+              border: "1px solid rgba(255,55,95,0.15)",
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,55,95,0.15)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,55,95,0.08)"; }}
+          >
+            {"\u2715"} Remove
           </button>
         </div>
       ))}
 
       {/* Pull progress */}
       {pulling && (
-        <div className={styles.formCard}>
+        <div className={styles.formCard} style={{ borderLeft: "3px solid var(--m-accent)" }}>
           <div style={{ fontSize: 11, color: "var(--m-accent)", fontWeight: 600 }}>
-            Pulling: {pulling}
+            {"\u2B07"} Pulling: {pulling}
           </div>
-          <div style={{ fontSize: 10, color: "var(--m-text2)" }}>{pullProgress}</div>
+          <div style={{ fontSize: 10, color: "var(--m-text2)", marginTop: 2 }}>{pullProgress}</div>
+          <div style={{ height: 3, borderRadius: 2, background: "var(--m-border)", marginTop: 4, overflow: "hidden" }}>
+            <div style={{
+              height: "100%", borderRadius: 2, background: "var(--m-accent)",
+              width: pullProgress.includes("%") ? pullProgress.match(/(\d+)%/)?.[1] + "%" : "30%",
+              transition: "width 0.3s ease",
+            }} />
+          </div>
         </div>
       )}
 
       {/* Marketplace toggle */}
-      <div style={{ padding: "8px 16px" }}>
-        <button className={styles.schedBtn}
-          onClick={() => setShowMarketplace(!showMarketplace)}
-          style={{ width: "100%" }}>
-          {showMarketplace ? "Hide Model Library" : "Browse Model Library"}
+      <div style={{ padding: "10px 16px" }}>
+        <button onClick={() => setShowMarketplace(!showMarketplace)}
+          style={{
+            width: "100%", padding: "8px 0", fontSize: 12, fontWeight: 600, borderRadius: 8, cursor: "pointer",
+            background: showMarketplace ? "var(--glass-tint)" : "var(--m-accent)",
+            color: showMarketplace ? "var(--m-text)" : "#fff",
+            border: showMarketplace ? "1px solid var(--m-border)" : "none",
+            transition: "all 0.2s ease",
+          }}
+        >
+          {showMarketplace ? "\u2715 Hide Library" : "\u{1F4E6} Browse Model Library"}
         </button>
       </div>
 

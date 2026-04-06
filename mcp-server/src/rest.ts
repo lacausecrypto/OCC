@@ -1436,11 +1436,20 @@ app.post("/ollama/pull", async (req, res) => {
       body: JSON.stringify({ model, stream: true }),
     });
     if (!resp.ok) return res.status(502).json({ error: `Ollama ${resp.status}` });
-    // Stream NDJSON progress to client
+    // Stream NDJSON progress to client via ReadableStream (Web API)
     res.setHeader("Content-Type", "application/x-ndjson");
     res.setHeader("Cache-Control", "no-cache");
-    const reader = resp.body as unknown as NodeJS.ReadableStream;
-    reader.pipe(res);
+    if (!resp.body) return res.status(502).json({ error: "No response body" });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    const pump = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) { res.end(); return; }
+        res.write(decoder.decode(value, { stream: true }));
+      }
+    };
+    pump().catch(() => res.end());
   } catch (err) {
     res.status(502).json({ error: safeErrorMessage(err) });
   }
