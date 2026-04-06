@@ -17,21 +17,6 @@ Multi-model workflow engine built on Claude. Define chains in YAML, run them wit
 
 https://github.com/user-attachments/assets/ef4102ec-5ecf-475f-9a1d-93a2e7d52ad4
 
-```
-$ occ run deep-researcher --input topic="quantum computing"
-[START] Chain: deep-researcher
-  [STEP] Mainstream research ...
-  [STEP] Contrarian research ...
-  [STEP] Academic research ...
-  [DONE] search_mainstream (12.3s, 450+1800 tokens)
-  [DONE] search_contrarian (14.1s)
-  [DONE] search_academic (11.8s)
-  [DONE] evaluate_sources (5.2s)
-  [DONE] merge_perspectives (8.7s)
-  [DONE] synthesize (15.4s)
-Done in 47s — 6 steps, 3 parallel
-```
-
 ---
 
 ## Table of Contents
