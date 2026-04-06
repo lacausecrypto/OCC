@@ -284,6 +284,10 @@ export async function executeSinglePreTool(
       const filePath = path.resolve(resolveVariables(tool.path ?? "", vars));
       // Path traversal protection: restrict to WORKSPACE_DIR or cwd
       const safeRoot = path.resolve(process.env.WORKSPACE_DIR ?? process.cwd());
+      // Check normalized path first (before realpathSync which throws ENOENT for missing files)
+      if (!filePath.startsWith(safeRoot) && !filePath.startsWith(path.resolve(os.tmpdir()))) {
+        throw new Error(`read_file: path "${filePath}" outside allowed directory "${safeRoot}"`);
+      }
       // Resolve symlinks to prevent traversal via symlink chains
       const realFilePath = fs.realpathSync(filePath);
       const realSafeRoot = fs.realpathSync(safeRoot);

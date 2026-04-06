@@ -492,12 +492,13 @@ describe("read_file — path traversal protection", () => {
   });
 
   it("rejects paths outside WORKSPACE_DIR", async () => {
+    // Use path traversal relative to workspace — works on all platforms
     const tool: PreTool = {
       type: "read_file",
-      path: "/etc/passwd",
+      path: path.join(tmpDir, "..", "..", "..", "etc", "passwd"),
       inject_as: "result",
     };
-    await expect(executeSinglePreTool(tool, {}, logSpy)).rejects.toThrow("outside allowed directory");
+    await expect(executeSinglePreTool(tool, {}, logSpy)).rejects.toThrow(/outside allowed directory/);
   });
 
   it("truncates large files to 50KB", async () => {

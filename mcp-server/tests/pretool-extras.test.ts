@@ -874,9 +874,22 @@ describe("notify", () => {
 // ─── sandboxExec error path ──────────────────────────────────────────────────
 
 describe("sandboxExec", () => {
-  it("throws when docker is not available", () => {
+  // Docker is available on CI runners (Ubuntu) — only test error path when absent
+  const hasDocker = (() => {
+    try {
+      require("node:child_process").execSync("docker info", { stdio: "ignore", timeout: 5000 });
+      return true;
+    } catch { return false; }
+  })();
+
+  it.skipIf(hasDocker)("throws when docker is not available", () => {
     expect(() => sandboxExec("alpine", "echo hello", undefined, 5000))
       .toThrow("sandbox_exec failed");
+  });
+
+  it.skipIf(!hasDocker)("runs a container when docker is available", () => {
+    const result = sandboxExec("alpine", "echo hello", undefined, 15000);
+    expect(result).toContain("hello");
   });
 });
 
