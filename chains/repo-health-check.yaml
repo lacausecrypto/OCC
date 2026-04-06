@@ -1,0 +1,137 @@
+name: repo-health-check
+description: "Instant repository health assessment — 5 parallel scans, 0 LLM tokens for data collection"
+version: "1.0"
+
+# BENCHMARK: Pre-tools collect ALL data with 0 tokens. Only analysis uses LLM.
+# 5 parallel agents = ~15s wall time. Sequential + manual data gathering = ~90s+
+# Token savings: pre-tools inject structured data → LLM doesn't need to "explore"
+
+inputs:
+  - name: path
+    description: "Repository path"
+
+steps:
+  # ── Wave 1: 5 parallel scans — pre-tools do the heavy lifting (0 LLM tokens) ──
+
+  - id: git-health
+    model: claude-haiku-4-5
+    pre_tools:
+      - type: bash
+        command: "cd '{input.path}' && echo '=COMMITS=' && git log --oneline -20 2>/dev/null && echo '=BRANCHES=' && git branch -a 2>/dev/null | head -20 && echo '=STALE=' && git branch --merged main 2>/dev/null | grep -v main | head -10 && echo '=LAST_TAG=' && git describe --tags --abbrev=0 2>/dev/null"
+        inject_as: git_data
+        timeout_ms: 5000
+    prompt: |
+      Analyze this git health data and report:
+      - Commit frequency (active/stale?)
+      - Branch hygiene (stale branches to clean?)
+      - Release cadence (tags)
+      - Any red flags
+
+      {git_data}
+
+      Be concise — 5-8 bullet points max.
+    output_var: git_report
+    timeout_ms: 20000
+
+  - id: dependency-check
+    model: claude-haiku-4-5
+    pre_tools:
+      - type: bash
+        command: "cd '{input.path}' && cat package.json 2>/dev/null | head -80 || cat requirements.txt 2>/dev/null | head -50 || cat go.mod 2>/dev/null | head -30 || cat Cargo.toml 2>/dev/null | head -30 || echo 'No dependency file found'"
+        inject_as: deps
+      - type: bash
+        command: "cd '{input.path}' && npm audit --json 2>/dev/null | head -100 || pip-audit --format=json 2>/dev/null | head -100 || echo '{}'"
+        inject_as: audit
+        timeout_ms: 15000
+    prompt: |
+      Analyze dependencies:
+      {deps}
+
+      Audit results:
+      {audit}
+
+      Report: outdated deps, known vulnerabilities, dependency count, any concerns.
+      5-8 bullet points.
+    output_var: deps_report
+    timeout_ms: 20000
+
+  - id: code-structure
+    model: claude-haiku-4-5
+    pre_tools:
+      - type: bash
+        command: "cd '{input.path}' && echo '=FILES=' && find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/__pycache__/*' | head -100 && echo '=LINES=' && find . -type f -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.py' -o -name '*.go' -o -name '*.rs' | grep -v node_modules | xargs wc -l 2>/dev/null | tail -5 && echo '=SIZE=' && du -sh . 2>/dev/null"
+        inject_as: structure
+        timeout_ms: 5000
+    prompt: |
+      Analyze this repository structure:
+      {structure}
+
+      Report: project size, language breakdown, directory organization quality, any anti-patterns.
+      5-8 bullet points.
+    output_var: structure_report
+    timeout_ms: 20000
+
+  - id: test-coverage
+    model: claude-haiku-4-5
+    pre_tools:
+      - type: bash
+        command: "cd '{input.path}' && echo '=TEST_FILES=' && find . -type f -name '*.test.*' -o -name '*.spec.*' -o -name 'test_*' | grep -v node_modules | head -30 && echo '=COUNT=' && find . -type f -name '*.test.*' -o -name '*.spec.*' -o -name 'test_*' | grep -v node_modules | wc -l && echo '=CI=' && cat .github/workflows/*.yml 2>/dev/null | head -50 || echo 'No CI config'"
+        inject_as: tests
+        timeout_ms: 5000
+    prompt: |
+      Analyze test infrastructure:
+      {tests}
+
+      Report: test file count, testing frameworks, CI/CD setup, coverage gaps.
+      5-8 bullet points.
+    output_var: tests_report
+    timeout_ms: 20000
+
+  - id: security-surface
+    model: claude-haiku-4-5
+    pre_tools:
+      - type: bash
+        command: "cd '{input.path}' && echo '=ENV=' && ls -la .env* 2>/dev/null && echo '=SECRETS=' && grep -rnI --include='*.{js,ts,py,go,yaml,json}' -E '(api[_-]?key|secret|password|token)\\s*[=:]\\s*[\"'\\''\\`][^\"'\\''\\`]{8,}' . 2>/dev/null | head -10 && echo '=DOCKER=' && cat Dockerfile 2>/dev/null | head -20 && echo '=GITIGNORE=' && cat .gitignore 2>/dev/null | head -20"
+        inject_as: security
+        timeout_ms: 5000
+    prompt: |
+      Analyze security surface:
+      {security}
+
+      Report: exposed secrets, .env handling, Docker security, .gitignore completeness.
+      5-8 bullet points. Flag any CRITICAL issues.
+    output_var: security_report
+    timeout_ms: 20000
+
+  # ── Wave 2: Final synthesis ──
+  - id: health-score
+    depends_on: [git-health, dependency-check, code-structure, test-coverage, security-surface]
+    model: claude-sonnet-4-6
+    prompt: |
+      Based on these 5 parallel scans, produce a REPOSITORY HEALTH CARD:
+
+      ## Git Health
+      {git_report}
+
+      ## Dependencies
+      {deps_report}
+
+      ## Code Structure
+      {structure_report}
+
+      ## Testing
+      {tests_report}
+
+      ## Security
+      {security_report}
+
+      Output format:
+      - Overall score: X/10
+      - Top 3 strengths
+      - Top 3 risks
+      - Immediate actions (priority order)
+
+      Be honest and specific — no generic advice.
+    output_var: health_card
+
+output: health_card

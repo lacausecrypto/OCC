@@ -103,75 +103,138 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   );
 }
 
-// ─── Token Chart Component ──────────────────────────────────────────────────
+// ─── Token Usage Dashboard ──────────────────────────────────────────────────
 
-interface DayTokens { date: string; input: number; output: number }
+interface SourceTokens { input: number; output: number; count: number }
+interface DayDetailed {
+  date: string;
+  chains: SourceTokens;
+  pipelines: SourceTokens;
+  blob: SourceTokens;
+}
+interface TokenUsageDetailed {
+  days: number;
+  totals: { input: number; output: number; executions: number };
+  daily: DayDetailed[];
+  topChains: Array<{ name: string; input: number; output: number; count: number; total: number }>;
+}
 
-function TokenChart({ data, label }: { data: DayTokens[]; label: string }) {
-  if (data.length === 0) return <div className={styles.chartEmpty}>No execution data yet</div>;
+const SOURCE_COLORS = {
+  chains: "var(--m-accent)",
+  pipelines: "var(--c-purple, #bf5af2)",
+  blob: "var(--icon-green, #30d158)",
+};
+const SOURCE_LABELS = { chains: "Chains", pipelines: "Pipelines", blob: "The Blob" };
 
-  // Pad to at least 7 days so bars have proper width
-  const padded = [...data];
-  if (padded.length < 7 && padded.length > 0) {
-    const lastDate = new Date(padded[padded.length - 1].date);
-    while (padded.length < 7) {
-      lastDate.setDate(lastDate.getDate() + 1);
-      padded.push({ date: lastDate.toISOString().slice(0, 10), input: 0, output: 0 });
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode: "daily" | "weekly" }) {
+  if (!data || data.daily.length === 0) return <div className={styles.chartEmpty}>No execution data yet</div>;
+
+  // Aggregate daily → weekly if needed
+  const chartData = useMemo(() => {
+    if (mode === "daily") return data.daily.slice(-14);
+    const weekMap = new Map<string, DayDetailed>();
+    for (const d of data.daily) {
+      const dt = new Date(d.date);
+      const weekStart = new Date(dt);
+      weekStart.setDate(dt.getDate() - dt.getDay());
+      const key = weekStart.toISOString().slice(0, 10);
+      const existing = weekMap.get(key) ?? { date: key, chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 } };
+      for (const src of ["chains", "pipelines", "blob"] as const) {
+        existing[src].input += d[src].input;
+        existing[src].output += d[src].output;
+        existing[src].count += d[src].count;
+      }
+      weekMap.set(key, existing);
     }
+    return [...weekMap.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(-8);
+  }, [data.daily, mode]);
+
+  // Pad to at least 7 entries
+  const padded = [...chartData];
+  while (padded.length < 7 && padded.length > 0) {
+    const lastDate = new Date(padded[padded.length - 1].date);
+    lastDate.setDate(lastDate.getDate() + (mode === "weekly" ? 7 : 1));
+    padded.push({ date: lastDate.toISOString().slice(0, 10), chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 } });
   }
 
-  const maxTokens = Math.max(...padded.map((d) => d.input + d.output), 1);
-  const totalInput = data.reduce((s, d) => s + d.input, 0);
-  const totalOutput = data.reduce((s, d) => s + d.output, 0);
-  const total = totalInput + totalOutput;
-
-  // Y-axis scale labels
+  const maxTokens = Math.max(...padded.map((d) => {
+    let total = 0;
+    for (const src of ["chains", "pipelines", "blob"] as const) total += d[src].input + d[src].output;
+    return total;
+  }), 1);
   const yLabels = [maxTokens, Math.round(maxTokens * 0.5), 0];
-  const formatK = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
+
+  // Source totals for legend
+  const sourceTotals = { chains: 0, pipelines: 0, blob: 0 };
+  for (const d of data.daily) {
+    for (const src of ["chains", "pipelines", "blob"] as const) {
+      sourceTotals[src] += d[src].input + d[src].output;
+    }
+  }
+  const activeSources = (["chains", "pipelines", "blob"] as const).filter((s) => sourceTotals[s] > 0);
 
   return (
     <div className={styles.chartWrap}>
-      {/* Header */}
-      <div className={styles.chartHeader}>
-        <span className={styles.chartLabel}>{label}</span>
-        <div className={styles.chartSummary}>
-          <span className={styles.chartSummaryItem}>
-            <span className={styles.legendDot} style={{ background: "var(--m-accent)" }} />
-            {formatK(totalInput)} in
-          </span>
-          <span className={styles.chartSummaryItem}>
-            <span className={styles.legendDot} style={{ background: "var(--c-purple)" }} />
-            {formatK(totalOutput)} out
-          </span>
-          <span className={styles.chartSummaryTotal}>{formatK(total)}</span>
+      {/* ── Summary cards ── */}
+      <div className={styles.tokenSummaryRow}>
+        <div className={styles.tokenSummaryCard}>
+          <div className={styles.tokenSummaryValue}>{formatTokens(data.totals.input + data.totals.output)}</div>
+          <div className={styles.tokenSummaryLabel}>Total tokens</div>
+        </div>
+        <div className={styles.tokenSummaryCard}>
+          <div className={styles.tokenSummaryValue}>{formatTokens(data.totals.input)}</div>
+          <div className={styles.tokenSummaryLabel}>Input</div>
+        </div>
+        <div className={styles.tokenSummaryCard}>
+          <div className={styles.tokenSummaryValue}>{formatTokens(data.totals.output)}</div>
+          <div className={styles.tokenSummaryLabel}>Output</div>
+        </div>
+        <div className={styles.tokenSummaryCard}>
+          <div className={styles.tokenSummaryValue}>{data.totals.executions}</div>
+          <div className={styles.tokenSummaryLabel}>Executions</div>
         </div>
       </div>
 
-      {/* Chart area */}
-      <div className={styles.chartArea}>
-        {/* Y-axis */}
-        <div className={styles.chartYAxis}>
-          {yLabels.map((v) => <span key={v} className={styles.chartYLabel}>{formatK(v)}</span>)}
+      {/* ── Source breakdown legend ── */}
+      <div className={styles.chartHeader}>
+        <span className={styles.chartLabel}>{mode === "daily" ? "Last 14 Days" : "Last 8 Weeks"}</span>
+        <div className={styles.chartSummary}>
+          {activeSources.map((src) => (
+            <span key={src} className={styles.chartSummaryItem}>
+              <span className={styles.legendDot} style={{ background: SOURCE_COLORS[src] }} />
+              {SOURCE_LABELS[src]} {formatTokens(sourceTotals[src])}
+            </span>
+          ))}
         </div>
+      </div>
 
-        {/* Grid + Bars */}
+      {/* ── Stacked bar chart ── */}
+      <div className={styles.chartArea}>
+        <div className={styles.chartYAxis}>
+          {yLabels.map((v) => <span key={v} className={styles.chartYLabel}>{formatTokens(v)}</span>)}
+        </div>
         <div className={styles.chartGrid}>
-          {/* Horizontal grid lines */}
           <div className={styles.chartGridLine} style={{ top: "0%" }} />
           <div className={styles.chartGridLine} style={{ top: "50%" }} />
           <div className={styles.chartGridLine} style={{ top: "100%" }} />
-
-          {/* Bars */}
           <div className={styles.chartBars}>
             {padded.map((d) => {
-              const inputH = (d.input / maxTokens) * 100;
-              const outputH = (d.output / maxTokens) * 100;
-              const dayTotal = d.input + d.output;
+              const chainH = ((d.chains.input + d.chains.output) / maxTokens) * 100;
+              const pipeH = ((d.pipelines.input + d.pipelines.output) / maxTokens) * 100;
+              const blobH = ((d.blob.input + d.blob.output) / maxTokens) * 100;
+              const dayTotal = d.chains.input + d.chains.output + d.pipelines.input + d.pipelines.output + d.blob.input + d.blob.output;
               return (
-                <div key={d.date} className={styles.chartBar} title={dayTotal > 0 ? `${d.date}\nInput: ${d.input.toLocaleString()}\nOutput: ${d.output.toLocaleString()}\nTotal: ${dayTotal.toLocaleString()}` : d.date}>
+                <div key={d.date} className={styles.chartBar} title={dayTotal > 0 ? `${d.date}\nChains: ${(d.chains.input + d.chains.output).toLocaleString()}\nPipelines: ${(d.pipelines.input + d.pipelines.output).toLocaleString()}\nBlob: ${(d.blob.input + d.blob.output).toLocaleString()}\nTotal: ${dayTotal.toLocaleString()}` : d.date}>
                   <div className={styles.chartBarStack}>
-                    {outputH > 0 && <div className={styles.chartBarOutput} style={{ height: `${outputH}%` }} />}
-                    {inputH > 0 && <div className={styles.chartBarInput} style={{ height: `${inputH}%` }} />}
+                    {blobH > 0 && <div className={styles.chartBarSegment} style={{ height: `${blobH}%`, background: SOURCE_COLORS.blob }} />}
+                    {pipeH > 0 && <div className={styles.chartBarSegment} style={{ height: `${pipeH}%`, background: SOURCE_COLORS.pipelines }} />}
+                    {chainH > 0 && <div className={styles.chartBarSegment} style={{ height: `${chainH}%`, background: SOURCE_COLORS.chains }} />}
                   </div>
                 </div>
               );
@@ -179,13 +242,43 @@ function TokenChart({ data, label }: { data: DayTokens[]; label: string }) {
           </div>
         </div>
       </div>
-
-      {/* X-axis labels */}
       <div className={styles.chartXAxis}>
         {padded.map((d) => (
           <span key={d.date} className={styles.chartXLabel}>{d.date.slice(5)}</span>
         ))}
       </div>
+
+      {/* ── Top chains table ── */}
+      {data.topChains.length > 0 && (
+        <div className={styles.tokenTable}>
+          <div className={styles.tokenTableHeader}>
+            <span>Chain / Source</span>
+            <span style={{ textAlign: "right" }}>Runs</span>
+            <span style={{ textAlign: "right" }}>Input</span>
+            <span style={{ textAlign: "right" }}>Output</span>
+            <span style={{ textAlign: "right" }}>Total</span>
+          </div>
+          {data.topChains.map((c) => {
+            const pct = data.totals.input + data.totals.output > 0 ? ((c.total / (data.totals.input + data.totals.output)) * 100) : 0;
+            const isBlob = c.name.startsWith("blob_");
+            return (
+              <div key={c.name} className={styles.tokenTableRow}>
+                <span className={styles.tokenTableName}>
+                  <span className={styles.legendDot} style={{ background: isBlob ? SOURCE_COLORS.blob : SOURCE_COLORS.chains }} />
+                  {isBlob ? "Blob session" : c.name}
+                </span>
+                <span className={styles.tokenTableNum}>{c.count}</span>
+                <span className={styles.tokenTableNum}>{formatTokens(c.input)}</span>
+                <span className={styles.tokenTableNum}>{formatTokens(c.output)}</span>
+                <span className={styles.tokenTableNum}>
+                  {formatTokens(c.total)}
+                  <span className={styles.tokenTablePct}>{pct.toFixed(0)}%</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -280,66 +373,14 @@ export function Settings() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // ─── Token chart data — single aggregated endpoint ──────────────
-  const [dailyTokens, setDailyTokens] = useState<DayTokens[]>([]);
+  // ─── Token usage data — detailed breakdown ──────────────
+  const [tokenData, setTokenData] = useState<TokenUsageDetailed | null>(null);
 
   useEffect(() => {
-    const fetchTokens = async () => {
-      // 1. Chain execution tokens (server-side aggregation — no N+1)
-      const chainTokens = await fetchJson<DayTokens[]>("/executions/token-usage?days=30");
-      const dayMap = new Map<string, { input: number; output: number }>();
-      if (Array.isArray(chainTokens)) {
-        for (const d of chainTokens) {
-          dayMap.set(d.date, { input: d.input, output: d.output });
-        }
-      }
-
-      // 2. BLOB session tokens
-      try {
-        const blobs = await fetchJson<Array<{ id: string }>>("/blobs");
-        if (Array.isArray(blobs)) {
-          for (const blob of blobs.slice(0, 10)) {
-            const graph = await fetchJson<{ nodes?: Array<{ type: string; data: { kind: string; inputTokens?: number; outputTokens?: number }; createdAt?: string }> }>(`/blobs/${blob.id}/graph`);
-            if (graph?.nodes) {
-              for (const node of graph.nodes) {
-                if (node.type === "step" && node.data.inputTokens) {
-                  const date = (node.createdAt ?? new Date().toISOString()).slice(0, 10);
-                  const entry = dayMap.get(date) ?? { input: 0, output: 0 };
-                  entry.input += node.data.inputTokens ?? 0;
-                  entry.output += node.data.outputTokens ?? 0;
-                  dayMap.set(date, entry);
-                }
-              }
-            }
-          }
-        }
-      } catch { /* blob endpoints may not exist */ }
-
-      const sorted = [...dayMap.entries()]
-        .map(([date, t]) => ({ date, ...t }))
-        .sort((a, b) => a.date.localeCompare(b.date));
-
-      setDailyTokens(sorted);
-    };
-    fetchTokens();
+    fetchJson<TokenUsageDetailed>("/executions/token-usage-detailed?days=30").then((d) => {
+      if (d && d.daily) setTokenData(d);
+    });
   }, [executions]);
-
-  const weeklyTokens = useMemo(() => {
-    const weekMap = new Map<string, { input: number; output: number }>();
-    for (const d of dailyTokens) {
-      const dt = new Date(d.date);
-      const weekStart = new Date(dt);
-      weekStart.setDate(dt.getDate() - dt.getDay());
-      const key = weekStart.toISOString().slice(0, 10);
-      const entry = weekMap.get(key) ?? { input: 0, output: 0 };
-      entry.input += d.input;
-      entry.output += d.output;
-      weekMap.set(key, entry);
-    }
-    return [...weekMap.entries()]
-      .map(([date, t]) => ({ date, ...t }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [dailyTokens]);
 
   // ─── Handlers ─────────────────────────────────────────────────
 
@@ -717,10 +758,7 @@ export function Settings() {
           </div>
           <div className={styles.sectionCard}>
             <div style={{ padding: 16 }}>
-              <TokenChart
-                data={chartMode === "daily" ? dailyTokens.slice(-14) : weeklyTokens.slice(-8)}
-                label={chartMode === "daily" ? "Last 14 Days" : "Last 8 Weeks"}
-              />
+              <TokenDashboard data={tokenData} mode={chartMode} />
             </div>
           </div>
         </div>

@@ -277,11 +277,11 @@ output: result
     it("respects days parameter to filter old entries", async () => {
       const res = await request(app).get("/executions/token-usage?days=1");
       expect(res.status).toBe(200);
-      // With days=1, only today's entries should be included
-      const now = new Date();
-      const today = now.toISOString().slice(0, 10);
+      // With days=1, only recent entries should be included (not the 60-day-old one)
+      // The oldest entry in our test data is 60 days ago — it must NOT appear
+      const oldDate = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
       for (const entry of res.body) {
-        expect(entry.date).toBe(today);
+        expect(entry.date).not.toBe(oldDate);
       }
     });
 

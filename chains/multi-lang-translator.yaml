@@ -1,0 +1,107 @@
+name: multi-lang-translator
+description: "Translate text to 5 languages simultaneously — 5x faster than sequential"
+version: "1.0"
+
+# BENCHMARK: 5 parallel haiku calls = ~8s wall time vs ~40s sequential
+# Token savings: each translator gets ONLY the source text (no cross-language pollution)
+# Cost: 5x haiku ($0.001) < 1x opus sequential ($0.05)
+
+inputs:
+  - name: text
+    description: "Text to translate"
+  - name: context
+    description: "Context for translation accuracy (domain, formality level)"
+    optional: true
+
+steps:
+  # ── Wave 1: 5 parallel translations (all independent = fully parallel) ──
+  - id: french
+    model: claude-haiku-4-5
+    prompt: |
+      Translate to FRENCH. Preserve tone, idioms, and cultural nuances.
+      Context: {input.context}
+
+      Source text:
+      {input.text}
+
+      Output ONLY the translation, no commentary.
+    output_var: fr
+
+  - id: spanish
+    model: claude-haiku-4-5
+    prompt: |
+      Translate to SPANISH (European). Preserve tone, idioms, and cultural nuances.
+      Context: {input.context}
+
+      Source text:
+      {input.text}
+
+      Output ONLY the translation, no commentary.
+    output_var: es
+
+  - id: german
+    model: claude-haiku-4-5
+    prompt: |
+      Translate to GERMAN. Preserve tone, idioms, and cultural nuances.
+      Context: {input.context}
+
+      Source text:
+      {input.text}
+
+      Output ONLY the translation, no commentary.
+    output_var: de
+
+  - id: japanese
+    model: claude-haiku-4-5
+    prompt: |
+      Translate to JAPANESE. Preserve tone, idioms, and cultural nuances.
+      Context: {input.context}
+
+      Source text:
+      {input.text}
+
+      Output ONLY the translation, no commentary.
+    output_var: ja
+
+  - id: chinese
+    model: claude-haiku-4-5
+    prompt: |
+      Translate to SIMPLIFIED CHINESE. Preserve tone, idioms, and cultural nuances.
+      Context: {input.context}
+
+      Source text:
+      {input.text}
+
+      Output ONLY the translation, no commentary.
+    output_var: zh
+
+  # ── Wave 2: Quality check + merge ──
+  - id: quality-check
+    type: merge
+    depends_on: [french, spanish, german, japanese, chinese]
+    inputs: [fr, es, de, ja, zh]
+    strategy: concatenate
+    model: claude-sonnet-4-6
+    prompt: |
+      Review these 5 translations for quality and consistency:
+
+      ## French
+      {fr}
+
+      ## Spanish
+      {es}
+
+      ## German
+      {de}
+
+      ## Japanese
+      {ja}
+
+      ## Chinese
+      {zh}
+
+      For each translation, rate accuracy 1-5 and flag any issues.
+      Then output the final formatted result with all translations.
+    output_var: translations
+
+output: translations

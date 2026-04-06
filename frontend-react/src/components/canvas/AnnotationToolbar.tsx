@@ -25,9 +25,19 @@ function ChatButton({ active, onClick }: { active?: boolean; onClick: () => void
       className={`${styles.annBtn} ${active ? styles.annBtnActive : ""}`}
       onClick={onClick}
       title="Workflow Chat"
-      style={{ fontSize: 13, fontFamily: streaming ? "monospace" : "inherit", minWidth: 28, textAlign: "center" }}
+      style={{
+        fontSize: 18,
+        lineHeight: 1,
+        padding: "6px 10px",
+        minWidth: 36,
+        textAlign: "center",
+        fontFamily: streaming ? "monospace" : "inherit",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
     >
-      {streaming ? <ChatSpinner /> : "\u2728"}
+      {streaming ? <ChatSpinner /> : "\u{1F4AC}"}
     </button>
   );
 }
@@ -97,7 +107,10 @@ export function AnnotationToolbar({ onBlueprintToggle, blueprintActive, blueprin
 
       {/* Workflow Chat toggle */}
       {onChatToggle && (
-        <ChatButton active={chatActive} onClick={onChatToggle} />
+        <>
+          <span className={styles.sep} />
+          <ChatButton active={chatActive} onClick={onChatToggle} />
+        </>
       )}
 
       <span className={styles.sep} />

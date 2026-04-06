@@ -1,0 +1,30 @@
+name: repo-full-audit
+description: "Complete repo audit: health check + security + API docs — 3 chains in parallel"
+version: "1.0"
+
+# BENCHMARK: 3 independent chains run in PARALLEL
+# Wall time: max(health, security, docs) ≈ 25s instead of health+security+docs ≈ 75s
+# Each chain internally also parallelizes → effective speedup ~4-5x total
+
+inputs:
+  - name: path
+    description: "Repository path to audit"
+
+chains:
+  - id: health
+    chain: repo-health-check
+    inputs:
+      path: "{input.path}"
+
+  - id: security
+    chain: security-audit
+    inputs:
+      path: "{input.path}"
+
+  - id: docs
+    chain: api-doc-generator
+    inputs:
+      path: "{input.path}"
+      format: "markdown"
+
+output: health

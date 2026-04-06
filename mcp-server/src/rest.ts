@@ -9,6 +9,7 @@ import * as path from "node:path";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import { logger } from "./logger.js";
+import { listBlobSessions as _listBlobSessions, loadBlobGraph as _loadBlobGraph } from "./blob.js";
 import type { Request, Response } from "express";
 import type { ExecutionEvent } from "./types.js";
 import {
@@ -413,6 +414,116 @@ app.get("/executions/token-usage", (req, res) => {
     .sort((a, b) => a.date.localeCompare(b.date));
 
   res.json(result);
+});
+
+// GET /executions/token-usage-detailed → per-source and per-chain breakdown
+app.get("/executions/token-usage-detailed", async (req, res) => {
+  const days = Math.min(parseInt(req.query.days as string) || 30, 90);
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = cutoff.toISOString();
+
+  const all = getAllExecutions();
+
+  // Per-day, per-source breakdown
+  const dayMap = new Map<string, {
+    chains: { input: number; output: number; count: number };
+    pipelines: { input: number; output: number; count: number };
+    blob: { input: number; output: number; count: number };
+  }>();
+  // Per-chain totals
+  const chainTotals = new Map<string, { input: number; output: number; count: number }>();
+  // Aggregate totals
+  let totalInput = 0, totalOutput = 0, totalExecs = 0;
+
+  for (const exec of all) {
+    if (!exec.startedAt || exec.startedAt < cutoffStr) continue;
+    const date = exec.startedAt.slice(0, 10);
+    const entry = dayMap.get(date) ?? {
+      chains: { input: 0, output: 0, count: 0 },
+      pipelines: { input: 0, output: 0, count: 0 },
+      blob: { input: 0, output: 0, count: 0 },
+    };
+
+    let stepInput = 0, stepOutput = 0;
+    for (const step of Object.values(exec.steps)) {
+      stepInput += step.inputTokens ?? 0;
+      stepOutput += step.outputTokens ?? 0;
+    }
+    totalInput += stepInput;
+    totalOutput += stepOutput;
+    totalExecs++;
+
+    // Classify source
+    const isBlob = exec.id.startsWith("blob_") || exec.chainName.startsWith("blob_");
+    const isPipeline = exec.chainName.includes("|") || exec.id.includes("pipeline_");
+    if (isBlob) {
+      entry.blob.input += stepInput;
+      entry.blob.output += stepOutput;
+      entry.blob.count++;
+    } else if (isPipeline) {
+      entry.pipelines.input += stepInput;
+      entry.pipelines.output += stepOutput;
+      entry.pipelines.count++;
+    } else {
+      entry.chains.input += stepInput;
+      entry.chains.output += stepOutput;
+      entry.chains.count++;
+    }
+    dayMap.set(date, entry);
+
+    // Per-chain
+    const ct = chainTotals.get(exec.chainName) ?? { input: 0, output: 0, count: 0 };
+    ct.input += stepInput;
+    ct.output += stepOutput;
+    ct.count++;
+    chainTotals.set(exec.chainName, ct);
+  }
+
+  // Add BLOB session tokens from blob storage
+  try {
+    const blobList = _listBlobSessions();
+    for (const session of blobList) {
+      const graph = _loadBlobGraph(session.id) as { nodes?: Array<{ data?: { inputTokens?: number; outputTokens?: number }; createdAt?: string }> };
+      if (graph?.nodes) {
+        for (const node of graph.nodes) {
+          if (node.data?.inputTokens || node.data?.outputTokens) {
+            const date = (node.createdAt ?? new Date().toISOString()).slice(0, 10);
+            if (date < cutoffStr.slice(0, 10)) continue;
+            const entry = dayMap.get(date) ?? {
+              chains: { input: 0, output: 0, count: 0 },
+              pipelines: { input: 0, output: 0, count: 0 },
+              blob: { input: 0, output: 0, count: 0 },
+            };
+            const inp = node.data.inputTokens ?? 0;
+            const out = node.data.outputTokens ?? 0;
+            entry.blob.input += inp;
+            entry.blob.output += out;
+            totalInput += inp;
+            totalOutput += out;
+            dayMap.set(date, entry);
+          }
+        }
+      }
+    }
+  } catch { /* blob storage may not exist */ }
+
+  // Top chains by tokens
+  const topChains = [...chainTotals.entries()]
+    .map(([name, t]) => ({ name, ...t, total: t.input + t.output }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10);
+
+  const daily = [...dayMap.entries()]
+    .map(([date, d]) => ({ date, ...d }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  res.json({
+    days,
+    totals: { input: totalInput, output: totalOutput, executions: totalExecs },
+    daily,
+    topChains,
+  });
 });
 
 // GET /executions/:id/stream → SSE live stream
