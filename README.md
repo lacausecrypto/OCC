@@ -32,9 +32,9 @@ Done in 47s — 6 steps, 3 parallel
 
 ## What is OCC?
 
-OCC is a **Claude-focused** workflow engine. It takes a YAML file describing a multi-step task, figures out which steps can run in parallel based on dependencies, runs LLM calls (via `claude --print` or HTTP providers), and streams results back via SSE.
+OCC is a **multi-model workflow engine built on Claude**. It takes a YAML file describing a multi-step task, figures out which steps can run in parallel based on dependencies, runs LLM calls, and streams results back via SSE.
 
-It also supports **non-Claude providers** (OpenRouter, OpenAI, Groq, Mistral, Together AI, any OpenAI-compatible API) via the built-in provider system, making it usable with 200+ models while keeping Claude as the primary engine.
+**Models:** Claude (via CLI) is the default engine with full MCP tool access. Any OpenAI-compatible provider (OpenRouter, OpenAI, Groq, Mistral, Together AI) also works via HTTP — you can mix models per step (e.g. Haiku for fast tasks, GPT-4o for specific steps, Opus for deep reasoning). 200+ models available through OpenRouter alone.
 
 **What it does:**
 - Declarative YAML chains — no Python, no code to write
