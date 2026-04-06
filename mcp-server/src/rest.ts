@@ -1409,6 +1409,70 @@ app.post("/providers/:id/test", async (req, res) => {
   res.json(result);
 });
 
+// ─── Ollama proxy routes ──────────────────────────────────────────────────────
+
+const OLLAMA_DEFAULT = process.env.OLLAMA_HOST ?? "http://localhost:11434";
+
+// GET /ollama/models → list installed models
+app.get("/ollama/models", async (_req, res) => {
+  try {
+    const resp = await fetch(`${OLLAMA_DEFAULT}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return res.status(502).json({ error: `Ollama ${resp.status}` });
+    const data = await resp.json() as { models?: unknown[] };
+    res.json(data.models ?? []);
+  } catch (err) {
+    res.status(502).json({ error: `Cannot connect to Ollama at ${OLLAMA_DEFAULT}: ${(err as Error).message}` });
+  }
+});
+
+// POST /ollama/pull → download a model (streaming progress)
+app.post("/ollama/pull", async (req, res) => {
+  const { model } = req.body as { model: string };
+  if (!model) return res.status(400).json({ error: "model required" });
+  try {
+    const resp = await fetch(`${OLLAMA_DEFAULT}/api/pull`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, stream: true }),
+    });
+    if (!resp.ok) return res.status(502).json({ error: `Ollama ${resp.status}` });
+    // Stream NDJSON progress to client
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Cache-Control", "no-cache");
+    const reader = resp.body as unknown as NodeJS.ReadableStream;
+    reader.pipe(res);
+  } catch (err) {
+    res.status(502).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// DELETE /ollama/models/:name → delete a model
+app.delete("/ollama/models/:name", async (req, res) => {
+  const model = decodeURIComponent(req.params.name);
+  try {
+    const resp = await fetch(`${OLLAMA_DEFAULT}/api/delete`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    if (!resp.ok) return res.status(resp.status).json({ error: `Ollama ${resp.status}` });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// GET /ollama/status → check if Ollama is running
+app.get("/ollama/status", async (_req, res) => {
+  try {
+    const resp = await fetch(`${OLLAMA_DEFAULT}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    const data = await resp.json() as { models?: Array<{ name: string }> };
+    res.json({ online: true, models: data.models?.length ?? 0, host: OLLAMA_DEFAULT });
+  } catch {
+    res.json({ online: false, models: 0, host: OLLAMA_DEFAULT });
+  }
+});
+
 // GET /mcp-servers → return config (with tools if ?discover=true)
 app.get("/mcp-servers", async (req, res) => {
   try {
@@ -2690,6 +2754,15 @@ const server = app.listen(PORT, HOST, () => {
   loadPersistedPipelineExecutions();
   setSSEEmitter(emitSSE);
   initScheduler();
+});
+
+// Handle EADDRINUSE gracefully — don't crash the whole process (MCP stdio stays alive)
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    logger.warn("occ-rest", `Port ${PORT} already in use — REST server disabled (MCP stdio still active)`);
+  } else {
+    logger.error("occ-rest", "Server error", { error: err.message });
+  }
 });
 
 // ─── Graceful shutdown ───────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import { useServerStore } from "../../stores/server";
 import { ScheduleSection } from "./ScheduleSection";
 import { McpSection } from "./McpSection";
 import { ProviderSection } from "./ProviderSection";
+import { OllamaSection } from "./OllamaSection";
 import { useShortcutStore, formatCombo } from "../../stores/shortcuts";
 import type { ShortcutAction, KeyCombo } from "../../stores/shortcuts";
 import styles from "./Settings.module.css";
@@ -511,6 +512,7 @@ export function Settings() {
     { id: "server", label: "Server" },
     { id: "execution", label: "Execution" },
     { id: "providers", label: "Providers" },
+    { id: "ollama", label: "Ollama" },
     { id: "queue", label: "Queue" },
     { id: "schedules", label: "Schedules" },
     { id: "mcp", label: "MCP Servers" },
@@ -702,6 +704,14 @@ export function Settings() {
 
         {/* ═══ LLM Providers (extracted component) ═══ */}
         <div id="providers"><ProviderSection /></div>
+
+        {/* ═══ Ollama (local models) ═══ */}
+        <div id="ollama" className={styles.section}>
+          <div className={styles.sectionTitle}>Ollama — Local Models</div>
+          <div className={styles.sectionCard}>
+            <OllamaSection />
+          </div>
+        </div>
 
         {/* ═══ Job Queue ═══ */}
         <div id="queue" className={styles.section}>

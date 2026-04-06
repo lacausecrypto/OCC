@@ -34,6 +34,7 @@ export default defineConfig({
       "/approvals": { target: OCC_BACKEND, changeOrigin: true },
       "/generate-chain": { target: OCC_BACKEND, changeOrigin: true },
       "/workflow-chat": { target: OCC_BACKEND, changeOrigin: true },
+      "/ollama": { target: OCC_BACKEND, changeOrigin: true },
       "/download": { target: OCC_BACKEND, changeOrigin: true },
       "/cache": { target: OCC_BACKEND, changeOrigin: true },
       // SSE event stream

@@ -14,7 +14,7 @@ import { logger } from "./logger.js";
 export interface LLMProvider {
   id: string;
   name: string;
-  type: "claude" | "openrouter" | "openai" | "custom";
+  type: "claude" | "openrouter" | "openai" | "ollama" | "custom";
   apiKey: string;
   baseUrl: string;
   defaultModel?: string;
@@ -128,6 +128,12 @@ const PROVIDER_TEMPLATES: Record<string, Partial<LLMProvider>> = {
     type: "openai",
     baseUrl: "https://api.openai.com/v1",
     models: ["gpt-4o", "gpt-4o-mini", "o3-mini", "o4-mini"],
+  },
+  ollama: {
+    name: "Ollama (Local)",
+    type: "ollama",
+    baseUrl: "http://localhost:11434",
+    models: [], // Auto-discovered via /api/tags
   },
 };
 
@@ -295,7 +301,8 @@ export async function runLLMHTTP(
 ): Promise<LLMResult> {
   const provider = providers.get(config.provider);
   if (!provider) throw new Error(`Provider "${config.provider}" not configured`);
-  if (!provider.apiKey) throw new Error(`Provider "${config.provider}" has no API key configured`);
+  // Ollama doesn't need an API key (local server)
+  if (provider.type !== "ollama" && !provider.apiKey) throw new Error(`Provider "${config.provider}" has no API key configured`);
 
   const startTime = Date.now();
 
@@ -303,6 +310,10 @@ export async function runLLMHTTP(
     return runOpenRouter(provider, config, onChunk, startTime);
   } else if (provider.type === "openai") {
     return runOpenAICompat(provider, config, onChunk, startTime);
+  } else if (provider.type === "ollama") {
+    // Ollama is OpenAI-compatible at /v1/chat/completions
+    const ollamaProvider = { ...provider, baseUrl: provider.baseUrl + "/v1" };
+    return runOpenAICompat(ollamaProvider, config, onChunk, startTime);
   } else if (provider.type === "custom") {
     return runOpenAICompat(provider, config, onChunk, startTime);
   }
@@ -472,10 +483,28 @@ async function streamOpenAIResponse(
 export async function testProvider(id: string): Promise<{ ok: boolean; error?: string; models?: string[] }> {
   const provider = providers.get(id);
   if (!provider) return { ok: false, error: "Provider not found" };
-  if (!provider.apiKey) return { ok: false, error: "No API key configured" };
+  if (provider.type !== "ollama" && !provider.apiKey) return { ok: false, error: "No API key configured" };
 
   if (provider.type === "claude") {
     return { ok: true, models: provider.models };
+  }
+
+  // Ollama: use /api/tags to discover models
+  if (provider.type === "ollama") {
+    try {
+      const res = await fetch(`${provider.baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return { ok: false, error: `Ollama ${res.status}: ${res.statusText}` };
+      const data = await res.json() as { models?: Array<{ name: string }> };
+      const models = data.models?.map((m) => m.name) ?? [];
+      // Auto-update provider's model list
+      if (models.length > 0) {
+        const existing = providers.get(id);
+        if (existing) { existing.models = models; saveProviders(); }
+      }
+      return { ok: true, models };
+    } catch (err) {
+      return { ok: false, error: `Cannot connect to Ollama at ${provider.baseUrl}: ${(err as Error).message}` };
+    }
   }
 
   try {
