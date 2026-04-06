@@ -9,7 +9,6 @@ import { useServerStore } from "./server";
 import { useCanvasExecStore } from "./canvasExec";
 import { useMonitorStore } from "./monitor";
 import { useAnnotationStore } from "./annotations";
-import { useWorkflowChatStore } from "./workflowChat";
 import { fetchChainJson } from "../api/chains";
 import { fetchPipelineJson } from "../api/pipelines";
 import type { TabId } from "../components/layout/MainTabs";
@@ -104,7 +103,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // Switch annotations + workflow chat to this chain
     useAnnotationStore.getState().setCanvasKey(`chain:${name}`);
-    useWorkflowChatStore.getState().setCanvasKey(`chain:${name}`);
+    // Workflow chat session auto-switches via subscriber in workflowChat.ts
 
     // Clear canvas + execution state
     const cs = useCanvasStore.getState();
@@ -231,7 +230,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ canvasLoading: true, pipelineName: name, pipelineViewMode: "stages" });
 
     useAnnotationStore.getState().setCanvasKey(`pipeline:${name}`);
-    useWorkflowChatStore.getState().setCanvasKey(`pipeline:${name}`);
+    // Workflow chat session auto-switches via subscriber in workflowChat.ts
 
     const cs = useCanvasStore.getState();
     cs.clear();
@@ -305,7 +304,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ canvasLoading: true, pipelineName: name, pipelineViewMode: "decomposed" });
 
     useAnnotationStore.getState().setCanvasKey(`pipeline-decomposed:${name}`);
-    useWorkflowChatStore.getState().setCanvasKey(`pipeline:${name}`);
+    // Workflow chat session auto-switches via subscriber in workflowChat.ts
 
     const cs = useCanvasStore.getState();
     cs.clear();
@@ -534,7 +533,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   createNewChain: () => {
     const newKey = `new-chain:${Date.now()}`;
     useAnnotationStore.getState().setCanvasKey(newKey);
-    useWorkflowChatStore.getState().setCanvasKey(newKey);
+    // Workflow chat session auto-switches via subscriber in workflowChat.ts
     const cs = useCanvasStore.getState();
     cs.clear();
     useCanvasExecStore.getState().clearExecState();
