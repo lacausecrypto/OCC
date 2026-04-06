@@ -15,7 +15,9 @@
 
 Multi-model workflow engine built on Claude. Define chains in YAML, run them with parallel execution, build visually in a React canvas, access via MCP, REST API, or CLI.
 
-https://github.com/user-attachments/assets/727dfddd-b160-4988-a87a-46adaf2ffcb8
+<p align="center">
+  <img src="demo.gif" alt="OCC Demo" width="720">
+</p>
 
 ---
 
