@@ -875,20 +875,22 @@ describe("notify", () => {
 // ─── sandboxExec error path ──────────────────────────────────────────────────
 
 describe("sandboxExec", () => {
-  // Docker is available on CI runners (Ubuntu) — only test error path when absent
-  const hasDocker = (() => {
+  // Docker availability check — needs Linux containers (alpine image)
+  const isWindows = process.platform === "win32";
+  const hasLinuxDocker = (() => {
+    if (isWindows) return false; // Windows CI has Docker but not Linux containers
     try {
       require("node:child_process").execSync("docker info", { stdio: "ignore", timeout: 5000 });
       return true;
     } catch { return false; }
   })();
 
-  it.skipIf(hasDocker)("throws when docker is not available", () => {
+  it.skipIf(hasLinuxDocker)("throws when docker is not available", () => {
     expect(() => sandboxExec("alpine", "echo hello", undefined, 5000))
       .toThrow("sandbox_exec failed");
   });
 
-  it.skipIf(!hasDocker)("runs a container when docker is available", () => {
+  it.skipIf(!hasLinuxDocker)("runs a container when docker is available", () => {
     const result = sandboxExec("alpine", "echo hello", undefined, 15000);
     expect(result).toContain("hello");
   });
