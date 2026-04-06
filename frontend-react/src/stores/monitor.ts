@@ -68,29 +68,38 @@ export const useMonitorStore = create<MonitorState>((set, get) => ({
     if (clearTs && event.timestamp <= clearTs) return;
 
     set((s) => {
-      // Cleanup old executions (> 2 hours)
-      const TWO_HOURS = 7200000;
       const now = Date.now();
 
-      // Age-based cleanup: filter out events older than 2 hours
-      const freshEvents = s.events.filter(
-        (e) => !e.timestamp || (now - new Date(e.timestamp).getTime()) <= TWO_HOURS,
-      );
+      // ── Auto-cleanup: keep only last 200 events (not 2000) ──
+      const MAX_DISPLAY_EVENTS = 200;
+      const freshEvents = s.events.slice(-MAX_DISPLAY_EVENTS);
 
-      // Append event, trim to MAX_EVENTS
-      const events =
-        freshEvents.length >= MAX_EVENTS
-          ? [...freshEvents.slice(freshEvents.length - MAX_LOG_DOM + 1), event]
-          : [...freshEvents, event];
+      // Append event
+      const events = [...freshEvents, event];
 
+      // ── Auto-cleanup: purge finished executions older than 10 minutes ──
       const executions = new Map(s.executions);
-
-      // Cleanup old finished executions (> 2 hours)
-      for (const [id, exec] of executions) {
-        if (exec.finishedAt && (now - new Date(exec.finishedAt).getTime()) > TWO_HOURS) {
-          executions.delete(id);
+      if (executions.size > 15) {
+        const TEN_MIN = 600000;
+        for (const [id, exec] of executions) {
+          if (exec.status !== "running" && exec.finishedAt && now - new Date(exec.finishedAt).getTime() > TEN_MIN) {
+            executions.delete(id);
+          }
+          if (executions.size <= 8) break; // keep at least 8
         }
       }
+
+      // ── Auto-cleanup: mark stale "running" executions as error (> 5 min) ──
+      const FIVE_MIN = 300000;
+      for (const [, exec] of executions) {
+        if (exec.status === "running" && exec.startedAt && now - new Date(exec.startedAt).getTime() > FIVE_MIN) {
+          exec.status = "error" as ExecutionStatus;
+          exec.error = "Stale execution — no events received for 5+ minutes";
+          exec.finishedAt = new Date().toISOString();
+        }
+      }
+
+      // (cleanup already done above)
 
       switch (event.type) {
         case "execution_started": {

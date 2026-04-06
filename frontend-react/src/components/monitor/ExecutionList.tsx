@@ -79,7 +79,7 @@ export function ExecutionList({ onOpenExecModal }: ExecutionListProps) {
 
   return (
     <div className={styles.execList}>
-      {sorted.slice(0, 30).map((ex: ChainExecution) => {
+      {sorted.slice(0, 10).map((ex: ChainExecution) => {
         const steps = Object.values(ex.steps ?? {}) as StepResult[];
         const doneCount = steps.filter((s) => s.status === "done").length;
         const errorCount = steps.filter((s) => s.status === "error").length;

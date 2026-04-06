@@ -506,95 +506,180 @@ function drawExecOverlay(
     ctx.restore();
   }
 
-  // ── Mini terminal — auto-hide 5s after done/error ──
+  // ── Mini terminal (Apple-style glass) — stays 15s after done/error ──
+  const TERM_LINGER_MS = 15000;
+  const TERM_FADE_MS = 3000;
   const termVisible =
     isRunning ||
-    (state.output.length > 0 && state.finishedAt && now - state.finishedAt < 5000);
+    (state.output.length > 0 && state.finishedAt && now - state.finishedAt < TERM_LINGER_MS);
   if (!termVisible) return;
 
-  // Fade out in last 1.5s
+  // Smooth fade out in last 3s
   const termOpacity =
     !isRunning && state.finishedAt
-      ? Math.max(0, 1 - Math.max(0, now - state.finishedAt - 3500) / 1500)
+      ? Math.max(0, 1 - Math.max(0, now - state.finishedAt - (TERM_LINGER_MS - TERM_FADE_MS)) / TERM_FADE_MS)
       : 1;
   if (termOpacity <= 0) return;
 
-  const numLines = Math.min(state.output.length, 4);
-  const lineH = 13;
-  const termW = Math.min(Math.max(nw, 260), 360);
-  const termH = 20 + numLines * lineH + 8;
-  const tx = x + (nw - termW) / 2; // centered below node
-  const ty = y + nh + 10;
+  // ─── Dimensions ──────────────────────────────────────────────
+  const MAX_LINES = 6;
+  const numLines = Math.min(state.output.length, MAX_LINES);
+  const lineH = 14;
+  const titleBarH = 28;
+  const padBottom = 10;
+  const termW = Math.min(Math.max(nw + 40, 280), 400);
+  const termH = titleBarH + numLines * lineH + padBottom;
+  const tx = x + (nw - termW) / 2;
+  const ty = y + nh + 12;
+  const r = 10; // border radius
 
   ctx.save();
   ctx.globalAlpha = termOpacity;
 
-  // Background with subtle border
+  // ─── Drop shadow (Apple-style layered) ───────────────────────
+  ctx.shadowColor = "rgba(0,0,0,0.45)";
+  ctx.shadowBlur = 24;
+  ctx.shadowOffsetY = 8;
   ctx.beginPath();
-  ctx.roundRect(tx, ty, termW, termH, 8);
-  ctx.fillStyle = "rgba(10,10,14,0.92)";
+  ctx.roundRect(tx, ty, termW, termH, r);
+  ctx.fillStyle = "rgba(0,0,0,0.01)";
   ctx.fill();
-  ctx.strokeStyle = isRunning ? color + "40" : borderColor + "30";
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  // ─── Glass background ───────────────────────────────────────
+  ctx.beginPath();
+  ctx.roundRect(tx, ty, termW, termH, r);
+  ctx.fillStyle = "rgba(28,28,30,0.88)";
+  ctx.fill();
+
+  // Subtle inner border (vitreous)
+  ctx.beginPath();
+  ctx.roundRect(tx + 0.5, ty + 0.5, termW - 1, termH - 1, r);
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.lineWidth = 0.5;
   ctx.stroke();
 
-  // Left accent bar
-  ctx.fillStyle = isRunning ? color : state.status === "done" ? successColor : errorColor;
+  // Top highlight edge (glass reflection)
   ctx.beginPath();
-  ctx.roundRect(tx, ty, 3, termH, [8, 0, 0, 8]);
+  ctx.moveTo(tx + r, ty + 0.5);
+  ctx.lineTo(tx + termW - r, ty + 0.5);
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+
+  // ─── Title bar with traffic lights ──────────────────────────
+  // Separator line
+  ctx.beginPath();
+  ctx.moveTo(tx + 8, ty + titleBarH - 0.5);
+  ctx.lineTo(tx + termW - 8, ty + titleBarH - 0.5);
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+
+  // Traffic light dots
+  const dotY = ty + titleBarH / 2;
+  const dotR = 4;
+  const dotGap = 14;
+  const dotStartX = tx + 14;
+
+  // Red dot
+  ctx.beginPath();
+  ctx.arc(dotStartX, dotY, dotR, 0, Math.PI * 2);
+  ctx.fillStyle = state.status === "error" ? "#ff5f57" : "rgba(255,95,87,0.35)";
   ctx.fill();
 
-  // Header: label + status indicator
-  ctx.font = `600 8px ${fontFamily}, sans-serif`;
-  ctx.fillStyle = isRunning ? color + "90" : text2Color;
-  ctx.textAlign = "left";
-  ctx.fillText(n.label.slice(0, 35), tx + 10, ty + 12);
+  // Yellow dot
+  ctx.beginPath();
+  ctx.arc(dotStartX + dotGap, dotY, dotR, 0, Math.PI * 2);
+  ctx.fillStyle = isRunning ? "#febc2e" : "rgba(254,188,46,0.35)";
+  ctx.fill();
 
-  // Status text (right-aligned in header)
-  if (!isRunning && state.status) {
+  // Green dot
+  ctx.beginPath();
+  ctx.arc(dotStartX + dotGap * 2, dotY, dotR, 0, Math.PI * 2);
+  ctx.fillStyle = state.status === "done" ? "#28c840" : "rgba(40,200,64,0.35)";
+  ctx.fill();
+
+  // Title text (centered)
+  ctx.font = `600 10px ${fontFamily}, -apple-system, sans-serif`;
+  ctx.fillStyle = "rgba(255,255,255,0.65)";
+  ctx.textAlign = "center";
+  const titleText = n.label.length > 30 ? n.label.slice(0, 28) + "\u2026" : n.label;
+  ctx.fillText(titleText, tx + termW / 2, ty + titleBarH / 2 + 3.5);
+  ctx.textAlign = "left";
+
+  // Duration / status badge (right side of title bar)
+  if (isRunning && state.startTime) {
+    const dur = ((now - state.startTime) / 1000).toFixed(0) + "s";
+    ctx.font = `500 9px ${monoFamily}, 'SF Mono', monospace`;
+    ctx.fillStyle = color;
     ctx.textAlign = "right";
-    ctx.fillStyle = state.status === "done" ? successColor + "80" : errorColor + "80";
-    ctx.fillText(state.status, tx + termW - 8, ty + 12);
+    ctx.fillText(dur, tx + termW - 12, ty + titleBarH / 2 + 3);
+    ctx.textAlign = "left";
+  } else if (state.status === "done" && state.startTime && state.finishedAt) {
+    const dur = ((state.finishedAt - state.startTime) / 1000).toFixed(1) + "s";
+    ctx.font = `500 9px ${monoFamily}, 'SF Mono', monospace`;
+    ctx.fillStyle = successColor + "90";
+    ctx.textAlign = "right";
+    ctx.fillText(dur, tx + termW - 12, ty + titleBarH / 2 + 3);
+    ctx.textAlign = "left";
+  } else if (state.status === "error") {
+    ctx.font = `600 9px ${fontFamily}, sans-serif`;
+    ctx.fillStyle = errorColor + "90";
+    ctx.textAlign = "right";
+    ctx.fillText("error", tx + termW - 12, ty + titleBarH / 2 + 3);
     ctx.textAlign = "left";
   }
 
-  // Output lines with syntax-aware coloring
-  const lastLines = state.output.slice(-numLines);
-  const maxChars = Math.floor((termW - 20) / 5.2);
-  ctx.font = "400 10px monospace";
+  // ─── Output lines ──────────────────────────────────────────
+  const lastLines = state.output.slice(-MAX_LINES);
+  const maxChars = Math.floor((termW - 24) / 5.6);
+  ctx.font = `400 10.5px ${monoFamily}, 'SF Mono', 'Fira Code', monospace`;
 
   lastLines.forEach((rawLine, li) => {
-    const lineY = ty + 24 + li * lineH;
+    const lineY = ty + titleBarH + 12 + li * lineH;
     const line = rawLine.length > maxChars ? rawLine.slice(0, maxChars - 1) + "\u2026" : rawLine;
 
-    // Color based on content
+    // Syntax-aware coloring
     if (line.startsWith("ERROR") || line.startsWith("[error]")) {
       ctx.fillStyle = errorColor;
     } else if (line.startsWith("[warn")) {
       ctx.fillStyle = warningColor;
     } else if (line.startsWith("[info]") || line.startsWith("[cache")) {
-      ctx.fillStyle = infoColor + "80";
+      ctx.fillStyle = infoColor + "60";
     } else if (line.startsWith("[gate") || line.startsWith("[awaiting")) {
       ctx.fillStyle = warningColor;
     } else {
-      ctx.fillStyle = isRunning ? textColor : text2Color;
+      ctx.fillStyle = isRunning ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.55)";
     }
-    ctx.fillText(line, tx + 10, lineY);
+    ctx.fillText(line, tx + 12, lineY);
   });
 
-  // Blinking cursor (block cursor style)
+  // ─── Blinking cursor (thin line, Apple Terminal style) ──────
   if (isRunning) {
-    const blinkOn = Math.sin(now / 400 * Math.PI) > 0;
+    const blinkOn = Math.sin(now / 500 * Math.PI) > 0;
     if (blinkOn) {
       const lastLine = lastLines[lastLines.length - 1] ?? "";
-      const cx = tx + 10 + Math.min(lastLine.length, maxChars) * 5.2;
-      const cy = ty + 14 + (numLines - 1) * lineH;
+      const cursorX = tx + 12 + Math.min(lastLine.length, maxChars) * 5.6;
+      const cursorY = ty + titleBarH + 2 + Math.max(0, numLines - 1) * lineH;
       ctx.fillStyle = color;
-      ctx.globalAlpha = 0.7 * termOpacity;
-      ctx.fillRect(cx, cy, 6, 11);
+      ctx.globalAlpha = 0.8 * termOpacity;
+      ctx.fillRect(cursorX, cursorY, 1.5, 13);
       ctx.globalAlpha = termOpacity;
     }
   }
+
+  // ─── Connection line from node to terminal ─────────────────
+  ctx.beginPath();
+  ctx.moveTo(x + nw / 2, y + nh);
+  ctx.lineTo(x + nw / 2, ty);
+  ctx.strokeStyle = isRunning ? color + "30" : "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
 
   ctx.restore();
 }

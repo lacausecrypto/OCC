@@ -93,12 +93,12 @@ export function MonitorSidebar() {
         </div>
       )}
 
-      {/* Context banner: show what's on canvas vs what's selected */}
-      {isViewingDifferentChain && canvasExec && (
+      {/* Context banner: only show when canvas has a RUNNING execution different from selected */}
+      {isViewingDifferentChain && canvasExec && canvasExec.status === "running" && (
         <div className={styles.ctxBanner}>
           <span className={styles.ctxBannerIcon}>{"\u26A0"}</span>
-          Canvas: <strong>{canvasExec.chainName}</strong>
-          {activeExec && <> · Selected: <strong>{activeExec.chainName}</strong></>}
+          Running: <strong>{canvasExec.chainName}</strong>
+          {activeExec && <> · Viewing: <strong>{activeExec.chainName}</strong></>}
         </div>
       )}
 

@@ -172,8 +172,8 @@ export function LogViewer() {
     }
   }, [filteredEvents.length, autoScroll]);
 
-  // Only render last 500 entries for performance
-  const visibleEvents = filteredEvents.slice(-500);
+  // Only render last 100 entries for readability
+  const visibleEvents = filteredEvents.slice(-100);
   // Get exec names for the dropdown
   const getExecName = (id: string) => {
     const exec = executions.get(id);
