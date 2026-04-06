@@ -151,10 +151,14 @@ export function StepEditModal({ nodeId, onClose }: StepEditModalProps) {
   const handleSave = useCallback(() => {
     if (!node) return;
     pushUndo();
-    // Clean empty values from advanced config
+    // Clean empty values from advanced config (keep 0 — it's a valid numeric value)
     const cleanAdv: StepAdvancedConfig = {};
     for (const [k, v] of Object.entries(adv)) {
-      if (v !== undefined && v !== null && v !== "" && v !== 0) {
+      if (v === undefined || v === null || v === "") continue;
+      // Keep 0 (valid number), false (valid bool), empty arrays/objects
+      if (typeof v === "number" || typeof v === "boolean" || (typeof v === "object" && v !== null)) {
+        (cleanAdv as Record<string, unknown>)[k] = v;
+      } else {
         (cleanAdv as Record<string, unknown>)[k] = v;
       }
     }

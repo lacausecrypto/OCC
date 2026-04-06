@@ -89,7 +89,10 @@ export function canvasToYaml(
           lines.push(`        ${k}: ${yamlStr(String(v))}`);
         }
         if (pt.on_error) lines.push(`        on_error: ${pt.on_error}`);
-        if (pt.timeout_ms) lines.push(`        timeout_ms: ${pt.timeout_ms}`);
+        if (pt.timeout_ms != null) lines.push(`        timeout_ms: ${pt.timeout_ms}`);
+        if (pt.retry != null) lines.push(`        retry: ${pt.retry}`);
+        if (pt.cache_ttl_minutes != null) lines.push(`        cache_ttl_minutes: ${pt.cache_ttl_minutes}`);
+        if (pt.parallel) lines.push("        parallel: true");
       }
     }
 
@@ -107,68 +110,135 @@ export function canvasToYaml(
     const outputVar = node.outputVar || `${stepId}_out`;
     lines.push(`    output_var: ${yamlStr(outputVar)}`);
 
-    // Advanced config
+    // Advanced config — use != null to preserve 0 and false values
     const adv = node.advanced;
     if (adv) {
-      if (adv.timeout_ms) lines.push(`    timeout_ms: ${adv.timeout_ms}`);
-      if (adv.condition) lines.push(`    condition: ${yamlStr(adv.condition)}`);
-      if (adv.early_exit_if) lines.push(`    early_exit_if: ${yamlStr(adv.early_exit_if)}`);
-      if (adv.retry) {
+      // Helpers: emit only when value is explicitly set (not undefined/null)
+      const emitNum = (key: string, val: number | undefined) => { if (val != null) lines.push(`    ${key}: ${val}`); };
+      const emitStr = (key: string, val: string | undefined) => { if (val) lines.push(`    ${key}: ${yamlStr(val)}`); };
+
+      emitNum("timeout_ms", adv.timeout_ms);
+      emitStr("condition", adv.condition);
+      emitStr("early_exit_if", adv.early_exit_if);
+      emitStr("cwd", adv.cwd);
+
+      if (adv.retry && adv.retry.max != null) {
         lines.push("    retry:");
         lines.push(`      max: ${adv.retry.max}`);
-        if (adv.retry.delay_ms) lines.push(`      delay_ms: ${adv.retry.delay_ms}`);
-        if (adv.retry.backoff) lines.push(`      backoff: ${adv.retry.backoff}`);
+        if (adv.retry.delay_ms != null) lines.push(`      delay_ms: ${adv.retry.delay_ms}`);
+        if (adv.retry.backoff != null) lines.push(`      backoff: ${adv.retry.backoff}`);
+      }
+      if (adv.fallback_models && adv.fallback_models.length > 0) {
+        lines.push(`    fallback_models: [${adv.fallback_models.map(yamlStr).join(", ")}]`);
       }
       if (adv.cache?.enabled) {
         lines.push("    cache:");
         lines.push("      enabled: true");
-        if (adv.cache.ttl_minutes) lines.push(`      ttl_minutes: ${adv.cache.ttl_minutes}`);
+        if (adv.cache.ttl_minutes != null) lines.push(`      ttl_minutes: ${adv.cache.ttl_minutes}`);
       }
-      // Type-specific fields
-      if (type === "router" && adv.routes) {
-        lines.push("    routes:");
-        for (const [key, targets] of Object.entries(adv.routes)) {
-          lines.push(`      ${yamlStr(key)}: [${targets.map(yamlStr).join(", ")}]`);
+      // Output validation
+      emitStr("output_schema", adv.output_schema);
+      emitNum("output_max_length", adv.output_max_length);
+      if (adv.output_must_contain && adv.output_must_contain.length > 0) {
+        lines.push(`    output_must_contain: [${adv.output_must_contain.map(yamlStr).join(", ")}]`);
+      }
+      if (adv.output_must_not_contain && adv.output_must_not_contain.length > 0) {
+        lines.push(`    output_must_not_contain: [${adv.output_must_not_contain.map(yamlStr).join(", ")}]`);
+      }
+      // Guardrails
+      if (adv.guardrails && adv.guardrails.length > 0) {
+        lines.push("    guardrails:");
+        for (const g of adv.guardrails) {
+          lines.push(`      - type: ${g.type}`);
+          if (g.value != null) lines.push(`        value: ${g.value}`);
         }
-        if (adv.default_route) lines.push(`    default_route: ${yamlStr(adv.default_route)}`);
+      }
+
+      // ── Type-specific fields ──
+      if (type === "router") {
+        if (adv.routes) {
+          lines.push("    routes:");
+          for (const [key, targets] of Object.entries(adv.routes)) {
+            lines.push(`      ${yamlStr(key)}: [${targets.map(yamlStr).join(", ")}]`);
+          }
+        }
+        emitStr("default_route", adv.default_route);
       }
       if (type === "evaluator") {
-        if (adv.input_var) lines.push(`    input_var: ${yamlStr(adv.input_var)}`);
-        if (adv.criteria) lines.push(`    criteria: ${yamlStr(adv.criteria)}`);
-        if (adv.on_fail) lines.push(`    on_fail: ${adv.on_fail}`);
+        emitStr("input_var", adv.input_var);
+        emitStr("criteria", adv.criteria);
+        emitStr("on_fail", adv.on_fail);
+        emitNum("max_retries", adv.max_retries);
+        emitStr("retry_target", adv.retry_target);
+        if (adv.eval_scoring) lines.push("    eval_scoring: true");
+        emitNum("eval_threshold", adv.eval_threshold);
       }
       if (type === "gate") {
-        if (adv.timeout_hours) lines.push(`    timeout_hours: ${adv.timeout_hours}`);
-        if (adv.on_timeout) lines.push(`    on_timeout: ${adv.on_timeout}`);
+        emitNum("timeout_hours", adv.timeout_hours);
+        emitStr("on_timeout", adv.on_timeout);
+        if (adv.gate_actions && adv.gate_actions.length > 0) {
+          lines.push(`    gate_actions: [${adv.gate_actions.map(yamlStr).join(", ")}]`);
+        }
+        emitStr("gate_auto_approve_if", adv.gate_auto_approve_if);
+        if (adv.gate_rejection_reason) lines.push("    gate_rejection_reason: true");
       }
-      if (type === "transform" && adv.operation) {
-        lines.push(`    operation: ${adv.operation}`);
-        if (adv.json_path) lines.push(`    json_path: ${yamlStr(adv.json_path)}`);
-        if (adv.regex) lines.push(`    regex: ${yamlStr(adv.regex)}`);
-        if (adv.template_str) lines.push(`    template_str: ${yamlStr(adv.template_str)}`);
+      if (type === "transform") {
+        emitStr("operation", adv.operation);
+        emitStr("json_path", adv.json_path);
+        emitStr("regex", adv.regex);
+        emitStr("template_str", adv.template_str);
+        emitNum("truncate_limit", adv.truncate_limit);
       }
       if (type === "loop") {
-        if (adv.items_var) lines.push(`    items_var: ${yamlStr(adv.items_var)}`);
-        if (adv.max_parallel) lines.push(`    max_parallel: ${adv.max_parallel}`);
+        emitStr("items_var", adv.items_var);
+        emitNum("max_parallel", adv.max_parallel);
+        emitStr("loop_until", adv.loop_until);
+        emitStr("loop_on_error", adv.loop_on_error);
       }
       if (type === "merge") {
-        if (adv.inputs) lines.push(`    inputs: [${adv.inputs.map(yamlStr).join(", ")}]`);
-        if (adv.strategy) lines.push(`    strategy: ${adv.strategy}`);
+        if (adv.inputs && adv.inputs.length > 0) lines.push(`    inputs: [${adv.inputs.map(yamlStr).join(", ")}]`);
+        emitStr("strategy", adv.strategy);
       }
       if (type === "webhook") {
-        if (adv.webhook_url) lines.push(`    url: ${yamlStr(adv.webhook_url)}`);
-        if (adv.webhook_method) lines.push(`    webhook_method: ${adv.webhook_method}`);
+        emitStr("webhook_url", adv.webhook_url);
+        emitStr("webhook_method", adv.webhook_method);
+        if (adv.webhook_headers) {
+          lines.push("    webhook_headers:");
+          for (const [hk, hv] of Object.entries(adv.webhook_headers)) {
+            lines.push(`      ${yamlStr(hk)}: ${yamlStr(hv)}`);
+          }
+        }
+        emitStr("webhook_body", adv.webhook_body);
+        emitNum("webhook_timeout_ms", adv.webhook_timeout_ms);
+        emitNum("webhook_retry", adv.webhook_retry);
       }
       if (type === "subchain") {
-        if (adv.subchain) lines.push(`    subchain: ${yamlStr(adv.subchain)}`);
+        emitStr("subchain", adv.subchain);
+        if (adv.subchain_input_map) {
+          lines.push("    subchain_input_map:");
+          for (const [sk, sv] of Object.entries(adv.subchain_input_map)) {
+            lines.push(`      ${yamlStr(sk)}: ${yamlStr(sv)}`);
+          }
+        }
       }
       if (type === "debate") {
-        if (adv.debate_rounds) lines.push(`    debate_rounds: ${adv.debate_rounds}`);
-        if (adv.debate_decision) lines.push(`    debate_decision: ${adv.debate_decision}`);
+        emitNum("debate_rounds", adv.debate_rounds);
+        emitStr("debate_decision", adv.debate_decision);
+        if (adv.debate_agents && adv.debate_agents.length > 0) {
+          lines.push("    debate_agents:");
+          for (const agent of adv.debate_agents) {
+            lines.push(`      - prompt: ${yamlStr(agent.prompt)}`);
+            if (agent.model) lines.push(`        model: ${agent.model}`);
+          }
+        }
       }
       if (type === "browser") {
-        if (adv.browser_url) lines.push(`    browser_url: ${yamlStr(adv.browser_url)}`);
-        if (adv.browser_task) lines.push(`    browser_task: ${yamlStr(adv.browser_task)}`);
+        emitStr("browser_url", adv.browser_url);
+        emitStr("browser_task", adv.browser_task);
+        emitNum("browser_max_steps", adv.browser_max_steps);
+        emitNum("browser_wait_ms", adv.browser_wait_ms);
+        emitStr("browser_output_format", adv.browser_output_format);
+        if (adv.browser_headless === false) lines.push("    browser_headless: false");
       }
     }
 
