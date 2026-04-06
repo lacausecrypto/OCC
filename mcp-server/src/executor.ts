@@ -1561,9 +1561,10 @@ async function executeStep(
 export async function executeChain(
   chain: ChainDefinition,
   input: Record<string, string>,
-  emit: EventEmitter
+  emit: EventEmitter,
+  externalId?: string,
 ): Promise<string> {
-  const executionId = crypto.randomBytes(8).toString("hex");
+  const executionId = externalId ?? crypto.randomBytes(8).toString("hex");
   const startedAt = new Date().toISOString();
 
   // Validate required inputs

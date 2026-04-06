@@ -655,6 +655,8 @@ $ occ dry-run quick-summarizer -i url="https://example.com"
 
 Why the difference: Claude CLI accumulates all context in one conversation (each tool call adds to the history). OCC isolates each step — step 5 doesn't pay for step 1's context. Pre-tools extract data with zero LLM tokens (bash scripts, HTTP fetches, AST parsing happen before the LLM call).
 
+See [BENCHMARKS.md](BENCHMARKS.md) for real execution results with actual token counts, wall times, and methodology.
+
 ## Example Chains (15 included)
 
 | Chain | Steps | Parallel | Features Used |

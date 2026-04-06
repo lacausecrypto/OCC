@@ -21,7 +21,7 @@ import {
   sanitizeName,
 } from "./loader.js";
 import { executeChain, getExecution, getAllExecutions, cancelExecution, loadPersistedExecutions, resumeExecution, approveGate, getPendingApprovals, validateClaudeBinary, canStartExecution, getRunningExecutionCount, getExecutionTimeline } from "./executor.js";
-import { getChainStats } from "./storage.js";
+import { getChainStats, createVersion, listVersions, getVersion, deleteVersion as deleteVersionFromDb, countVersions } from "./storage.js";
 import { loadMcpServers, discoverTools, getConfiguredServers, getMcpConfig, saveMcpConfig, closeMcpClients } from "./mcp-client.js";
 import { closeStorage } from "./storage.js";
 import { initQueue, enqueue, getQueueJob, listQueueJobs, listQueueByStatus, cancelQueueJob, getQueueStats, purgeOldJobs, closeQueue } from "./queue.js";
@@ -294,6 +294,80 @@ app.get("/chains", (_req, res) => {
   res.json(chains);
 });
 
+// ─── Chain version endpoints (registered before /chains/:name catch-all) ────
+
+// GET /chains/:name/versions → list versions
+app.get("/chains/:name/versions", (req, res) => {
+  try {
+    const safeName = sanitizeName(req.params.name);
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const versions = listVersions("chain", safeName, limit, offset);
+    const total = countVersions("chain", safeName);
+    res.json({ versions, total });
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// GET /chains/:name/versions/:version → full version with YAML
+app.get("/chains/:name/versions/:version", (req, res) => {
+  try {
+    const safeName = sanitizeName(req.params.name);
+    const vNum = parseInt(req.params.version);
+    if (isNaN(vNum) || vNum < 1) return res.status(400).json({ error: "Invalid version number" });
+    const version = getVersion("chain", safeName, vNum);
+    if (!version) return res.status(404).json({ error: `Version ${vNum} not found` });
+    return res.json(version);
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// DELETE /chains/:name/versions/:version → delete a version
+app.delete("/chains/:name/versions/:version", (req, res) => {
+  try {
+    const safeName = sanitizeName(req.params.name);
+    const vNum = parseInt(req.params.version);
+    if (isNaN(vNum) || vNum < 1) return res.status(400).json({ error: "Invalid version number" });
+    const ok = deleteVersionFromDb("chain", safeName, vNum);
+    if (!ok) return res.status(404).json({ error: `Version ${vNum} not found` });
+    return res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// POST /chains/:name/versions/:version/restore → restore version as current
+app.post("/chains/:name/versions/:version/restore", (req, res) => {
+  try {
+    const safeName = sanitizeName(req.params.name);
+    const vNum = parseInt(req.params.version);
+    if (isNaN(vNum) || vNum < 1) return res.status(400).json({ error: "Invalid version number" });
+
+    const version = getVersion("chain", safeName, vNum);
+    if (!version) return res.status(404).json({ error: `Version ${vNum} not found` });
+
+    const dir = process.env.CHAINS_DIR ?? path.join(process.cwd(), "..", "chains");
+    fs.mkdirSync(dir, { recursive: true });
+
+    // Write restored YAML as the current file
+    fs.writeFileSync(path.join(dir, `${safeName}.yaml`), version.yamlContent, "utf-8");
+
+    // Create a new version recording the restore
+    let stepCount: number | undefined;
+    try {
+      const parsed = yaml.load(version.yamlContent) as { steps?: unknown[] };
+      stepCount = Array.isArray(parsed?.steps) ? parsed.steps.length : undefined;
+    } catch { /* ignore */ }
+    createVersion("chain", safeName, version.yamlContent, `Restored from v${vNum}`, stepCount);
+
+    res.json({ ok: true, restoredFrom: vNum });
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
 // GET /chains/:name → raw YAML
 app.get("/chains/:name", (req, res) => {
   try {
@@ -311,16 +385,32 @@ app.post("/chains/:name", (req, res) => {
     const dir = process.env.CHAINS_DIR ?? path.join(process.cwd(), "..", "chains");
     fs.mkdirSync(dir, { recursive: true });
 
+    let newYaml: string;
+    let versionMessage: string | undefined;
+
     if (typeof req.body === "string") {
-      // Raw YAML string — save directly
-      fs.writeFileSync(path.join(dir, `${safeName}.yaml`), req.body as string, "utf-8");
+      newYaml = req.body;
     } else if (req.body && typeof req.body.yaml === "string") {
-      // Frontend sends { yaml: "..." } — extract and save the YAML content
-      fs.writeFileSync(path.join(dir, `${safeName}.yaml`), req.body.yaml as string, "utf-8");
+      newYaml = req.body.yaml;
+      versionMessage = req.body.versionMessage;
     } else {
-      // JSON ChainDefinition object — convert to YAML via loader
-      saveChain(safeName, req.body);
+      // JSON ChainDefinition object — convert to YAML
+      newYaml = yaml.dump(req.body, { lineWidth: 120, quotingType: '"' });
+      versionMessage = req.body.versionMessage;
     }
+
+    // Count steps from parsed YAML for version metadata
+    let stepCount: number | undefined;
+    try {
+      const parsed = yaml.load(newYaml) as { steps?: unknown[] };
+      stepCount = Array.isArray(parsed?.steps) ? parsed.steps.length : undefined;
+    } catch { /* ignore parse errors — still save */ }
+
+    // Create version snapshot before writing
+    createVersion("chain", safeName, newYaml, versionMessage, stepCount);
+
+    // Write the file
+    fs.writeFileSync(path.join(dir, `${safeName}.yaml`), newYaml, "utf-8");
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: safeErrorMessage(err) });
@@ -367,7 +457,7 @@ app.post("/execute/:name", async (req: Request, res: Response) => {
       res.json({ executionId, queued: false });
 
       setImmediate(() => {
-        executeChain(chain, input, emitter).catch(() => {
+        executeChain(chain, input, emitter, executionId).catch(() => {
           // errors are captured in execution record
         });
       });
@@ -803,6 +893,82 @@ app.get("/pipelines", (_req, res) => {
   res.json(pipelines);
 });
 
+// ─── Pipeline version endpoints (registered before /pipelines/:name catch-all) ─
+
+// GET /pipelines/:name/versions → list versions
+app.get("/pipelines/:name/versions", (req, res) => {
+  try {
+    const safeName = sanitizeName(req.params.name);
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const versions = listVersions("pipeline", safeName, limit, offset);
+    const total = countVersions("pipeline", safeName);
+    res.json({ versions, total });
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// GET /pipelines/:name/versions/:version → full version with YAML
+app.get("/pipelines/:name/versions/:version", (req, res) => {
+  try {
+    const safeName = sanitizeName(req.params.name);
+    const vNum = parseInt(req.params.version);
+    if (isNaN(vNum) || vNum < 1) return res.status(400).json({ error: "Invalid version number" });
+    const version = getVersion("pipeline", safeName, vNum);
+    if (!version) return res.status(404).json({ error: `Version ${vNum} not found` });
+    return res.json(version);
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// DELETE /pipelines/:name/versions/:version → delete a version
+app.delete("/pipelines/:name/versions/:version", (req, res) => {
+  try {
+    const safeName = sanitizeName(req.params.name);
+    const vNum = parseInt(req.params.version);
+    if (isNaN(vNum) || vNum < 1) return res.status(400).json({ error: "Invalid version number" });
+    const ok = deleteVersionFromDb("pipeline", safeName, vNum);
+    if (!ok) return res.status(404).json({ error: `Version ${vNum} not found` });
+    return res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// POST /pipelines/:name/versions/:version/restore → restore version as current
+app.post("/pipelines/:name/versions/:version/restore", (req, res) => {
+  try {
+    const safeName = sanitizeName(req.params.name);
+    const vNum = parseInt(req.params.version);
+    if (isNaN(vNum) || vNum < 1) return res.status(400).json({ error: "Invalid version number" });
+
+    const version = getVersion("pipeline", safeName, vNum);
+    if (!version) return res.status(404).json({ error: `Version ${vNum} not found` });
+
+    const dir = process.env.PIPELINES_DIR ??
+      path.join((process.env.CHAINS_DIR ?? "").replace(/[/\\]chains[/\\]?$/, ""), "pipelines") ??
+      path.join(process.cwd(), "..", "pipelines");
+    fs.mkdirSync(dir, { recursive: true });
+
+    // Write restored YAML as the current file
+    fs.writeFileSync(path.join(dir, `${safeName}.yaml`), version.yamlContent, "utf-8");
+
+    // Create a new version recording the restore
+    let stepCount: number | undefined;
+    try {
+      const parsed = yaml.load(version.yamlContent) as { chains?: unknown[] };
+      stepCount = Array.isArray(parsed?.chains) ? parsed.chains.length : undefined;
+    } catch { /* ignore */ }
+    createVersion("pipeline", safeName, version.yamlContent, `Restored from v${vNum}`, stepCount);
+
+    res.json({ ok: true, restoredFrom: vNum });
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
 // GET /pipelines/:name
 app.get("/pipelines/:name", (req, res) => {
   try {
@@ -826,16 +992,37 @@ app.get("/pipelines/:name/json", (req, res) => {
 // POST /pipelines/:name — save
 app.post("/pipelines/:name", (req, res) => {
   try {
+    const pSafeName = sanitizeName(req.params.name);
+    const dir = process.env.PIPELINES_DIR ??
+      path.join((process.env.CHAINS_DIR ?? "").replace(/[/\\]chains[/\\]?$/, ""), "pipelines") ??
+      path.join(process.cwd(), "..", "pipelines");
+    fs.mkdirSync(dir, { recursive: true });
+
+    let newYaml: string;
+    let versionMessage: string | undefined;
+
     if (typeof req.body === "string") {
-      const dir = process.env.PIPELINES_DIR ??
-        path.join((process.env.CHAINS_DIR ?? "").replace(/[/\\]chains[/\\]?$/, ""), "pipelines") ??
-        path.join(process.cwd(), "..", "pipelines");
-      fs.mkdirSync(dir, { recursive: true });
-      const pSafeName = sanitizeName(req.params.name);
-      fs.writeFileSync(path.join(dir, `${pSafeName}.yaml`), req.body, "utf-8");
+      newYaml = req.body;
+    } else if (req.body && typeof req.body.yaml === "string") {
+      newYaml = req.body.yaml;
+      versionMessage = req.body.versionMessage;
     } else {
-      savePipeline(sanitizeName(req.params.name), req.body);
+      newYaml = yaml.dump(req.body, { lineWidth: 200, noRefs: true, sortKeys: false });
+      versionMessage = req.body.versionMessage;
     }
+
+    // Count chains from parsed YAML for version metadata
+    let stepCount: number | undefined;
+    try {
+      const parsed = yaml.load(newYaml) as { chains?: unknown[] };
+      stepCount = Array.isArray(parsed?.chains) ? parsed.chains.length : undefined;
+    } catch { /* ignore parse errors — still save */ }
+
+    // Create version snapshot before writing
+    createVersion("pipeline", pSafeName, newYaml, versionMessage, stepCount);
+
+    // Write the file
+    fs.writeFileSync(path.join(dir, `${pSafeName}.yaml`), newYaml, "utf-8");
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: safeErrorMessage(err) });

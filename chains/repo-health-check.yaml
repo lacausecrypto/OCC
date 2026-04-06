@@ -31,7 +31,7 @@ steps:
 
       Be concise — 5-8 bullet points max.
     output_var: git_report
-    timeout_ms: 20000
+    timeout_ms: 60000
 
   - id: dependency-check
     model: claude-haiku-4-5
@@ -53,7 +53,7 @@ steps:
       Report: outdated deps, known vulnerabilities, dependency count, any concerns.
       5-8 bullet points.
     output_var: deps_report
-    timeout_ms: 20000
+    timeout_ms: 60000
 
   - id: code-structure
     model: claude-haiku-4-5
@@ -69,7 +69,7 @@ steps:
       Report: project size, language breakdown, directory organization quality, any anti-patterns.
       5-8 bullet points.
     output_var: structure_report
-    timeout_ms: 20000
+    timeout_ms: 60000
 
   - id: test-coverage
     model: claude-haiku-4-5
@@ -85,7 +85,7 @@ steps:
       Report: test file count, testing frameworks, CI/CD setup, coverage gaps.
       5-8 bullet points.
     output_var: tests_report
-    timeout_ms: 20000
+    timeout_ms: 60000
 
   - id: security-surface
     model: claude-haiku-4-5
@@ -101,7 +101,7 @@ steps:
       Report: exposed secrets, .env handling, Docker security, .gitignore completeness.
       5-8 bullet points. Flag any CRITICAL issues.
     output_var: security_report
-    timeout_ms: 20000
+    timeout_ms: 60000
 
   # ── Wave 2: Final synthesis ──
   - id: health-score
