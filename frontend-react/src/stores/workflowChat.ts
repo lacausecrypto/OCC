@@ -110,6 +110,9 @@ RULES:
 8. Keep responses SHORT. 3-5 bullet points max.
 9. Respond in the same language as the user.
 10. When building, describe the plan briefly then use [READY_TO_BUILD].
+11. You CAN COMBINE multiple actions in one response! e.g. [ACTION:STOP] + [ACTION:DEBUG] to stop a broken execution then debug it.
+12. If an execution is running and has errors visible in the debug info, STOP it first then propose fixes with [ACTION:MODIFY].
+13. If "debug" is asked and execution is running → show live status. If errors are visible → suggest stopping + fixing.
 
 MODIFY EXISTING STEPS:
 When the user wants to modify existing steps (change prompt, model, tools, pre-tools, etc.),
@@ -133,7 +136,12 @@ NEVER:
 - Refuse to act because of missing details — use smart defaults`;
 
 
-const DEFAULT_PLANNER_PROMPT = `You are a chain planner. Given a conversation, produce a JSON plan that creates canvas nodes.
+const DEFAULT_PLANNER_PROMPT = `You are a chain planner. Given a conversation and the current canvas state, produce a JSON plan.
+
+IMPORTANT — Check the canvas context:
+- If the canvas ALREADY HAS steps → use [ACTION:MODIFY] to FIX/UPDATE existing steps. Do NOT recreate the chain.
+- If the canvas is EMPTY → create new steps.
+- If the user asks to debug/fix → only modify the broken steps, keep working ones intact.
 
 Rules:
 - Output ONLY valid JSON, no markdown fences, no commentary
@@ -142,10 +150,9 @@ Rules:
 - Use depends_on to wire steps together (array of step labels used as IDs)
 - Tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch
 - Keep prompts ACTIONABLE and SPECIFIC — include {variable} references
-- ALWAYS produce steps — never return empty. If unsure, create a reasonable default chain.
 - For pre_tools, use: web_search, http_fetch, bash, read_file, write_file, state_save, state_load, notify, email, db_query
 
-Output format:
+When CREATING new steps (empty canvas), output:
 {
   "chainName": "kebab-case-name",
   "chainDescription": "one line",
@@ -160,6 +167,17 @@ Output format:
       "preTools": [{"type": "web_search", "inject_as": "results", "query": "{input.topic}"}],
       "depends_on": []
     }
+  ]
+}
+
+When MODIFYING existing steps (non-empty canvas), output:
+{
+  "modifications": [
+    { "label": "Existing Step Name", "patch": { "prompt": "new prompt...", "model": "new-model", "tools": ["Bash"] } },
+    { "label": "Broken Step", "delete": true }
+  ],
+  "addSteps": [
+    { "type": "agent", "label": "New Step", "prompt": "...", "outputVar": "new_out", "depends_on": ["Existing Step Name"] }
   ]
 }`;
 
@@ -534,6 +552,7 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
               fullText = evt.text ?? fullText;
               inputTokens = evt.inputTokens ?? 0;
               outputTokens = evt.outputTokens ?? 0;
+              if (get().thinkingStartedAt) set({ thinkingStartedAt: null });
             } else if (evt.type === "error") {
               throw new Error(evt.error);
             }
@@ -597,7 +616,53 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
             }
           }
 
-          if (plan.steps?.length > 0) {
+          // Handle modification plan (existing canvas)
+          const parsed = plan as any;
+          if (parsed.modifications || parsed.addSteps) {
+            let modCount = 0;
+            let addCount = 0;
+            const canvasState = useCanvasStore.getState();
+
+            // Apply modifications to existing nodes
+            if (Array.isArray(parsed.modifications)) {
+              for (const mod of parsed.modifications) {
+                const node = [...canvasState.nodes.values()].find(n => n.label === mod.label);
+                if (!node) continue;
+                if (mod.delete) {
+                  canvasState.removeNode(node.id);
+                  modCount++;
+                } else if (mod.patch) {
+                  canvasState.updateNode(node.id, {
+                    ...(mod.patch.prompt != null ? { prompt: mod.patch.prompt } : {}),
+                    ...(mod.patch.model != null ? { model: mod.patch.model } : {}),
+                    ...(mod.patch.type != null ? { type: mod.patch.type } : {}),
+                    ...(mod.patch.tools != null ? { tools: mod.patch.tools } : {}),
+                  });
+                  modCount++;
+                }
+              }
+            }
+
+            // Add new steps if any
+            if (Array.isArray(parsed.addSteps) && parsed.addSteps.length > 0) {
+              const addPlan: WFPlan = { steps: parsed.addSteps };
+              const addedIds = applyPlanToCanvas(addPlan);
+              addCount = addedIds.length;
+            }
+
+            const summary = [
+              modCount > 0 ? `${modCount} step${modCount > 1 ? "s" : ""} modified` : "",
+              addCount > 0 ? `${addCount} step${addCount > 1 ? "s" : ""} added` : "",
+            ].filter(Boolean).join(", ");
+
+            set({
+              messages: get().messages.map((m) =>
+                m.id === planningMsg.id
+                  ? { ...m, content: `\u2713 ${summary || "No changes needed"}.` }
+                  : m,
+              ),
+            });
+          } else if (plan.steps?.length > 0) {
             const createdIds = applyPlanToCanvas(plan);
             set({
               messages: get().messages.map((m) =>
@@ -693,116 +758,274 @@ async function executeDetectedActions(
   const actions = [...fullText.matchAll(/\[ACTION:(\w+)\]/g)].map((m) => m[1]);
   if (actions.length === 0) return;
 
-  for (const action of actions) {
+  // Deduplicate actions (LLM sometimes emits the same tag twice)
+  const uniqueActions = [...new Set(actions)];
+
+  // If LLM already handled DEBUG+RUN combo (e.g. "no data, I'll run first"), suppress redundant DEBUG output
+  const hasRun = uniqueActions.includes("RUN");
+  const hasDebug = uniqueActions.includes("DEBUG");
+  const suppressDebugMsg = hasRun && hasDebug; // LLM chose to run → debug info is noise
+
+  for (const action of uniqueActions) {
     const sysMsg: WFMessage = {
       id: uid(), role: "system", content: "", timestamp: new Date().toISOString(),
     };
 
     switch (action) {
+      // ── RUN ──────────────────────────────────────────────────────
       case "RUN": {
         const appState = useAppStore.getState();
         const chainName = appState.canvasChainName;
         if (!chainName) {
-          sysMsg.content = "\u26A0 No chain loaded on canvas. Save the chain first.";
+          sysMsg.content = "No chain loaded on canvas. Save the chain first.";
           break;
         }
+        // Check if chain exists on backend before executing
+        try {
+          const checkRes = await fetch(`/chains/${encodeURIComponent(chainName)}`, { headers, method: "HEAD" });
+          if (!checkRes.ok) {
+            sysMsg.content = `Chain "${chainName}" not found on server. Save it first (Ctrl+S).`;
+            break;
+          }
+        } catch { /* proceed anyway */ }
+
         try {
           const res = await fetch(`/execute/${encodeURIComponent(chainName)}`, {
             method: "POST", headers, body: JSON.stringify({ input: {} }),
           });
           const data = await res.json() as { executionId?: string; error?: string };
           if (data.executionId) {
-            sysMsg.content = `\u25B6 Chain "${chainName}" started \u2014 execution ${data.executionId.slice(0, 12)}`;
-            // Auto-connect SSE + track
+            sysMsg.content = `Chain "${chainName}" started \u2014 execution ${data.executionId.slice(0, 12)}`;
             appState.startExecution(data.executionId, chainName, "chain");
           } else {
-            sysMsg.content = `\u26A0 Failed to start: ${data.error ?? "unknown error"}`;
+            sysMsg.content = `Failed to start: ${data.error ?? "unknown error"}`;
           }
         } catch (err) {
-          sysMsg.content = `\u26A0 Run failed: ${(err as Error).message}`;
+          sysMsg.content = `Run failed: ${(err as Error).message}`;
         }
         break;
       }
 
+      // ── STOP ─────────────────────────────────────────────────────
       case "STOP": {
         try {
           const { useCanvasExecStore } = await import("./canvasExec");
           const execId = useCanvasExecStore.getState().canvasExecId;
           if (!execId) {
-            sysMsg.content = "\u26A0 No running execution to stop.";
+            // Try to find running execution from backend
+            const appState = useAppStore.getState();
+            const chainName = appState.canvasChainName;
+            if (chainName) {
+              const res = await fetch(`/executions?limit=5`, { headers });
+              if (res.ok) {
+                const execs = (await res.json()) as Array<{ id: string; chainName: string; status: string }>;
+                const running = execs.find(e => e.chainName === chainName && e.status === "running");
+                if (running) {
+                  await fetch(`/executions/${encodeURIComponent(running.id)}`, { method: "DELETE", headers });
+                  sysMsg.content = `Execution ${running.id.slice(0, 12)} cancelled.`;
+                  break;
+                }
+              }
+            }
+            sysMsg.content = "No running execution to stop.";
           } else {
             await fetch(`/executions/${encodeURIComponent(execId)}`, { method: "DELETE", headers });
-            sysMsg.content = `\u25A0 Execution ${execId.slice(0, 12)} cancelled.`;
+            sysMsg.content = `Execution ${execId.slice(0, 12)} cancelled.`;
           }
         } catch (err) {
-          sysMsg.content = `\u26A0 Stop failed: ${(err as Error).message}`;
+          sysMsg.content = `Stop failed: ${(err as Error).message}`;
         }
         break;
       }
 
+      // ── DEBUG ────────────────────────────────────────────────────
       case "DEBUG": {
-        const debugInfo = buildDebugContext();
-        sysMsg.content = `\u{1F50D} Debug info:\n${debugInfo}`;
+        if (suppressDebugMsg) break;
+
+        const appState = useAppStore.getState();
+        const chainName = appState.canvasChainName || "";
+
+        try {
+          // Always fetch from backend for fresh data
+          const listRes = await fetch(`/executions?limit=10`, { headers });
+          if (!listRes.ok) throw new Error("Cannot fetch executions");
+          const execs = (await listRes.json()) as Array<{
+            id: string; chainName: string; status: string; error?: string;
+            durationMs?: number; steps?: Record<string, { status: string; error?: string; durationMs?: number; inputTokens?: number; outputTokens?: number }>;
+          }>;
+          const relevant = execs.filter(e => e.chainName === chainName);
+
+          if (relevant.length === 0) {
+            sysMsg.content = `Debug: No executions found for "${chainName}". Run the chain first.`;
+            break;
+          }
+
+          const latest = relevant[0];
+
+          // If still running, fetch full detail and show live step status
+          if (latest.status === "running") {
+            const detailRes = await fetch(`/executions/${encodeURIComponent(latest.id)}`, { headers });
+            if (detailRes.ok) {
+              const detail = await detailRes.json() as {
+                id: string; status: string; steps: Record<string, { status: string; error?: string; durationMs?: number; output?: string; inputTokens?: number; outputTokens?: number }>;
+              };
+              const stepEntries = Object.entries(detail.steps ?? {});
+              const done = stepEntries.filter(([, s]) => s.status === "done");
+              const running = stepEntries.filter(([, s]) => s.status === "running");
+              const pending = stepEntries.filter(([, s]) => s.status === "pending" || s.status === "queued");
+              const errored = stepEntries.filter(([, s]) => s.status === "error");
+
+              const lines: string[] = [
+                `Execution ${latest.id.slice(0, 12)} is **running**:`,
+                `  ${done.length} done, ${running.length} running, ${pending.length} pending${errored.length > 0 ? `, ${errored.length} errors` : ""}`,
+              ];
+              if (running.length > 0) lines.push(`  Running now: ${running.map(([id]) => id).join(", ")}`);
+              if (done.length > 0) {
+                lines.push("  Completed:");
+                for (const [id, s] of done) {
+                  const dur = s.durationMs ? `${(s.durationMs / 1000).toFixed(1)}s` : "";
+                  const tok = s.inputTokens ? `${s.inputTokens}+${s.outputTokens} tok` : "";
+                  lines.push(`    \u2713 ${id} ${dur} ${tok}`);
+                }
+              }
+              if (errored.length > 0) {
+                lines.push("  Errors:");
+                for (const [id, s] of errored) lines.push(`    \u2717 ${id}: ${s.error?.slice(0, 100)}`);
+              }
+              lines.push("", "Chain is still running. Ask again when it finishes for full debug.");
+              sysMsg.content = `Debug:\n${lines.join("\n")}`;
+              break;
+            }
+          }
+
+          // Finished execution — show full debug
+          const lines: string[] = [];
+          for (const e of relevant.slice(0, 3)) {
+            const dur = e.durationMs ? `${(e.durationMs / 1000).toFixed(1)}s` : "?";
+            const stepEntries = Object.entries(e.steps ?? {});
+            const errors = stepEntries.filter(([, s]) => s.status === "error");
+            const done = stepEntries.filter(([, s]) => s.status === "done");
+            const totalTokens = stepEntries.reduce((sum, [, s]) => sum + (s.inputTokens ?? 0) + (s.outputTokens ?? 0), 0);
+
+            lines.push(`**${e.status}** (${dur}) \u2014 ${done.length}/${stepEntries.length} steps${totalTokens > 0 ? `, ${totalTokens} tokens` : ""}`);
+
+            if (errors.length > 0) {
+              for (const [id, s] of errors) {
+                lines.push(`  \u2717 ${id}: ${s.error?.slice(0, 120)}`);
+              }
+            }
+            if (e.error) lines.push(`  Chain error: ${e.error.slice(0, 120)}`);
+
+            // Show step timing for done steps
+            if (done.length > 0 && done.length <= 10) {
+              for (const [id, s] of done) {
+                const sdur = s.durationMs ? `${(s.durationMs / 1000).toFixed(1)}s` : "";
+                const stok = s.inputTokens ? `${s.inputTokens}+${s.outputTokens}` : "";
+                lines.push(`  \u2713 ${id} ${sdur} ${stok}`);
+              }
+            }
+          }
+          sysMsg.content = `Debug: ${relevant.length} execution(s) for "${chainName}":\n${lines.join("\n")}`;
+        } catch {
+          // Fallback to local monitor
+          const debugInfo = buildDebugContext();
+          sysMsg.content = `Debug:\n${debugInfo}`;
+        }
         break;
       }
 
+      // ── ANALYZE ──────────────────────────────────────────────────
       case "ANALYZE": {
         const canvasState = useCanvasStore.getState();
         const nodes = [...canvasState.nodes.values()];
         const edges = [...canvasState.edges.values()];
         if (nodes.length === 0) {
-          sysMsg.content = "\u26A0 Canvas is empty \u2014 nothing to analyze.";
+          sysMsg.content = "Canvas is empty \u2014 nothing to analyze.";
           break;
         }
-        // Quick analysis
         const issues: string[] = [];
-        const noPrompt = nodes.filter((n) => !n.prompt || n.prompt.startsWith("TODO"));
+        const noPrompt = nodes.filter((n) => !n.prompt || n.prompt.trim() === "" || n.prompt.startsWith("TODO"));
         if (noPrompt.length > 0) issues.push(`${noPrompt.length} step(s) missing prompts: ${noPrompt.map((n) => n.label).join(", ")}`);
         const orphans = nodes.filter((n) => !edges.some((e) => e.from === n.id || e.to === n.id));
         if (orphans.length > 1) issues.push(`${orphans.length} disconnected steps: ${orphans.map((n) => n.label).join(", ")}`);
         const noOutput = nodes.filter((n) => !n.outputVar);
-        if (noOutput.length > 0) issues.push(`${noOutput.length} step(s) missing output variable`);
+        if (noOutput.length > 0) issues.push(`${noOutput.length} step(s) missing output variable: ${noOutput.map((n) => n.label).join(", ")}`);
+        // Duplicate labels
+        const labels = nodes.map(n => n.label.toLowerCase());
+        const dupes = labels.filter((l, i) => labels.indexOf(l) !== i);
+        if (dupes.length > 0) issues.push(`Duplicate labels: ${[...new Set(dupes)].join(", ")}`);
         // Parallel detection
         const roots = nodes.filter((n) => !edges.some((e) => e.to === n.id));
-        const parallelWaves = roots.length;
+        // Model mix
+        const models = [...new Set(nodes.map(n => n.model || "default").filter(Boolean))];
 
-        sysMsg.content = `\u{1F4CA} Analysis: ${nodes.length} steps, ${edges.length} connections, ${parallelWaves} parallel root(s)\n${issues.length > 0 ? "\u26A0 Issues:\n" + issues.map((i) => `  \u2022 ${i}`).join("\n") : "\u2713 No issues found."}`;
+        sysMsg.content = `Analysis: ${nodes.length} steps, ${edges.length} connections, ${roots.length} root(s)\nModels: ${models.join(", ")}\n${issues.length > 0 ? "Issues:\n" + issues.map((i) => `  \u2022 ${i}`).join("\n") : "No issues found."}`;
         break;
       }
 
+      // ── DRY_RUN ──────────────────────────────────────────────────
       case "DRY_RUN": {
         const appState = useAppStore.getState();
         const chainName = appState.canvasChainName;
         if (!chainName) {
-          sysMsg.content = "\u26A0 No chain loaded. Save first.";
+          sysMsg.content = "No chain loaded. Save first.";
           break;
         }
         try {
-          const res = await fetch(`/chains/${encodeURIComponent(chainName)}/stats`, { headers });
-          const stats = await res.json() as { totalRuns?: number; avgDurationMs?: number; successRate?: number };
           const canvasState = useCanvasStore.getState();
           const nodes = [...canvasState.nodes.values()];
-          const haiku = nodes.filter((n) => n.model?.includes("haiku")).length;
-          const sonnet = nodes.filter((n) => !n.model || n.model?.includes("sonnet")).length;
-          const opus = nodes.filter((n) => n.model?.includes("opus")).length;
-          const estCost = (haiku * 0.005 + sonnet * 0.04 + opus * 0.15).toFixed(3);
+          const edges = [...canvasState.edges.values()];
 
-          sysMsg.content = `\u{1F4CB} Dry-run: "${chainName}"\n\u2022 ${nodes.length} steps (${haiku} haiku, ${sonnet} sonnet, ${opus} opus)\n\u2022 Estimated cost: ~$${estCost}\n\u2022 History: ${stats.totalRuns ?? 0} runs, ${stats.successRate != null ? stats.successRate.toFixed(0) + "% success" : "no data"}, avg ${stats.avgDurationMs ? (stats.avgDurationMs / 1000).toFixed(1) + "s" : "?"}`;
+          // Model breakdown
+          const modelCounts: Record<string, number> = {};
+          for (const n of nodes) {
+            const m = n.model || "claude-sonnet-4-6";
+            modelCounts[m] = (modelCounts[m] ?? 0) + 1;
+          }
+          // Cost estimation
+          const costPerModel: Record<string, number> = {
+            "claude-haiku-4-5": 0.003, "claude-sonnet-4-6": 0.04, "claude-opus-4-6": 0.15,
+          };
+          let estCost = 0;
+          for (const [model, count] of Object.entries(modelCounts)) {
+            const perStep = Object.entries(costPerModel).find(([k]) => model.includes(k.split("-")[1]))?.[1] ?? 0.04;
+            estCost += perStep * count;
+          }
+          // Parallel waves (rough estimate)
+          const roots = nodes.filter((n) => !edges.some((e) => e.to === n.id));
+          // Fetch stats from backend
+          let statsLine = "";
+          try {
+            const res = await fetch(`/chains/${encodeURIComponent(chainName)}/stats`, { headers });
+            if (res.ok) {
+              const stats = await res.json() as { totalRuns?: number; avgDurationMs?: number; successRate?: number };
+              if (stats.totalRuns) {
+                statsLine = `\nHistory: ${stats.totalRuns} runs, ${stats.successRate?.toFixed(0) ?? "?"}% success, avg ${stats.avgDurationMs ? (stats.avgDurationMs / 1000).toFixed(1) + "s" : "?"}`;
+              }
+            }
+          } catch { /* no stats available */ }
+
+          const modelBreakdown = Object.entries(modelCounts).map(([m, c]) => `${c}x ${m}`).join(", ");
+          sysMsg.content = `Dry-run: "${chainName}"\n\u2022 ${nodes.length} steps, ${roots.length} parallel root(s)\n\u2022 Models: ${modelBreakdown}\n\u2022 Estimated cost: ~$${estCost.toFixed(3)}${statsLine}`;
         } catch {
-          sysMsg.content = "\u26A0 Cannot fetch chain stats.";
+          sysMsg.content = "Cannot compute dry-run.";
         }
         break;
       }
 
+      // ── MODIFY ───────────────────────────────────────────────────
       case "MODIFY": {
-        // Parse modification JSON from the full text
-        const jsonMatch = fullText.match(/```json\s*([\s\S]*?)```/) ?? fullText.match(/(\{[\s\S]*"modifications"[\s\S]*\})/);
+        // Parse JSON: try ```json blocks first, then raw JSON with "modifications"
+        const jsonMatch = fullText.match(/```json\s*([\s\S]*?)```/)
+          ?? fullText.match(/```\s*([\s\S]*?)```/)
+          ?? fullText.match(/(\{[\s\S]*"modifications"[\s\S]*\})/);
         if (!jsonMatch) {
-          sysMsg.content = "\u26A0 Could not parse modification plan.";
+          sysMsg.content = "Could not parse modification plan. Expected JSON with \"modifications\" array.";
           break;
         }
         try {
-          const plan = JSON.parse(jsonMatch[1].trim()) as {
+          const raw = jsonMatch[1].trim();
+          const plan = JSON.parse(raw) as {
             modifications: Array<{
               stepLabel: string;
               patch?: { prompt?: string; model?: string; type?: string; tools?: string[]; outputVar?: string; preTools?: Record<string, unknown>[] };
@@ -810,16 +1033,24 @@ async function executeDetectedActions(
             }>;
           };
 
+          if (!Array.isArray(plan.modifications) || plan.modifications.length === 0) {
+            sysMsg.content = "Modification plan is empty.";
+            break;
+          }
+
           const canvas = useCanvasStore.getState();
           canvas.pushUndo();
           const nodes = [...canvas.nodes.values()];
           let modified = 0;
           let deleted = 0;
+          const notFound: string[] = [];
 
           for (const mod of plan.modifications) {
-            // Find node by label (case-insensitive)
             const node = nodes.find((n) => n.label.toLowerCase() === mod.stepLabel.toLowerCase());
-            if (!node) continue;
+            if (!node) {
+              notFound.push(mod.stepLabel);
+              continue;
+            }
 
             if (mod.delete) {
               canvas.removeNode(node.id);
@@ -842,15 +1073,19 @@ async function executeDetectedActions(
             }
           }
 
-          sysMsg.content = `\u270F Modified ${modified} step(s)${deleted > 0 ? `, deleted ${deleted}` : ""}`;
+          const parts = [];
+          if (modified > 0) parts.push(`${modified} step(s) modified`);
+          if (deleted > 0) parts.push(`${deleted} step(s) deleted`);
+          if (notFound.length > 0) parts.push(`${notFound.length} not found: ${notFound.join(", ")}`);
+          sysMsg.content = parts.join(", ") || "No changes applied.";
         } catch (err) {
-          sysMsg.content = `\u26A0 Modification failed: ${(err as Error).message}`;
+          sysMsg.content = `Modification failed: ${(err as Error).message}`;
         }
         break;
       }
 
       default:
-        sysMsg.content = `\u26A0 Unknown action: ${action}`;
+        sysMsg.content = `Unknown action: ${action}`;
     }
 
     if (sysMsg.content) {

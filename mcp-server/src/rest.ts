@@ -2348,8 +2348,12 @@ app.post("/workflow-chat", async (req: Request, res: Response) => {
     try {
       let fullOutput = "";
       const execId = `wfc_chat_${Date.now()}`;
+      // Inject canvas context so chat LLM can see the current chain state
+      const canvasSection = canvasContext && !canvasContext.includes("Canvas is empty")
+        ? `\n\n## Current Canvas State\n${canvasContext}`
+        : "";
       const result = await runClaudeForWfChat(
-        `${sysPrompt}\n\n---\n\n${fullPrompt}`,
+        `${sysPrompt}${canvasSection}\n\n---\n\n${fullPrompt}`,
         step as any,
         (chunk: string) => {
           fullOutput += chunk;

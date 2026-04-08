@@ -3,8 +3,122 @@
  * Two-stage: chat (architect) -> plan (creates canvas nodes).
  * Configurable prompts, models, and animated Unicode loader.
  */
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useWorkflowChatStore, type WFMessage } from "../../stores/workflowChat";
+
+/** Render markdown: **bold**, *italic*, `code`, ```blocks```, ###headings, - lists, > quotes */
+function renderMarkdown(text: string): JSX.Element {
+  const lines = text.split("\n");
+  const elements: JSX.Element[] = [];
+  let inCodeBlock = false;
+  let codeBuffer: string[] = [];
+  const codeStyle = { background: "var(--glass-tint)", padding: "1px 5px", borderRadius: 3, fontSize: "0.88em", fontFamily: "monospace" } as const;
+  const preStyle = { background: "var(--glass-tint)", padding: "6px 8px", borderRadius: 6, fontSize: 10, overflowX: "auto" as const, margin: "4px 0", whiteSpace: "pre-wrap" as const, fontFamily: "monospace" };
+
+  /** Parse inline markdown: code first (to protect content), then bold, italic, links */
+  const renderInline = (line: string, key: number): JSX.Element => {
+    // 1. Extract inline code spans first (protect their content from further parsing)
+    const codeSegments: string[] = [];
+    const withCodePlaceholders = line.replace(/`([^`]+)`/g, (_, code) => {
+      codeSegments.push(code);
+      return `\x00CODE${codeSegments.length - 1}\x00`;
+    });
+
+    // 2. Parse bold, italic, bold+italic on the protected string
+    const parts: JSX.Element[] = [];
+    let idx = 0;
+    // Order matters: bold+italic (***) → bold (**) → italic (*)
+    const regex = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|__(.+?)__|_(.+?)_)/g;
+    let match: RegExpExecArray | null;
+    let lastIndex = 0;
+
+    const restoreCode = (s: string): JSX.Element => {
+      // Replace code placeholders back with styled elements
+      const codeParts: (string | JSX.Element)[] = [];
+      let remaining = s;
+      let codeMatch: RegExpExecArray | null;
+      const codeRe = /\x00CODE(\d+)\x00/g;
+      let cLast = 0;
+      while ((codeMatch = codeRe.exec(remaining)) !== null) {
+        if (codeMatch.index > cLast) codeParts.push(remaining.slice(cLast, codeMatch.index));
+        codeParts.push(<code key={`c${idx++}`} style={codeStyle}>{codeSegments[parseInt(codeMatch[1])]}</code>);
+        cLast = codeRe.lastIndex;
+      }
+      if (cLast < remaining.length) codeParts.push(remaining.slice(cLast));
+      return <>{codeParts}</>;
+    };
+
+    while ((match = regex.exec(withCodePlaceholders)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(<span key={idx++}>{restoreCode(withCodePlaceholders.slice(lastIndex, match.index))}</span>);
+      }
+      if (match[2]) parts.push(<strong key={idx++}><em>{restoreCode(match[2])}</em></strong>); // ***bold italic***
+      else if (match[3]) parts.push(<strong key={idx++}>{restoreCode(match[3])}</strong>); // **bold**
+      else if (match[4]) parts.push(<em key={idx++}>{restoreCode(match[4])}</em>); // *italic*
+      else if (match[5]) parts.push(<strong key={idx++}>{restoreCode(match[5])}</strong>); // __bold__
+      else if (match[6]) parts.push(<em key={idx++}>{restoreCode(match[6])}</em>); // _italic_
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < withCodePlaceholders.length) {
+      parts.push(<span key={idx++}>{restoreCode(withCodePlaceholders.slice(lastIndex))}</span>);
+    }
+    return <span key={key}>{parts.length > 0 ? parts : restoreCode(withCodePlaceholders)}</span>;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Code fence toggle
+    if (line.startsWith("```")) {
+      if (inCodeBlock) {
+        elements.push(<pre key={i} style={preStyle}>{codeBuffer.join("\n")}</pre>);
+        codeBuffer = [];
+      }
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+    if (inCodeBlock) { codeBuffer.push(line); continue; }
+
+    // Headings (### → H3, ## → H2, # → H1)
+    const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const size = level === 1 ? 13 : level === 2 ? 12 : 11;
+      elements.push(<div key={i} style={{ fontWeight: 700, fontSize: size, marginTop: 6, marginBottom: 2 }}>{renderInline(headingMatch[2], i)}</div>);
+    }
+    // Bullet lists (-, *, +)
+    else if (/^[\-*+]\s/.test(line)) {
+      elements.push(<div key={i} style={{ paddingLeft: 12, textIndent: -8 }}><span style={{ opacity: 0.5 }}>{"\u2022"} </span>{renderInline(line.replace(/^[\-*+]\s/, ""), i)}</div>);
+    }
+    // Numbered lists
+    else if (/^\d+\.\s/.test(line)) {
+      const num = line.match(/^(\d+)\./)?.[1];
+      elements.push(<div key={i} style={{ paddingLeft: 12, textIndent: -12 }}><span style={{ fontWeight: 600, opacity: 0.6 }}>{num}. </span>{renderInline(line.replace(/^\d+\.\s/, ""), i)}</div>);
+    }
+    // Blockquotes
+    else if (line.startsWith("> ")) {
+      elements.push(<div key={i} style={{ borderLeft: "2px solid var(--m-accent)", paddingLeft: 8, marginLeft: 2, opacity: 0.85, fontStyle: "italic" }}>{renderInline(line.slice(2), i)}</div>);
+    }
+    // Horizontal rule
+    else if (/^---+$/.test(line.trim())) {
+      elements.push(<hr key={i} style={{ border: "none", borderTop: "1px solid var(--m-border)", margin: "6px 0" }} />);
+    }
+    // Empty line
+    else if (line.trim() === "") {
+      elements.push(<div key={i} style={{ height: 4 }} />);
+    }
+    // Regular text
+    else {
+      elements.push(<div key={i}>{renderInline(line, i)}</div>);
+    }
+  }
+
+  // Close unclosed code block
+  if (codeBuffer.length > 0) {
+    elements.push(<pre key="code-end" style={preStyle}>{codeBuffer.join("\n")}</pre>);
+  }
+  return <>{elements}</>;
+}
 
 // ─── CSS Keyframes (injected once) ───────────────────────────────────────────
 
@@ -120,7 +234,7 @@ function ThinkingLoader({ startedAt }: { startedAt: number }) {
 
 interface ProviderModel { provider: string; providerName: string; model: string; }
 
-function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
+function ConfigPanel() {
   const {
     chatModel, plannerModel, chatSystemPrompt, plannerSystemPrompt,
     setChatModel, setPlannerModel, setChatSystemPrompt, setPlannerSystemPrompt,
@@ -129,13 +243,21 @@ function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
 
   const [tab, setTab] = useState<"chat" | "planner">("chat");
 
-  const modelOptions = allModels.length > 0
-    ? allModels
-    : [
-      { model: "claude-haiku-4-5", providerName: "Anthropic" },
-      { model: "claude-sonnet-4-6", providerName: "Anthropic" },
-      { model: "claude-opus-4-6", providerName: "Anthropic" },
-    ].map((m) => ({ ...m, provider: "claude" }));
+  // Fetch models directly when config panel opens (not relying on parent)
+  const [modelOptions, setModelOptions] = useState<ProviderModel[]>([]);
+  useEffect(() => {
+    fetch("/providers/models")
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) setModelOptions(data);
+        else setModelOptions([
+          { provider: "claude", providerName: "Anthropic", model: "claude-haiku-4-5" },
+          { provider: "claude", providerName: "Anthropic", model: "claude-sonnet-4-6" },
+          { provider: "claude", providerName: "Anthropic", model: "claude-opus-4-6" },
+        ]);
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <div style={{
@@ -182,7 +304,7 @@ function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
                 borderRadius: 6, color: "var(--m-text)",
               }}>
               {modelOptions.map((m) => (
-                <option key={m.model} value={m.model}>{m.model}</option>
+                <option key={`${m.provider}-${m.model}`} value={m.model}>{m.model} ({m.providerName})</option>
               ))}
             </select>
 
@@ -209,7 +331,7 @@ function ConfigPanel({ allModels }: { allModels: ProviderModel[] }) {
                 borderRadius: 6, color: "var(--m-text)",
               }}>
               {modelOptions.map((m) => (
-                <option key={m.model} value={m.model}>{m.model}</option>
+                <option key={`${m.provider}-${m.model}`} value={m.model}>{m.model} ({m.providerName})</option>
               ))}
             </select>
 
@@ -265,7 +387,7 @@ function MessageBubble({ msg }: { msg: WFMessage }) {
           boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
         }),
       }}>
-        {msg.content.replace(/\s*\[READY_TO_BUILD\]\s*/g, "").trim()}
+        {renderMarkdown(msg.content.replace(/\s*\[READY_TO_BUILD\]\s*/g, "").replace(/\s*\[ACTION:\w+\]\s*/g, "").trim())}
       </div>
       <div style={{
         fontSize: 9, color: "var(--m-text2)", marginTop: 3, padding: "0 4px",
@@ -274,7 +396,7 @@ function MessageBubble({ msg }: { msg: WFMessage }) {
       }}>
         <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
         {msg.inputTokens != null && (
-          <span style={{ opacity: 0.7 }}>{msg.inputTokens}+{msg.outputTokens} tok</span>
+          <span style={{ opacity: 0.7 }} title={`Input: ${msg.inputTokens} tokens, Output: ${msg.outputTokens} tokens`}>{msg.inputTokens}+{msg.outputTokens} tok</span>
         )}
         {msg.createdNodes && msg.createdNodes.length > 0 && (
           <span style={{ color: "var(--c-success)", fontWeight: 600 }}>
@@ -310,22 +432,16 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Dynamic model list
-  const [allModels, setAllModels] = useState<ProviderModel[]>([]);
-  useEffect(() => {
-    fetch("/providers/models")
-      .then((r) => r.ok ? r.json() : [])
-      .then((data) => { if (Array.isArray(data)) setAllModels(data); })
-      .catch(() => {});
-  }, []);
-
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streaming]);
 
-  // Focus input on mount
+  // Focus input on mount + after streaming ends
   useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    if (!streaming) inputRef.current?.focus();
+  }, [streaming]);
 
   const handleSend = useCallback(() => {
     if (!input.trim() || streaming) return;
@@ -401,7 +517,7 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
 
       {/* Chat column */}
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, position: "relative", overflow: "hidden" }}>
-      {configOpen && <ConfigPanel allModels={allModels} />}
+      {configOpen && <ConfigPanel />}
 
       {/* Header */}
       <div style={{
@@ -437,8 +553,11 @@ export function WorkflowChat({ onClose }: { onClose?: () => void }) {
             {"\u2699\uFE0F"}
           </button>
           {messages.length > 0 && (
-            <button onClick={clearMessages} title="Clear"
-              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--c-error)", fontSize: 11, padding: 0, lineHeight: 1, opacity: 0.6 }}>
+            <button onClick={() => { if (confirm("Clear all messages in this session?")) clearMessages(); }} title="Clear messages"
+              aria-label="Clear messages"
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--c-error)", fontSize: 11, padding: "2px 4px", lineHeight: 1, opacity: 0.6, borderRadius: 4 }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.6"; }}>
               {"\u{1F5D1}"}
             </button>
           )}
