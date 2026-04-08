@@ -724,6 +724,140 @@ export async function executeSinglePreTool(
       }
       break;
     }
+
+    case "image_generate": {
+      const imgPrompt = resolveVariables(tool.query ?? tool.content ?? "", vars);
+      if (!imgPrompt) throw new Error("image_generate requires a prompt (query or content field)");
+
+      const imgProvider = tool.image_provider ?? "openai";
+      const imgFormat = tool.image_format ?? "png";
+      const imgSize = tool.image_size ?? "1024x1024";
+      const imgDir = path.join(os.tmpdir(), "occ-images");
+      if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
+      const imgFilename = `img_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.${imgFormat}`;
+      const imgPath = path.join(imgDir, imgFilename);
+
+      if (imgProvider === "openai") {
+        // OpenAI DALL-E 3 / gpt-image-1
+        const { getProviderFull } = await import("./providers.js");
+        const provider = getProviderFull("openai");
+        const apiKey = provider?.apiKey ?? process.env.OPENAI_API_KEY ?? "";
+        if (!apiKey) throw new Error("image_generate (openai): OpenAI provider not configured or no API key");
+
+        const model = tool.image_model ?? "dall-e-3";
+        const body: Record<string, unknown> = {
+          model,
+          prompt: imgPrompt,
+          n: 1,
+          size: imgSize,
+          response_format: "b64_json",
+        };
+        if (tool.image_quality) body.quality = tool.image_quality;
+        if (tool.image_style) body.style = tool.image_style;
+
+        const resp = await fetch("https://api.openai.com/v1/images/generations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => resp.statusText);
+          throw new Error(`image_generate (openai) ${resp.status}: ${errText.slice(0, 200)}`);
+        }
+        const data = await resp.json() as { data: Array<{ b64_json?: string; url?: string; revised_prompt?: string }> };
+        const imgData = data.data?.[0];
+        if (imgData?.b64_json) {
+          fs.writeFileSync(imgPath, Buffer.from(imgData.b64_json, "base64"));
+        } else if (imgData?.url) {
+          const imgResp = await fetch(imgData.url);
+          fs.writeFileSync(imgPath, Buffer.from(await imgResp.arrayBuffer()));
+        } else {
+          throw new Error("image_generate (openai): no image data in response");
+        }
+        const revisedPrompt = imgData?.revised_prompt ?? "";
+        onLog(`image_generate: saved ${imgPath} (${imgSize}, ${model})`, "info");
+        result = JSON.stringify({
+          path: imgPath,
+          url: `/images/${imgFilename}`,
+          format: imgFormat,
+          size: imgSize,
+          model,
+          provider: "openai",
+          revised_prompt: revisedPrompt,
+        });
+
+      } else if (imgProvider === "huggingface") {
+        // HuggingFace Inference API — returns raw binary image
+        const model = tool.image_model ?? "black-forest-labs/FLUX.1-schnell";
+        const hfToken = process.env.HF_TOKEN ?? "";
+        const hfHeaders: Record<string, string> = { "Content-Type": "application/json" };
+        if (hfToken) hfHeaders["Authorization"] = `Bearer ${hfToken}`;
+
+        const body: Record<string, unknown> = { inputs: imgPrompt };
+        if (tool.negative_prompt) body.negative_prompt = tool.negative_prompt;
+
+        const resp = await fetch(`https://router.huggingface.co/models/${model}`, {
+          method: "POST",
+          headers: hfHeaders,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => resp.statusText);
+          throw new Error(`image_generate (huggingface) ${resp.status}: ${errText.slice(0, 200)}`);
+        }
+        // Response is raw binary image data
+        const buffer = Buffer.from(await resp.arrayBuffer());
+        fs.writeFileSync(imgPath, buffer);
+        onLog(`image_generate: saved ${imgPath} (HuggingFace ${model}, ${buffer.length} bytes)`, "info");
+        result = JSON.stringify({
+          path: imgPath,
+          url: `/images/${imgFilename}`,
+          format: imgFormat,
+          size: imgSize,
+          model,
+          provider: "huggingface",
+        });
+
+      } else if (imgProvider === "stability") {
+        // Stability AI — multipart form-data
+        const apiKey = process.env.STABILITY_API_KEY ?? "";
+        if (!apiKey) throw new Error("image_generate (stability): STABILITY_API_KEY env var required");
+        const model = tool.image_model ?? "sd3";
+
+        const formBody = new FormData();
+        formBody.append("prompt", imgPrompt);
+        formBody.append("output_format", imgFormat);
+        if (tool.negative_prompt) formBody.append("negative_prompt", tool.negative_prompt);
+        if (tool.image_size) formBody.append("aspect_ratio", imgSize.includes("x") ? "1:1" : imgSize);
+
+        const resp = await fetch(`https://api.stability.ai/v2beta/stable-image/generate/${model}`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${apiKey}`, "Accept": "image/*" },
+          body: formBody,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => resp.statusText);
+          throw new Error(`image_generate (stability) ${resp.status}: ${errText.slice(0, 200)}`);
+        }
+        const buffer = Buffer.from(await resp.arrayBuffer());
+        fs.writeFileSync(imgPath, buffer);
+        onLog(`image_generate: saved ${imgPath} (Stability ${model}, ${buffer.length} bytes)`, "info");
+        result = JSON.stringify({
+          path: imgPath,
+          url: `/images/${imgFilename}`,
+          format: imgFormat,
+          model,
+          provider: "stability",
+        });
+
+      } else {
+        throw new Error(`image_generate: unsupported provider "${imgProvider}". Use openai, huggingface, or stability.`);
+      }
+      break;
+    }
   }
 
   // Store in cache
@@ -756,19 +890,31 @@ export async function executePreTools(
   executionId?: string,
   step?: ChainStep,
   claudeRunner?: ClaudeRunner,
+  /** Set of denied tool IDs (e.g. "pre:bash", "mcp:sports-hub"). Pass "*" to block all. */
+  deniedSet?: Set<string>,
 ): Promise<Record<string, string>> {
   const results: Record<string, string> = {};
+
+  // Filter out denied pre-tools and MCP calls
+  const filtered = deniedSet && deniedSet.size > 0
+    ? preTools.filter((t) => {
+        if (deniedSet.has("*")) { onLog(`[security] All pre-tools blocked for this model`, "warn"); return false; }
+        if (deniedSet.has(`pre:${t.type}`)) { onLog(`[security] Pre-tool "${t.type}" denied for this model`, "warn"); return false; }
+        if (t.type === "mcp_call" && t.server && deniedSet.has(`mcp:${t.server}`)) { onLog(`[security] MCP server "${t.server}" denied for this model`, "warn"); return false; }
+        return true;
+      })
+    : preTools;
 
   // Merge vars so pre-tool B can use output of pre-tool A (chaining)
   const liveVars = { ...vars };
 
   // Split into sequential and parallel groups
   let i = 0;
-  while (i < preTools.length) {
+  while (i < filtered.length) {
     // Collect consecutive parallel pre-tools
     const parallelBatch: PreTool[] = [];
-    while (i < preTools.length && preTools[i].parallel) {
-      parallelBatch.push(preTools[i]);
+    while (i < filtered.length && filtered[i].parallel) {
+      parallelBatch.push(filtered[i]);
       i++;
     }
 
@@ -784,8 +930,8 @@ export async function executePreTools(
     }
 
     // Execute next sequential pre-tool (if any)
-    if (i < preTools.length && !preTools[i].parallel) {
-      const tool = preTools[i];
+    if (i < filtered.length && !filtered[i].parallel) {
+      const tool = filtered[i];
       const result = await executePreToolWithRetry(tool, liveVars, onLog, execution, executionId, step, claudeRunner);
       results[tool.inject_as] = result;
       liveVars[tool.inject_as] = result; // Chain: available to next pre-tool

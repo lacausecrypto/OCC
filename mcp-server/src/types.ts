@@ -15,7 +15,8 @@ export type PreToolType =
   // Tier 2: Strong differentiation
   | "semantic_cache" | "screenshot" | "sandbox_exec" | "cost_gate" | "ast_parse"
   // Tier 3: Forward-looking
-  | "embed_compare" | "graph_query" | "parallel_fetch" | "template_render" | "approval_request";
+  | "embed_compare" | "graph_query" | "parallel_fetch" | "template_render" | "approval_request"
+  | "image_generate";
 
 export interface PreTool {
   type: PreToolType;
@@ -114,6 +115,14 @@ export interface PreTool {
   title?: string;             // approval_request: approval title
   description?: string;       // approval_request: description
   expires_hours?: number;     // approval_request: expiry (default: 24)
+  // image_generate
+  image_provider?: "openai" | "huggingface" | "stability"; // image gen provider
+  image_model?: string;         // model ID (e.g. "dall-e-3", "gpt-image-1", "black-forest-labs/FLUX.1-schnell")
+  image_size?: string;          // e.g. "1024x1024", "512x512"
+  image_quality?: string;       // "low" | "medium" | "high" | "standard" | "hd"
+  image_style?: string;         // "vivid" | "natural" (OpenAI only)
+  negative_prompt?: string;     // what to avoid (HuggingFace/Stability)
+  image_format?: "png" | "jpeg" | "webp"; // output format (default: png)
   // Error handling
   on_error?: "inject" | "skip" | "fail"; // What to do when pre-tool fails (default: inject)
   // Timeout & retry (per pre-tool)
@@ -125,7 +134,7 @@ export interface PreTool {
   parallel?: boolean;     // run in parallel with other parallel:true pre-tools (default: false)
 }
 
-export type StepType = "agent" | "router" | "gate" | "evaluator" | "transform" | "loop" | "merge" | "browser" | "subchain" | "debate" | "webhook";
+export type StepType = "agent" | "router" | "gate" | "evaluator" | "transform" | "loop" | "merge" | "browser" | "subchain" | "debate" | "webhook" | "image_gen";
 
 export interface RetryConfig {
   max: number;           // max retry attempts (default 1 = no retry)

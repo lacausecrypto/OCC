@@ -800,6 +800,27 @@ app.get("/executions", (req, res) => {
   );
 });
 
+// GET /images/:filename → serve generated images from occ-images temp dir
+app.get("/images/:filename", (req, res) => {
+  const filename = req.params.filename.replace(/[\/\\:*?"<>|\x00]/g, "");
+  const imgDir = path.join(os.tmpdir(), "occ-images");
+  const imgPath = path.join(imgDir, filename);
+
+  // Security: ensure resolved path is inside imgDir
+  if (!path.resolve(imgPath).startsWith(path.resolve(imgDir))) {
+    return res.status(403).json({ error: "Path not allowed" });
+  }
+  if (!fs.existsSync(imgPath)) {
+    return res.status(404).json({ error: "Image not found" });
+  }
+
+  const ext = path.extname(filename).toLowerCase();
+  const mime: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
+  res.setHeader("Content-Type", mime[ext] ?? "application/octet-stream");
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  fs.createReadStream(imgPath).pipe(res);
+});
+
 // GET /download?path=... → serve a local file (restricted to /tmp and WORKSPACE_DIR)
 app.get("/download", (req, res) => {
   const filePath = decodeURIComponent((req.query.path as string) ?? "");

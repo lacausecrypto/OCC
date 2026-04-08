@@ -39,6 +39,7 @@ import {
   setGateTimer,
 } from "./gate-manager.js";
 import { executePreTools } from "./pretool-executor.js";
+import { getModelDeniedSet } from "./providers.js";
 
 // ─── In-memory execution store ────────────────────────────────────────────────
 
@@ -1141,11 +1142,12 @@ async function executeStep(
               retry: template?.retry ?? step.retry,
             };
 
-            // Execute pre-tools for this iteration
+            // Execute pre-tools for this iteration (with security filtering)
             if (iterStep.pre_tools && iterStep.pre_tools.length > 0) {
+              const iterDenied = getModelDeniedSet(iterStep.model ?? step.model ?? "claude-sonnet-4-6");
               const preResults = await executePreTools(iterStep.pre_tools, iterVars, (message, level) => {
                 emit({ type: "step_log", executionId, stepId, message: `[iter ${itemIdx}] ${message}`, level });
-              }, execution, executionId, step, runClaudeTracked);
+              }, execution, executionId, step, runClaudeTracked, iterDenied);
               // Merge pre-tool results — guard against prototype pollution
               for (const [k, v] of Object.entries(preResults)) {
                 if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
@@ -1474,10 +1476,73 @@ async function executeStep(
     return;
   }
 
+  // Image generation: call image API directly (no LLM), save to file
+  if (stepType === "image_gen") {
+    const imgStart = Date.now();
+    const imgPrompt = resolveVariables(step.prompt, vars);
+    const imgProvider = (step as any).image_provider ?? "openai";
+    const imgModel = (step as any).image_model;
+    const imgSize = (step as any).image_size ?? "1024x1024";
+    const imgFormat = (step as any).image_format ?? "png";
+    const imgQuality = (step as any).image_quality;
+    const imgStyle = (step as any).image_style;
+    const negativePrompt = (step as any).negative_prompt;
+
+    // Reuse the pre-tool implementation
+    const { executeSinglePreTool } = await import("./pretool-executor.js");
+    const imageTool = {
+      type: "image_generate" as const,
+      inject_as: "_img",
+      query: imgPrompt,
+      image_provider: imgProvider,
+      image_model: imgModel,
+      image_size: imgSize,
+      image_format: imgFormat,
+      image_quality: imgQuality,
+      image_style: imgStyle,
+      negative_prompt: negativePrompt,
+    };
+
+    const imageResult = await executeSinglePreTool(imageTool as any, vars, onLog, execution, executionId, step);
+    const imgDuration = Date.now() - imgStart;
+
+    // Parse the result JSON to get the image info
+    let imgInfo: { path: string; url: string; format: string; model: string; provider: string; revised_prompt?: string };
+    try {
+      imgInfo = JSON.parse(imageResult);
+    } catch {
+      imgInfo = { path: imageResult, url: imageResult, format: imgFormat, model: imgModel ?? "unknown", provider: imgProvider };
+    }
+
+    // Output: the image URL (usable in subsequent steps) + metadata
+    const output = JSON.stringify({
+      image_url: imgInfo.url,
+      image_path: imgInfo.path,
+      format: imgInfo.format,
+      model: imgInfo.model,
+      provider: imgInfo.provider,
+      prompt: imgPrompt,
+      revised_prompt: imgInfo.revised_prompt,
+    });
+
+    stepResult.status = "done";
+    stepResult.output = output;
+    stepResult.finishedAt = new Date().toISOString();
+    stepResult.durationMs = imgDuration;
+    vars[step.output_var] = output;
+
+    emit({ type: "step_done", executionId, stepId, durationMs: imgDuration });
+    onLog(`image_gen: ${imgProvider}/${imgInfo.model} → ${imgInfo.url} (${imgDuration}ms)`, "info");
+    persistStepCheckpoint(executionId, stepResult);
+    persistExecutions();
+    return;
+  }
+
   // Default: "agent" type
 
-  // Execute pre-tools
+  // Execute pre-tools (with per-model security filtering)
   if (step.pre_tools && step.pre_tools.length > 0) {
+    const denied = getModelDeniedSet(step.model ?? "claude-sonnet-4-6");
     const preResults = await executePreTools(
       step.pre_tools,
       vars,
@@ -1486,7 +1551,7 @@ async function executeStep(
       },
       execution,
       executionId,
-      step, runClaudeTracked);
+      step, runClaudeTracked, denied);
     // Merge pre-tool results into vars — guard against prototype pollution
     for (const [k, v] of Object.entries(preResults)) {
       if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;

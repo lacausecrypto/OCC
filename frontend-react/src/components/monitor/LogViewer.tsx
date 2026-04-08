@@ -63,8 +63,17 @@ function getStepId(ev: ExecutionEvent): string | null {
 
 function formatEventMessage(ev: ExecutionEvent): string {
   switch (ev.type) {
-    case "step_output":
-      return `${esc(ev.stepId)}: ${esc(ev.chunk.slice(0, 120))}`;
+    case "step_output": {
+      // Detect image URLs in output chunks
+      const chunk = ev.chunk ?? "";
+      if (chunk.includes("image_url") || chunk.includes("/images/img_")) {
+        try {
+          const parsed = JSON.parse(chunk);
+          if (parsed.image_url) return `${esc(ev.stepId)}: [IMAGE] ${parsed.image_url}`;
+        } catch { /* not JSON — show as text */ }
+      }
+      return `${esc(ev.stepId)}: ${esc(chunk.slice(0, 120))}`;
+    }
     case "step_log":
       return `${esc(ev.stepId)} [${esc(ev.level)}]: ${esc(ev.message)}`;
     case "step_started":

@@ -36,6 +36,7 @@ export default defineConfig({
       "/workflow-chat": { target: OCC_BACKEND, changeOrigin: true },
       "/ollama": { target: OCC_BACKEND, changeOrigin: true },
       "/huggingface": { target: OCC_BACKEND, changeOrigin: true },
+      "/images": { target: OCC_BACKEND, changeOrigin: true },
       "/download": { target: OCC_BACKEND, changeOrigin: true },
       "/cache": { target: OCC_BACKEND, changeOrigin: true },
       // SSE event stream

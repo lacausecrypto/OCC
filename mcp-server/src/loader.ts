@@ -14,7 +14,7 @@ const PreToolSchema = z.object({
     "state_load", "state_save", "vector_query", "vector_index", "json_parse",
     "diff_inject", "notify", "semantic_cache", "screenshot", "sandbox_exec",
     "cost_gate", "ast_parse", "embed_compare", "graph_query", "parallel_fetch",
-    "template_render", "approval_request",
+    "template_render", "approval_request", "image_generate",
   ]),
   inject_as: z.string().min(1),
   label: z.string().optional(),
@@ -110,6 +110,14 @@ const PreToolSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   expires_hours: z.number().optional(),
+  // image_generate
+  image_provider: z.enum(["openai", "huggingface", "stability"]).optional(),
+  image_model: z.string().optional(),
+  image_size: z.string().optional(),
+  image_quality: z.string().optional(),
+  image_style: z.string().optional(),
+  negative_prompt: z.string().optional(),
+  image_format: z.enum(["png", "jpeg", "webp"]).optional(),
   // Error handling
   on_error: z.enum(["inject", "skip", "fail"]).optional(),
   // Timeout & retry
@@ -123,7 +131,7 @@ const PreToolSchema = z.object({
 
 const StepSchema = z.object({
   id: z.string().min(1),
-  type: z.enum(["agent", "router", "gate", "evaluator", "transform", "loop", "merge", "browser", "subchain", "debate", "webhook"]).optional(),
+  type: z.enum(["agent", "router", "gate", "evaluator", "transform", "loop", "merge", "browser", "subchain", "debate", "webhook", "image_gen"]).optional(),
   label: z.string().optional(),
   model: z.string().optional(),
   prompt: z.string().min(1),

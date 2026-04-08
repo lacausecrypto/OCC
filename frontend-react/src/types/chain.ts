@@ -11,7 +11,8 @@ export type StepType =
   | "browser"
   | "subchain"
   | "debate"
-  | "webhook";
+  | "webhook"
+  | "image_gen";
 
 export type PreToolType =
   | "current_datetime"
@@ -45,7 +46,8 @@ export type PreToolType =
   | "graph_query"
   | "parallel_fetch"
   | "template_render"
-  | "approval_request";
+  | "approval_request"
+  | "image_generate";
 
 export interface ChainInput {
   name: string;

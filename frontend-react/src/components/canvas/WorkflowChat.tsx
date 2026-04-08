@@ -107,6 +107,18 @@ function renderMarkdown(text: string): JSX.Element {
     else if (line.trim() === "") {
       elements.push(<div key={i} style={{ height: 4 }} />);
     }
+    // Markdown image: ![alt](url)
+    else if (/^!\[.*\]\(.+\)/.test(line)) {
+      const imgMatch = line.match(/^!\[(.*?)\]\((.+?)\)/);
+      if (imgMatch) {
+        elements.push(<div key={i} style={{ margin: "4px 0" }}><img src={imgMatch[2]} alt={imgMatch[1]} style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid var(--m-border)" }} /></div>);
+      }
+    }
+    // Detect raw image URL or /images/ path
+    else if (/\/images\/img_/.test(line) || /\.(png|jpg|jpeg|webp|gif)(\?|$)/i.test(line.trim())) {
+      const url = line.trim();
+      elements.push(<div key={i} style={{ margin: "4px 0" }}><img src={url} alt="Generated image" style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid var(--m-border)" }} /></div>);
+    }
     // Regular text
     else {
       elements.push(<div key={i}>{renderInline(line, i)}</div>);
