@@ -1,0 +1,35 @@
+name: bench-claude
+description: "Benchmark — analyse d'article web via Claude Haiku"
+version: "1.0"
+
+inputs:
+  - name: url
+    type: url
+    description: "URL de l'article à analyser"
+    default: "https://en.wikipedia.org/wiki/Large_language_model"
+
+steps:
+  - id: analyze
+    model: claude-haiku-4-5
+    pre_tools:
+      - type: http_fetch
+        url: "{input.url}"
+        inject_as: article_content
+    prompt: |
+      Analyse cet article web de manière structurée.
+
+      ARTICLE:
+      {article_content}
+
+      Réponds UNIQUEMENT en JSON valide avec exactement cette structure :
+      {
+        "title": "titre de l'article",
+        "summary": "résumé en 3-5 phrases",
+        "key_points": ["point 1", "point 2", "point 3"],
+        "sentiment": "positif|neutre|négatif",
+        "topics": ["sujet1", "sujet2"],
+        "language": "fr|en|..."
+      }
+    output_var: analysis
+
+output: analysis
