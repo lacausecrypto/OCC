@@ -1,166 +1,177 @@
 # OCC Benchmarks — Real Execution Results
 
-> All benchmarks run on a MacBook with Claude CLI (`claude --print`), OCC v2.0.0.
-> Results are from **real executions**, not dry-run estimates. 0 cherry-picking.
-
-## Summary
-
-| Chain | Steps | Wall Time | Sequential Est. | Speedup | Tokens | Cost |
-|-------|-------|-----------|-----------------|---------|--------|------|
-| multi-lang-translator | 6 (5 parallel + 1 QC) | **10.0s** | 36.6s | **3.7x** | 3,111 | $0.025 |
-| quick-summarizer | 4 (3 parallel + 1 merge) | **40.1s** | 39.3s | ~1.0x* | 3,267 | $0.026 |
-| repo-health-check | 6 (5 parallel + 1 synthesis) | **76.7s** | 152.2s | **2.0x** | 12,979 | $0.095 |
-| api-doc-generator | 6 (1 extract + 4 parallel + 1 merge) | **222.7s** | 505.8s | **2.3x** | 72,118 | $0.516 |
-
-\* quick-summarizer's merge step (`synthesize`) did not appear in this run's step tracking — the 3 parallel agents completed in ~10-19s each. With merge, expected wall time would be ~25s vs 39s sequential = 1.6x.
-
-## Detailed Results
-
-### 1. multi-lang-translator — 5 languages simultaneously
-
-**Input:** 3-sentence technical paragraph about AI, formal tone.
-
-```
-Chain: multi-lang-translator | Status: done | Wall time: 10.0s
-
-  done    french                    6.5s      568 output tokens
-  done    spanish                   7.7s      662 output tokens
-  done    german                    6.0s      362 output tokens
-  done    japanese                 10.0s      922 output tokens
-  done    chinese                   6.5s      552 output tokens
-
-  Total: 3,111 tokens | Cost: $0.025
-  Sequential sum: 36.6s → Parallel wall: 10.0s = 3.7x speedup
-```
-
-**Why it's fast:** All 5 translations are independent (`no depends_on`), so they run simultaneously. Wall time = slowest agent (Japanese, 10s), not sum of all (36.6s).
-
-**Quality benefit:** Each translator is isolated — French idioms don't leak into German output.
+> All results from **real executions** on April 8, 2026.  
+> Hardware: MacBook Pro (Apple Silicon), 16 GB RAM, OCC v2.0.0.  
+> Each scenario run **3–5 times** — averages shown. Raw data in `chains/benchmark-*-results.json`.
 
 ---
 
-### 2. quick-summarizer — 3 perspectives on a URL
+## TL;DR — Is OCC Worth It?
 
-**Input:** Anthropic Cookbook README (fetched via `http_fetch` pre-tool, 0 LLM tokens for data collection).
+| Scenario | Without OCC | With OCC | Verdict |
+|----------|-------------|----------|---------|
+| **Simple task** (1 step) | 14.0s, $0.029 | 15.9s, $0.029 | **No gain.** +14% overhead. Use direct API calls. |
+| **Complex task** (10 steps) vs naive | 229s, $0.60 | **69s, $0.18** | **Yes. 70% faster, 70% cheaper.** |
+| **Complex task** vs smart manual | 97s, $0.12 | **69s, $0.18** | **Depends.** 29% faster but 48% more expensive. |
 
-```
-Chain: quick-summarizer | Status: done | Wall time: 40.1s
-
-  done    factual                   9.6s      855 output tokens
-  done    actionable               10.3s      734 output tokens
-  done    critical                 19.4s    1,651 output tokens
-
-  Total: 3,267 tokens | Cost: $0.026
-```
-
-**Key insight:** The `http_fetch` pre-tool downloads the page content **before** the LLM call (0 tokens for data collection). With Claude CLI alone, the LLM would need to use `WebFetch` tool → extra round-trip + tool-use tokens.
+OCC shines on multi-step workflows. The value comes from **model routing** (biggest cost saver) and **parallel execution** (biggest time saver), not from single-step calls where it only adds overhead.
 
 ---
 
-### 3. repo-health-check — 5 parallel scans with bash pre-tools
+## Benchmark 1 — Provider Comparison (Same Task, 3 LLMs)
 
-**Input:** The OCC repo itself (`.`).
+**Task:** 4 steps — comprehension, generation, JSON structuration, merge.  
+**Input:** Fixed AI text (100 words) + topic "artificial intelligence".  
+**Runs:** 5 per provider.
 
-```
-Chain: repo-health-check | Status: done | Wall time: 76.7s
+| Provider | Avg Duration | Input Tokens | Output Tokens | Cost/run | Quality |
+|----------|-------------|-------------|--------------|----------|---------|
+| Claude Haiku 4.5 | 15.9s | 105,586 | 2,003 | $0.029 | **4.0/4.0** |
+| Ollama llama3.2:1b | 19.9s | 1,036 | 1,144 | $0.000 | 3.0/4.0 |
+| HuggingFace Llama-3.2-1B | 4.0s | — | — | $0.000 | 2.0/4.0 |
 
-  done    git-health               11.8s      841 output tokens
-  done    dependency-check         13.3s    1,086 output tokens
-  done    code-structure           11.5s      882 output tokens
-  done    test-coverage            40.2s    3,265 output tokens
-  done    security-surface         58.3s    4,803 output tokens
-  done    health-score             17.1s      740 output tokens
+**Quality scoring** (0–4): checks sentence count (comprehension), numbered list items (generation), valid JSON with required keys (structuration), non-trivial output (merge).
 
-  Total: 12,979 tokens | Cost: $0.095
-  Sequential sum: 152.2s → Parallel wall: 76.7s = 2.0x speedup
-```
+### Per-step breakdown
 
-**Key insight:** Each step uses `bash` pre-tools to collect data (git log, npm audit, find, grep) with **0 LLM tokens** for data gathering. The LLM only analyzes the pre-collected data. With Claude CLI, each of these would be a tool_use round-trip → more tokens + more latency.
+| Provider | Comprehension | Generation | Structuration | Merge |
+|----------|:------------:|:----------:|:-------------:|:-----:|
+| Claude Haiku | 6.2s | 5.8s | 4.8s | 9.1s |
+| Ollama | 3.7s | 8.8s | 7.6s | 9.7s |
+| HuggingFace | 1.9s | 2.2s | 1.9s | 1.7s |
 
-**Why only 2x (not 5x):** `security-surface` took 58s (longest), while others took 11-13s. Parallelism speedup is limited by the slowest agent.
+### Observations
+
+- **Claude Haiku** is the only provider achieving 4/4 quality consistently (valid JSON, correct format).
+- **Ollama 1B** can summarize and merge (3/4) but struggles with strict JSON output.
+- **HuggingFace 1B** is fast (4.0s) but produces poor structured output (2/4). Speed comes from the model being too small to follow complex instructions.
+- **Token counts for Ollama/HF are lower** because smaller models have smaller context windows and don't receive the Claude system prompt overhead (~26K tokens from Claude's prompt caching).
+
+### Raw API vs OCC (overhead measurement)
+
+Same 4-step task, Claude Haiku only, 5 runs each:
+
+| Mode | Avg Duration | Input Tokens | Output Tokens | Cost |
+|------|-------------|-------------|--------------|------|
+| Direct API (no OCC) | 14.0s | 105,635 | 1,955 | $0.029 |
+| OCC orchestrated | 15.9s | 105,586 | 2,003 | $0.029 |
+| **Overhead** | **+1.9s (+14%)** | ~same | ~same | ~same |
+
+The 14% overhead comes from: YAML parsing, variable resolution, SQLite checkpoint persistence, SSE event emission, and queue management. Token counts and cost are identical — OCC doesn't add tokens.
 
 ---
 
-### 4. api-doc-generator — AST extraction + parallel doc agents
+## Benchmark 2 — Economy of Scale (10 Steps, 4 Waves)
 
-**Input:** The OCC repo itself (`.`), markdown format.
+This is the key benchmark. A realistic **strategic analysis workflow** with 10 LLM steps:
+
+- **Wave 1** (4 parallel): market analysis, tech trends, competition, risks — all Haiku
+- **Wave 2** (3 parallel): SWOT matrix, tech roadmap, risk matrix — all Haiku
+- **Wave 3** (2 parallel): opportunity score, risk score — all Haiku
+- **Wave 4** (1 step): executive summary — **Sonnet** (needs reasoning quality)
+
+Three approaches compared, **3 runs each**:
+
+### Results
+
+| Approach | Duration | Input Tokens | Output Tokens | Cost/run |
+|----------|---------|-------------|--------------|---------|
+| **A) Sequential, all Sonnet** | 229s | 169,124 | 6,325 | **$0.602** |
+| **B) Sequential, Haiku+Sonnet** | 97s | 253,542 | 3,944 | **$0.121** |
+| **C) OCC parallel, Haiku+Sonnet** | **69s** | 401,014 | 10,370 | **$0.179** |
+
+### Savings analysis
+
+**Model routing (A → B): 80% cost reduction**
+
+Switching from all-Sonnet to Haiku-for-subtasks + Sonnet-for-synthesis cuts cost from $0.60 to $0.12. This is the single biggest optimization and doesn't require OCC — you can do it manually. OCC just makes it trivial (one `model:` field per step in YAML).
+
+**Parallelism (B → C): 29% faster, but 48% more expensive**
+
+OCC runs waves in parallel (69s vs 97s sequential), but parallel execution means each step starts with a fresh context — no prompt cache sharing between parallel steps. This increases input tokens (401K vs 254K) and cost ($0.18 vs $0.12). The time savings may or may not justify the cost increase depending on your use case.
+
+**OCC vs naive (A → C): 70% faster AND 70% cheaper**
+
+Against the naive approach (all-Sonnet, sequential), OCC delivers massive gains on both axes. This is the realistic comparison for someone who hasn't optimized their workflow yet.
+
+### OCC wave breakdown (actual timings)
 
 ```
-Chain: api-doc-generator | Status: done | Wall time: 222.7s
+Wave 1 (4 parallel): 12.2s wall time
+  research_market=12.2s  research_tech=10.1s  research_competition=9.6s  research_risks=12.2s
 
-  done    doc-endpoints           149.2s   21,314 output tokens
-  done    doc-models               95.1s   11,999 output tokens
-  done    doc-auth                147.4s   14,850 output tokens
-  done    doc-examples            114.1s   14,614 output tokens
+Wave 2 (3 parallel): 16.8s wall time
+  swot=16.8s  tech_roadmap=12.1s  risk_matrix=10.1s
 
-  Total: 72,118 tokens | Cost: $0.516
-  Sequential sum: 505.8s → Parallel wall: 222.7s = 2.3x speedup
+Wave 3 (2 parallel): 12.4s wall time
+  score_opportunity=12.4s  score_risk=10.7s
+
+Wave 4 (1 step):     22.6s wall time
+  executive_summary=22.6s
 ```
 
-**Key insight:** The `ast_parse` pre-tool extracts function signatures and class definitions **before** the LLM call. The LLM sees ~2K tokens of signatures instead of ~30K tokens of full source code = **~80% token reduction** on input.
+Sequential sum of all 10 steps would be ~120s. OCC wall time is 69s = **1.7x speedup** from parallelism alone. The theoretical max is ~4x (limited by Wave 4 which must be sequential).
+
+### Scaling projection (100 executions/day)
+
+| Approach | Daily compute | Daily cost | Monthly cost |
+|----------|:------------:|:----------:|:------------:|
+| A) All-Sonnet sequential | 6.4h | $60 | **$1,807** |
+| B) Haiku+Sonnet sequential | 2.7h | $12 | **$362** |
+| C) OCC parallel | **1.9h** | $18 | **$537** |
+
+OCC saves **$1,270/month and 4.4h/day** vs naive approach.  
+OCC saves **0.8h/day** vs smart manual approach but costs **$175/month more** (the parallelism tax).
 
 ---
 
-## Why OCC Is More Efficient Than Claude CLI
+## When OCC Is Worth It
 
-### 1. Parallelism (measured)
+| Scenario | Worth it? | Why |
+|----------|:---------:|-----|
+| Single LLM call | No | 14% overhead, no parallelism to gain |
+| 2-3 step chain, sequential | Marginal | Convenience (YAML, checkpoints) but no speed gain |
+| 4+ steps with parallelism | **Yes** | Time savings compound with wave count |
+| 10+ steps, mixed models | **Yes** | Model routing + parallelism = 70% faster, 70% cheaper vs naive |
+| Production workloads (100+/day) | **Yes** | Queue management, crash recovery, monitoring, SSE streaming |
+| Privacy-sensitive (Ollama) | **Yes** | Orchestrate local models with same YAML as cloud models |
 
-| Chain | Agents | Sequential | Parallel | Speedup |
-|-------|--------|-----------|----------|---------|
-| multi-lang-translator | 5 | 36.6s | 10.0s | **3.7x** |
-| repo-health-check | 5+1 | 152.2s | 76.7s | **2.0x** |
-| api-doc-generator | 4 | 505.8s | 222.7s | **2.3x** |
+## When OCC Is NOT Worth It
 
-Speedup is `sum(step_durations) / wall_time`. Real speedup is bounded by the slowest agent in each wave.
-
-### 2. Pre-tool Data Injection (0 tokens)
-
-| Pre-tool | What it does | LLM tokens saved |
-|----------|-------------|-------------------|
-| `http_fetch` | Downloads URL content before LLM call | No tool_use round-trip |
-| `bash` | Runs shell commands (git log, npm audit, find) | No Bash tool planning |
-| `ast_parse` | Extracts code structure (signatures only) | ~80% input reduction |
-| `current_datetime` | Injects timestamp | Trivial but free |
-
-With Claude CLI, each of these operations requires the LLM to **plan** the tool call, **execute** it, then **read** the result — 3 extra LLM interactions per tool use. OCC does it in 0 tokens.
-
-### 3. Step Isolation (measured)
-
-Each step receives ONLY its dependencies:
-
-| Chain | Total tokens | Per-step avg | CLI equivalent (context accumulation) |
-|-------|-------------|-------------|--------------------------------------|
-| multi-lang-translator | 3,111 | 622 | ~5,000+ (each translation sees all previous) |
-| repo-health-check | 12,979 | 2,163 | ~30,000+ (each scan result accumulates) |
-| api-doc-generator | 72,118 | 18,030 | ~150,000+ (full source in context for each) |
-
-### 4. Model Routing (measured)
-
-OCC uses Haiku ($0.80/M in, $4/M out) for simple tasks and Sonnet ($3/M in, $15/M out) for synthesis. Claude CLI uses one model for everything.
-
-| Chain | Haiku steps | Sonnet steps | Blended cost | Sonnet-only cost |
-|-------|------------|-------------|-------------|-----------------|
-| multi-lang-translator | 5 | 1 | $0.025 | ~$0.12 |
-| repo-health-check | 5 | 1 | $0.095 | ~$0.45 |
+- **One-shot prompts** — just call the API directly.
+- **Budget-critical, parallelism-heavy** — parallel steps lose prompt cache sharing. If cost matters more than speed, run sequentially with cache.
+- **Real-time latency-sensitive** (<1s) — OCC adds ~2s overhead from orchestration.
 
 ---
 
 ## Methodology
 
 - **Hardware:** MacBook Pro (Apple Silicon), 16 GB RAM
-- **OCC version:** 2.0.0
-- **Claude CLI version:** via `claude --print` subprocess
-- **Network:** Home broadband (~100 Mbps)
+- **OCC version:** 2.0.0, Node.js 24
+- **Providers:** Claude CLI (Haiku 4.5, Sonnet 4.6), Ollama (llama3.2:1b local), HuggingFace Router (Llama-3.2-1B-Instruct)
 - **Concurrency:** MAX_CONCURRENT_EXECUTIONS=5
-- **No caching:** All runs are fresh (no `cache_ttl_minutes` active)
-- **Token counting:** Output tokens from Claude CLI stream-json. Input tokens underreported by CLI (known limitation).
-- **Cost calculation:** Blended rate based on model used per step. Haiku: $0.80/$4.00 per M tokens. Sonnet: $3.00/$15.00 per M tokens.
-- **Reproducibility:** Run `occ dry-run <chain-name>` to see the execution plan without spending tokens. Run `occ run <chain-name> --input <key>=<value>` to reproduce.
+- **Token counting:** Claude CLI stream-json with `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. Ollama via `stream_options: { include_usage: true }`. HuggingFace Router does not report tokens in streaming mode.
+- **Cost calculation:** Haiku: $0.25/$1.25 per 1M tokens. Sonnet: $3.00/$15.00 per 1M tokens. Ollama/HuggingFace: $0 (local/free tier).
+- **Quality scoring:** Automated checks — sentence count, numbered list regex, JSON parse + key validation, output length threshold.
+- **No cherry-picking:** All runs included. Averages computed over successful runs only.
 
-## Limitations of These Benchmarks
+### Reproduce
 
-- **Input tokens underreported:** Claude CLI's `--output-format stream-json` doesn't always report input token counts accurately. The actual input tokens are higher than shown.
-- **Network variability:** API latency varies by time of day and Anthropic server load. Your results will differ.
-- **Speedup bounded by slowest agent:** 5 parallel agents with 1 slow outlier → speedup < 5x. This is inherent to parallel execution, not an OCC limitation.
-- **Single machine:** All agents share the same CPU and network connection. Distributed execution would increase parallelism further.
-- **Cost estimates are approximate:** Based on published Anthropic pricing as of April 2026. Actual billing may differ.
+```bash
+# Provider comparison (5 runs × 3 providers × 4 steps)
+bash chains/run-benchmark.sh "artificial intelligence" 5
+
+# Economy of scale (3 runs × 3 approaches × 10 steps)
+python3 chains/run-benchmark-scale.py 3
+
+# Raw API comparison (no OCC, same prompts)
+python3 chains/run-benchmark-raw.py 5
+```
+
+### Known Limitations
+
+- **Prompt cache effect:** Sequential runs benefit from Claude's prompt caching (repeated context is cheaper). Parallel runs start fresh — each step pays full input cost. This is why OCC (parallel) uses more input tokens than sequential for the same prompts.
+- **Network variability:** API latency varies by ~20% between runs. We mitigate with multiple runs and averages.
+- **Ollama speed depends on hardware:** llama3.2:1b on Apple Silicon M-series is fast. On CPU-only machines, expect 3-5x slower.
+- **HuggingFace token reporting:** The HuggingFace Router API does not return `usage` data in streaming mode. Token counts show as 0 — this is an API limitation, not an OCC bug.
+- **Cost estimates are approximate:** Based on published Anthropic pricing as of April 2026.

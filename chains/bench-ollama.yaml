@@ -1,35 +1,70 @@
 name: bench-ollama
-description: "Benchmark — analyse d'article web via Ollama (llama3.2:1b local)"
+description: "Benchmark — 3 tâches LLM via Ollama llama3.2:1b (comprehension, generation, structuration)"
 version: "1.0"
 
 inputs:
-  - name: url
-    type: url
-    description: "URL de l'article à analyser"
-    default: "https://en.wikipedia.org/wiki/Large_language_model"
+  - name: topic
+    type: string
+    description: "Sujet pour le benchmark"
+    default: "artificial intelligence"
 
 steps:
-  - id: analyze
+  # ── Task 1: Comprehension — résumer un texte fourni ──
+  - id: comprehension
     model: llama3.2:1b
-    pre_tools:
-      - type: http_fetch
-        url: "{input.url}"
-        inject_as: article_content
     prompt: |
-      Analyse cet article web de manière structurée.
+      Résume le texte suivant en exactement 3 phrases concises.
 
-      ARTICLE:
-      {article_content}
+      TEXTE:
+      Artificial intelligence (AI) is the simulation of human intelligence processes by computer systems. These processes include learning, reasoning, and self-correction. AI has applications in healthcare, finance, transportation, and entertainment. Machine learning, a subset of AI, enables systems to learn from data without being explicitly programmed. Deep learning, a further subset, uses neural networks with many layers to analyze complex patterns. Recent advances in large language models have demonstrated remarkable capabilities in natural language understanding and generation. However, AI also raises concerns about bias, privacy, job displacement, and the concentration of power among a few technology companies. Researchers are actively working on making AI systems more transparent, fair, and accountable.
 
-      Réponds UNIQUEMENT en JSON valide avec exactement cette structure :
-      {
-        "title": "titre de l'article",
-        "summary": "résumé en 3-5 phrases",
-        "key_points": ["point 1", "point 2", "point 3"],
-        "sentiment": "positif|neutre|négatif",
-        "topics": ["sujet1", "sujet2"],
-        "language": "fr|en|..."
-      }
-    output_var: analysis
+      Réponds UNIQUEMENT avec les 3 phrases, sans introduction ni conclusion.
+    output_var: comprehension_result
 
-output: analysis
+  # ── Task 2: Generation — produire du contenu créatif ──
+  - id: generation
+    model: llama3.2:1b
+    prompt: |
+      Écris exactement 5 avantages et 5 inconvénients de {input.topic}.
+      Format: une liste numérotée, chaque point en une seule phrase.
+
+      Avantages:
+      1.
+      2.
+      3.
+      4.
+      5.
+
+      Inconvénients:
+      1.
+      2.
+      3.
+      4.
+      5.
+    output_var: generation_result
+
+  # ── Task 3: Structuration — JSON strict ──
+  - id: structuration
+    model: llama3.2:1b
+    prompt: |
+      Génère un JSON valide décrivant le sujet "{input.topic}" avec cette structure exacte :
+      {"name": "string", "category": "string", "score": number_0_to_10, "pros": ["str","str","str"], "cons": ["str","str","str"], "summary": "one sentence"}
+
+      Réponds UNIQUEMENT avec le JSON, sans markdown, sans explication.
+    output_var: structuration_result
+
+  # ── Merge final ──
+  - id: merge
+    type: merge
+    model: llama3.2:1b
+    depends_on: [comprehension, generation, structuration]
+    inputs: [comprehension_result, generation_result, structuration_result]
+    strategy: llm_summarize
+    prompt: |
+      Combine ces 3 analyses en un rapport final de 5 lignes maximum :
+      COMPREHENSION: {comprehension_result}
+      GENERATION: {generation_result}
+      STRUCTURATION: {structuration_result}
+    output_var: final_report
+
+output: final_report

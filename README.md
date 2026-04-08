@@ -7,7 +7,7 @@
 [![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
 [![Pre--tools](https://img.shields.io/badge/Pre--tools-30%20types-orange)](#pre-tools)
 [![REST](https://img.shields.io/badge/REST%20API-102%20endpoints-green)](#rest-api-102-endpoints)
-[![Tests](https://img.shields.io/badge/Tests-1814%20passed-brightgreen)](#tests)
+[![Tests](https://img.shields.io/badge/Tests-2333%20passed-brightgreen)](#tests)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](#)
@@ -31,10 +31,10 @@ Multi-model workflow engine built on Claude. Define chains in YAML, run them wit
 - [BLOB Sessions](#blob-sessions) — autonomous exploratory AI
 - [Scheduling](#scheduled-execution) · [Knowledge Graph](#knowledge-graph) · [CLI](#cli)
 - [REST API (102 endpoints)](#rest-api-102-endpoints) — auth, rate limiting
-- [Benchmarks](#token-efficiency--benchmarks) — OCC vs Claude CLI
+- [Benchmarks](#benchmarks) — OCC vs raw API, economy of scale
 - [Deployment](#deployment-on-a-vps) · [Security](SECURITY.md) · [Configuration](#configuration)
 - [Example Chains (16)](#example-chains-15-included) · [Pipelines (5)](#example-pipelines-5-included)
-- [Tests (1814)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
+- [Tests (2333)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
 
 ---
 
@@ -424,26 +424,43 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject
 
 ---
 
-## Token Efficiency & Benchmarks
+## Benchmarks
 
-| Principle | Impact |
-|-----------|--------|
-| **Parallel execution** | 5 parallel agents = wall time of slowest, not sum |
-| **Step isolation** | Each step sees only its deps, not full conversation |
-| **Pre-tool injection** | bash/fetch/AST extract data with 0 LLM tokens |
-| **Model routing** | Haiku $0.80/M, Sonnet $3/M, Opus $15/M — mix per step |
+Real benchmarks from April 2026 — full methodology and raw data in [BENCHMARKS.md](BENCHMARKS.md).
 
-**Real benchmarks** (see [BENCHMARKS.md](BENCHMARKS.md)):
+### Economy of Scale (10-step strategic analysis, 3 runs each)
 
-| Chain | OCC | Claude CLI | Speedup | Savings |
-|-------|-----|-----------|---------|---------|
-| multi-lang-translator (5 langs) | 10s, $0.03 | 40s, $0.15 | **4x** | **5x** |
-| repo-health-check (5 scans) | 77s, $0.09 | 150s+, $0.50 | **2x** | **5x** |
-| api-doc-generator (AST+4 docs) | 223s, $0.52 | 500s+, $1.50 | **2.3x** | **3x** |
+| Approach | Duration | Cost/run | Monthly (100/day) |
+|----------|:--------:|:--------:|:-----------------:|
+| Sequential, all Sonnet (naive) | 229s | $0.602 | $1,807 |
+| Sequential, Haiku+Sonnet (smart) | 97s | $0.121 | $362 |
+| **OCC parallel, Haiku+Sonnet** | **69s** | **$0.179** | **$537** |
+
+- **vs naive:** 70% faster, 70% cheaper — saves **$1,270/month** at scale
+- **vs smart manual:** 29% faster, but 48% more expensive (parallel steps lose prompt cache)
+- **Model routing alone** (Sonnet→Haiku for subtasks) = **80% cost reduction**
+
+### OCC Overhead on Simple Tasks
+
+| Mode | Duration | Tokens | Cost |
+|------|:--------:|:------:|:----:|
+| Direct API call | 14.0s | 105,635→1,955 | $0.029 |
+| OCC orchestrated | 15.9s | 105,586→2,003 | $0.029 |
+| **Overhead** | **+14%** | **~same** | **~same** |
+
+OCC adds ~2s from YAML parsing, SQLite checkpoints, and SSE streaming. No extra tokens, no extra cost. Worth it for 4+ step workflows; skip it for one-shot prompts.
+
+### Provider Comparison (same 4-step task, 5 runs)
+
+| Provider | Duration | Quality | Cost |
+|----------|:--------:|:-------:|:----:|
+| Claude Haiku 4.5 | 15.9s | 4.0/4.0 | $0.029 |
+| Ollama llama3.2:1b (local) | 19.9s | 3.0/4.0 | $0.000 |
+| HuggingFace Llama-3.2-1B | 4.0s | 2.0/4.0 | $0.000 |
 
 ---
 
-## Example Chains (16 included)
+## Example Chains (19 included)
 
 | Chain | Steps | Parallel | Key Features |
 |-------|-------|----------|-------------|
@@ -463,6 +480,9 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject
 | `multi-lang-translator` | 6 | 5-way | isolation (benchmark) |
 | `api-doc-generator` | 6 | 4-way | ast_parse (benchmark) |
 | `full-stack-scaffold` | 5 | seq | bash/write, retry, cache |
+| `bench-complex` | 10 | 4-wave | benchmark: 4 parallel waves, Haiku+Sonnet routing |
+| `bench-claude` | 4 | 3-way | benchmark: provider comparison (Claude) |
+| `bench-ollama` | 4 | 3-way | benchmark: provider comparison (Ollama) |
 
 ## Example Pipelines (5 included)
 
@@ -498,7 +518,7 @@ CORS_ORIGIN=https://yourdomain.com
 
 ## Tests
 
-**1814 tests** across 50 files:
+**2333 tests** across 59 files:
 
 ```bash
 cd mcp-server && npm test

@@ -1,0 +1,49 @@
+{
+  "benchmark": "OCC Economy of Scale",
+  "version": "1.0",
+  "timestamp": "2026-04-08T14:14:44.101685+00:00",
+  "config": {
+    "topic": "artificial intelligence startups in 2026",
+    "runs": 3,
+    "steps": 10,
+    "waves": 4
+  },
+  "approaches": {
+    "A_sequential_all_sonnet": {
+      "avg": {
+        "dur": 229120,
+        "min_dur": 155278,
+        "max_dur": 276174,
+        "in_tok": 169124,
+        "out_tok": 6325,
+        "cost": 0.6022470000000001,
+        "n": 3
+      },
+      "runs_count": 3
+    },
+    "B_sequential_mixed_model": {
+      "avg": {
+        "dur": 97351,
+        "min_dur": 94810,
+        "max_dur": 101469,
+        "in_tok": 253542,
+        "out_tok": 3944,
+        "cost": 0.12066458333333334,
+        "n": 3
+      },
+      "runs_count": 3
+    },
+    "C_occ_parallel_mixed": {
+      "avg": {
+        "dur": 69190,
+        "min_dur": 66158,
+        "max_dur": 72204,
+        "in_tok": 401014,
+        "out_tok": 10370,
+        "cost": 0.17885625000000002,
+        "n": 3
+      },
+      "runs_count": 3
+    }
+  }
+}

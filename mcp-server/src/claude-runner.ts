@@ -51,7 +51,16 @@ function checkClaudeVersion(): void {
 const UsageSchema = z.object({
   input_tokens: z.number().optional(),
   output_tokens: z.number().optional(),
+  cache_read_input_tokens: z.number().optional(),
+  cache_creation_input_tokens: z.number().optional(),
 }).passthrough();
+
+/** Total input tokens including cache reads and cache creation */
+function totalInputTokens(usage: z.infer<typeof UsageSchema>): number {
+  return (usage.input_tokens ?? 0)
+    + (usage.cache_read_input_tokens ?? 0)
+    + (usage.cache_creation_input_tokens ?? 0);
+}
 
 const ContentBlockDeltaSchema = z.object({
   type: z.literal("content_block_delta"),
@@ -336,7 +345,7 @@ export function runClaude(
               }
             }
             if (asst.data.message.usage) {
-              inputTokens = asst.data.message.usage.input_tokens ?? inputTokens;
+              inputTokens = totalInputTokens(asst.data.message.usage) || inputTokens;
               outputTokens = (asst.data.message.usage.output_tokens ?? 0) + (outputTokens ?? 0);
             }
             continue;
@@ -345,7 +354,7 @@ export function runClaude(
           const res = ResultSchema.safeParse(raw);
           if (res.success) {
             if (res.data.usage) {
-              inputTokens = res.data.usage.input_tokens ?? inputTokens;
+              inputTokens = totalInputTokens(res.data.usage) || inputTokens;
               outputTokens = res.data.usage.output_tokens ?? outputTokens;
             }
             if (res.data.result) {
@@ -376,7 +385,7 @@ export function runClaude(
               }
             }
             if (msg.data.message.usage) {
-              inputTokens = msg.data.message.usage.input_tokens ?? inputTokens;
+              inputTokens = totalInputTokens(msg.data.message.usage) || inputTokens;
               outputTokens = msg.data.message.usage.output_tokens ?? outputTokens;
             }
             continue;
@@ -435,7 +444,9 @@ export function runClaude(
           const event = JSON.parse(lineBuffer);
           if (event.type === "result") {
             if (event.usage) {
-              inputTokens = event.usage.input_tokens;
+              inputTokens = (event.usage.input_tokens ?? 0)
+                + (event.usage.cache_read_input_tokens ?? 0)
+                + (event.usage.cache_creation_input_tokens ?? 0);
               outputTokens = event.usage.output_tokens;
             }
             if (event.result) {

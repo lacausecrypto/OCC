@@ -1,0 +1,155 @@
+{
+  "benchmark": "OCC LLM Provider Comparison",
+  "version": "2.0",
+  "timestamp": "2026-04-08T13:41:39.462298Z",
+  "config": {
+    "topic": "artificial intelligence",
+    "runs_per_chain": 5,
+    "steps": [
+      "comprehension",
+      "generation",
+      "structuration",
+      "merge"
+    ],
+    "tasks": {
+      "comprehension": "Summarize a fixed 100-word AI text in 3 sentences",
+      "generation": "Produce 5 pros and 5 cons numbered list",
+      "structuration": "Output strict JSON with 6 required keys",
+      "merge": "Combine 3 outputs into 5-line report"
+    }
+  },
+  "results": [
+    {
+      "provider": "Claude Haiku 4.5",
+      "chain": "bench-claude",
+      "runs": 5,
+      "successes": 5,
+      "totals": {
+        "avg_duration_ms": 15887,
+        "min_duration_ms": 14360,
+        "max_duration_ms": 18567,
+        "avg_input_tokens": 105586,
+        "avg_output_tokens": 2003,
+        "estimated_cost_usd": 0.02890025
+      },
+      "steps": {
+        "comprehension": {
+          "avg_duration_ms": 6219,
+          "avg_input_tokens": 26327,
+          "avg_output_tokens": 419
+        },
+        "generation": {
+          "avg_duration_ms": 5819,
+          "avg_input_tokens": 26229,
+          "avg_output_tokens": 455
+        },
+        "structuration": {
+          "avg_duration_ms": 4751,
+          "avg_input_tokens": 26236,
+          "avg_output_tokens": 310
+        },
+        "merge": {
+          "avg_duration_ms": 9101,
+          "avg_input_tokens": 26794,
+          "avg_output_tokens": 819
+        }
+      },
+      "quality": {
+        "avg_score": 4.0,
+        "comprehension_ok": 5,
+        "generation_ok": 5,
+        "json_valid": 5,
+        "json_has_keys": 5,
+        "merge_ok": 5
+      }
+    },
+    {
+      "provider": "Ollama llama3.2:1b",
+      "chain": "bench-ollama",
+      "runs": 5,
+      "successes": 5,
+      "totals": {
+        "avg_duration_ms": 19892,
+        "min_duration_ms": 8119,
+        "max_duration_ms": 26526,
+        "avg_input_tokens": 1036,
+        "avg_output_tokens": 1144,
+        "estimated_cost_usd": 0.0
+      },
+      "steps": {
+        "comprehension": {
+          "avg_duration_ms": 3691,
+          "avg_input_tokens": 196,
+          "avg_output_tokens": 112
+        },
+        "generation": {
+          "avg_duration_ms": 8762,
+          "avg_input_tokens": 89,
+          "avg_output_tokens": 388
+        },
+        "structuration": {
+          "avg_duration_ms": 7611,
+          "avg_input_tokens": 113,
+          "avg_output_tokens": 93
+        },
+        "merge": {
+          "avg_duration_ms": 9703,
+          "avg_input_tokens": 638,
+          "avg_output_tokens": 551
+        }
+      },
+      "quality": {
+        "avg_score": 3.0,
+        "comprehension_ok": 4,
+        "generation_ok": 3,
+        "json_valid": 3,
+        "json_has_keys": 3,
+        "merge_ok": 5
+      }
+    },
+    {
+      "provider": "HuggingFace Llama-3.2-1B",
+      "chain": "bench-huggingface",
+      "runs": 5,
+      "successes": 5,
+      "totals": {
+        "avg_duration_ms": 3952,
+        "min_duration_ms": 3539,
+        "max_duration_ms": 5255,
+        "avg_input_tokens": 0,
+        "avg_output_tokens": 0,
+        "estimated_cost_usd": 0.0
+      },
+      "steps": {
+        "comprehension": {
+          "avg_duration_ms": 1879,
+          "avg_input_tokens": 0,
+          "avg_output_tokens": 0
+        },
+        "generation": {
+          "avg_duration_ms": 2178,
+          "avg_input_tokens": 0,
+          "avg_output_tokens": 0
+        },
+        "structuration": {
+          "avg_duration_ms": 1897,
+          "avg_input_tokens": 0,
+          "avg_output_tokens": 0
+        },
+        "merge": {
+          "avg_duration_ms": 1654,
+          "avg_input_tokens": 0,
+          "avg_output_tokens": 0
+        }
+      },
+      "quality": {
+        "avg_score": 2.0,
+        "comprehension_ok": 5,
+        "generation_ok": 0,
+        "json_valid": 0,
+        "json_has_keys": 0,
+        "merge_ok": 5
+      }
+    }
+  ]
+}

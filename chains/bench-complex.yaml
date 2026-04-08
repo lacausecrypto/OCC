@@ -1,0 +1,127 @@
+name: bench-complex
+description: "Benchmark complexe — 10 steps, 4 waves, model routing (haiku+sonnet)"
+version: "1.0"
+
+inputs:
+  - name: topic
+    type: string
+    default: "artificial intelligence startups in 2026"
+
+steps:
+  # ═══ Wave 1 — 4 parallel research agents (Haiku = cheap) ═══
+  - id: research_market
+    model: claude-haiku-4-5
+    prompt: |
+      Analyse le marché de "{input.topic}".
+      Donne : taille du marché, croissance, segments clés, acteurs majeurs.
+      Réponds en 5-8 phrases factuelles.
+    output_var: market_analysis
+
+  - id: research_tech
+    model: claude-haiku-4-5
+    prompt: |
+      Analyse les tendances technologiques de "{input.topic}".
+      Donne : technologies émergentes, stack technique, innovations récentes.
+      Réponds en 5-8 phrases factuelles.
+    output_var: tech_analysis
+
+  - id: research_competition
+    model: claude-haiku-4-5
+    prompt: |
+      Analyse la compétition dans "{input.topic}".
+      Donne : principaux concurrents, parts de marché, différentiateurs, barrières à l'entrée.
+      Réponds en 5-8 phrases factuelles.
+    output_var: competition_analysis
+
+  - id: research_risks
+    model: claude-haiku-4-5
+    prompt: |
+      Analyse les risques de "{input.topic}".
+      Donne : risques réglementaires, techniques, financiers, éthiques.
+      Réponds en 5-8 phrases factuelles.
+    output_var: risk_analysis
+
+  # ═══ Wave 2 — 3 parallel synthesis agents (Haiku) ═══
+  - id: swot
+    model: claude-haiku-4-5
+    depends_on: [research_market, research_competition]
+    prompt: |
+      À partir de ces analyses, génère un SWOT complet en JSON :
+      MARCHÉ: {market_analysis}
+      COMPÉTITION: {competition_analysis}
+
+      Format: {"strengths": [...], "weaknesses": [...], "opportunities": [...], "threats": [...]}
+      Réponds UNIQUEMENT en JSON.
+    output_var: swot_result
+
+  - id: tech_roadmap
+    model: claude-haiku-4-5
+    depends_on: [research_tech]
+    prompt: |
+      À partir de cette analyse tech, propose une roadmap produit sur 12 mois :
+      TECH: {tech_analysis}
+
+      Donne 4 milestones avec : nom, durée, technologies, livrables.
+      Format liste numérotée.
+    output_var: roadmap_result
+
+  - id: risk_matrix
+    model: claude-haiku-4-5
+    depends_on: [research_risks]
+    prompt: |
+      À partir de cette analyse des risques, génère une matrice de risques en JSON :
+      RISQUES: {risk_analysis}
+
+      Format: [{"risk": "...", "probability": "high|medium|low", "impact": "high|medium|low", "mitigation": "..."}]
+      Réponds UNIQUEMENT en JSON.
+    output_var: risk_matrix_result
+
+  # ═══ Wave 3 — 2 parallel evaluators (Haiku) ═══
+  - id: score_opportunity
+    model: claude-haiku-4-5
+    depends_on: [swot, tech_roadmap]
+    prompt: |
+      Évalue l'opportunité business sur 100 :
+      SWOT: {swot_result}
+      ROADMAP: {roadmap_result}
+
+      Donne un score global /100 avec justification en 3 phrases.
+      Format: {"score": N, "justification": "..."}
+    output_var: opportunity_score
+
+  - id: score_risk
+    model: claude-haiku-4-5
+    depends_on: [risk_matrix]
+    prompt: |
+      Évalue le niveau de risque global sur 100 :
+      MATRICE: {risk_matrix_result}
+
+      Donne un score de risque /100 (100=très risqué) avec justification en 3 phrases.
+      Format: {"risk_score": N, "justification": "..."}
+    output_var: risk_score
+
+  # ═══ Wave 4 — Final synthesis (Sonnet = smart, 1 step) ═══
+  - id: executive_summary
+    model: claude-sonnet-4-6
+    depends_on: [score_opportunity, score_risk, swot, tech_roadmap, risk_matrix]
+    prompt: |
+      Tu es un analyste stratégique senior. Rédige un executive summary professionnel.
+
+      DONNÉES :
+      - SWOT: {swot_result}
+      - Roadmap tech: {roadmap_result}
+      - Matrice de risques: {risk_matrix_result}
+      - Score opportunité: {opportunity_score}
+      - Score risque: {risk_score}
+
+      Rédige un executive summary structuré avec :
+      1. Verdict (GO/NO-GO avec score confiance)
+      2. Synthèse marché (3 phrases)
+      3. Avantage compétitif (3 phrases)
+      4. Risques critiques (top 3)
+      5. Recommandation stratégique (5 phrases)
+
+      Maximum 400 mots. Ton professionnel et direct.
+    output_var: executive_summary_result
+
+output: executive_summary_result

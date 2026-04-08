@@ -1,0 +1,136 @@
+{
+  "benchmark": "OCC Raw API Comparison (without OCC orchestration)",
+  "version": "2.0",
+  "timestamp": "2026-04-08T13:47:56.918812+00:00",
+  "config": {
+    "topic": "artificial intelligence",
+    "runs_per_provider": 5,
+    "steps": [
+      "comprehension",
+      "generation",
+      "structuration",
+      "merge"
+    ],
+    "parallel_steps": [
+      "comprehension",
+      "generation",
+      "structuration"
+    ],
+    "sequential_steps": [
+      "merge"
+    ]
+  },
+  "results": [
+    {
+      "provider": "Claude Haiku 4.5",
+      "mode": "raw_api",
+      "runs": 5,
+      "successes": 5,
+      "totals": {
+        "avg_duration_ms": 13954,
+        "min_duration_ms": 12750,
+        "max_duration_ms": 14881,
+        "avg_input_tokens": 105635,
+        "avg_output_tokens": 1955,
+        "estimated_cost_usd": 0.0288525
+      },
+      "steps": {
+        "comprehension": {
+          "avg_duration_ms": 4792,
+          "avg_input_tokens": 26332,
+          "avg_output_tokens": 336
+        },
+        "generation": {
+          "avg_duration_ms": 6142,
+          "avg_input_tokens": 26234,
+          "avg_output_tokens": 517
+        },
+        "structuration": {
+          "avg_duration_ms": 5428,
+          "avg_input_tokens": 26241,
+          "avg_output_tokens": 435
+        },
+        "merge": {
+          "avg_duration_ms": 7809,
+          "avg_input_tokens": 26828,
+          "avg_output_tokens": 667
+        }
+      },
+      "quality": {
+        "avg_score": 4.0,
+        "comprehension_ok": 5,
+        "generation_ok": 5,
+        "json_valid": 5,
+        "json_has_keys": 5,
+        "merge_ok": 5
+      }
+    },
+    {
+      "provider": "Ollama llama3.2:1b",
+      "mode": "raw_api",
+      "runs": 5,
+      "successes": 5,
+      "totals": {
+        "avg_duration_ms": 12340,
+        "min_duration_ms": 8940,
+        "max_duration_ms": 16591,
+        "avg_input_tokens": 930,
+        "avg_output_tokens": 695,
+        "estimated_cost_usd": 0.0
+      },
+      "steps": {
+        "comprehension": {
+          "avg_duration_ms": 6291,
+          "avg_input_tokens": 196,
+          "avg_output_tokens": 162
+        },
+        "generation": {
+          "avg_duration_ms": 6157,
+          "avg_input_tokens": 89,
+          "avg_output_tokens": 237
+        },
+        "structuration": {
+          "avg_duration_ms": 3854,
+          "avg_input_tokens": 113,
+          "avg_output_tokens": 85
+        },
+        "merge": {
+          "avg_duration_ms": 3720,
+          "avg_input_tokens": 532,
+          "avg_output_tokens": 211
+        }
+      },
+      "quality": {
+        "avg_score": 2.8,
+        "comprehension_ok": 2,
+        "generation_ok": 2,
+        "json_valid": 5,
+        "json_has_keys": 5,
+        "merge_ok": 5
+      }
+    },
+    {
+      "provider": "HuggingFace Llama-3.2-1B",
+      "mode": "raw_api",
+      "runs": 5,
+      "successes": 0,
+      "totals": {
+        "avg_duration_ms": 0,
+        "min_duration_ms": 0,
+        "max_duration_ms": 0,
+        "avg_input_tokens": 0,
+        "avg_output_tokens": 0,
+        "estimated_cost_usd": 0.0
+      },
+      "steps": {},
+      "quality": {
+        "avg_score": 0.0,
+        "comprehension_ok": 0,
+        "generation_ok": 0,
+        "json_valid": 0,
+        "json_has_keys": 0,
+        "merge_ok": 0
+      }
+    }
+  ]
+}

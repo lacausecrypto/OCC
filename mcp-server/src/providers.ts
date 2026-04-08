@@ -565,6 +565,9 @@ async function runOpenAICompat(
     // Only stream on the FINAL text response (not during tool calls)
     const shouldStream = !!onChunk && (!hasTools || isLastIteration);
     body.stream = shouldStream;
+    if (shouldStream) {
+      body.stream_options = { include_usage: true };
+    }
 
     const res = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: "POST",
