@@ -5,9 +5,9 @@
 [![Node.js](https://img.shields.io/badge/Node.js-20%20%7C%2022-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
 [![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
-[![Pre--tools](https://img.shields.io/badge/Pre--tools-29%20types-orange)](#pre-tools)
-[![REST](https://img.shields.io/badge/REST%20API-102%20endpoints-green)](#rest-api-95-endpoints)
-[![Tests](https://img.shields.io/badge/Tests-1789%20passed-brightgreen)](#tests)
+[![Pre--tools](https://img.shields.io/badge/Pre--tools-30%20types-orange)](#pre-tools)
+[![REST](https://img.shields.io/badge/REST%20API-102%20endpoints-green)](#rest-api-102-endpoints)
+[![Tests](https://img.shields.io/badge/Tests-1814%20passed-brightgreen)](#tests)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](#)
@@ -30,11 +30,11 @@ Multi-model workflow engine built on Claude. Define chains in YAML, run them wit
 - [Pipelines](#pipeline-format) — multi-chain orchestration
 - [BLOB Sessions](#blob-sessions) — autonomous exploratory AI
 - [Scheduling](#scheduled-execution) · [Knowledge Graph](#knowledge-graph) · [CLI](#cli)
-- [REST API (102 endpoints)](#rest-api-95-endpoints) — auth, rate limiting
+- [REST API (102 endpoints)](#rest-api-102-endpoints) — auth, rate limiting
 - [Benchmarks](#token-efficiency--benchmarks) — OCC vs Claude CLI
 - [Deployment](#deployment-on-a-vps) · [Security](SECURITY.md) · [Configuration](#configuration)
 - [Example Chains (16)](#example-chains-15-included) · [Pipelines (5)](#example-pipelines-5-included)
-- [Tests (1789)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
+- [Tests (1814)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
 
 ---
 
@@ -62,8 +62,8 @@ You can mix models per step: Haiku for classification, Sonnet for synthesis, GPT
 | Feature | Details |
 |---------|---------|
 | **Parallel execution** | Automatic DAG resolution — independent steps run simultaneously |
-| **11 step types** | agent, router, evaluator, gate, transform, loop, merge, browser, subchain, debate, webhook |
-| **29 pre-tools** | Inject data before LLM calls (HTTP, SQL, bash, MCP, files, OCR, vectors, knowledge graph...) |
+| **12 step types** | agent, router, evaluator, gate, transform, loop, merge, browser, subchain, debate, webhook, **image_gen** |
+| **30 pre-tools** | Inject data before LLM calls (HTTP, SQL, bash, MCP, files, OCR, vectors, knowledge graph, **image generation**...) |
 | **Resilience** | Per-step retry with backoff, fallback models, output validation, guardrails |
 | **Persistence** | SQLite WAL with per-step checkpointing and crash recovery |
 | **Queue** | Priority job queue with configurable worker pool (default 5 workers) |
@@ -182,10 +182,11 @@ Steps without shared `depends_on` run **in parallel automatically**.
 | **subchain** | Execute another chain as a step with input mapping |
 | **debate** | Multi-agent discussion with voting/consensus/last-round |
 | **webhook** | HTTP callback with retry and status code validation |
+| **image_gen** | Generate images via OpenAI (DALL-E 3), HuggingFace (FLUX), or Stability AI — no LLM call |
 
 ### Pre-Tools
 
-29 types inject data **before** the LLM call (0 tokens for data collection). All support `{variable}` interpolation, `on_error`, `timeout_ms`, `retry`, `cache_ttl_minutes`, `parallel`.
+30 types inject data **before** the LLM call (0 tokens for data collection). All support `{variable}` interpolation, `on_error`, `timeout_ms`, `retry`, `cache_ttl_minutes`, `parallel`.
 
 <details>
 <summary>Full list (6 categories)</summary>
@@ -202,7 +203,47 @@ Steps without shared `depends_on` run **in parallel automatically**.
 
 **System:** `env_var` (allowlisted) · `sandbox_exec` (Docker)
 
+**Image generation:** `image_generate` (OpenAI DALL-E 3 / gpt-image-1, HuggingFace FLUX/SDXL, Stability AI SD3)
+
 </details>
+
+### Typed Inputs
+
+Inputs support explicit types, validation, defaults, and UI hints:
+
+```yaml
+inputs:
+  - name: topic
+    type: string
+    placeholder: "e.g. quantum computing"
+    min_length: 3
+    examples: ["AI safety", "climate change"]
+  - name: format
+    type: enum
+    enum: [markdown, openapi, jsdoc]
+    enum_labels: { markdown: "Markdown (.md)", openapi: "OpenAPI 3.0" }
+    default: markdown
+  - name: depth
+    type: number
+    min: 1
+    max: 10
+    default: "5"
+  - name: verbose
+    type: boolean
+    default: "false"
+  - name: banner
+    type: image
+    accepts: ["image/png", "image/jpeg"]
+    max_file_size: 5242880
+    optional: true
+  - name: source_url
+    type: url
+    optional: true
+```
+
+**Types:** `string` · `number` · `boolean` · `enum` · `file` · `image` · `json` · `url` · `text`
+
+**UI:** enum → dropdown, boolean → toggle switch, image → file picker with preview, number → numeric input with range, text → textarea with char counter
 
 ### Advanced Step Config
 
@@ -457,7 +498,7 @@ CORS_ORIGIN=https://yourdomain.com
 
 ## Tests
 
-**1789 tests** across 49 files:
+**1814 tests** across 50 files:
 
 ```bash
 cd mcp-server && npm test
