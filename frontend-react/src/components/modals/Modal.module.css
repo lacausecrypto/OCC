@@ -108,6 +108,12 @@
   color: var(--m-text2);
   margin-bottom: 4px;
 }
+.fieldError {
+  font-size: 10px;
+  color: var(--c-error);
+  margin-top: 2px;
+  font-weight: 500;
+}
 .required {
   color: var(--c-error);
   font-size: var(--s-xs);

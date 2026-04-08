@@ -1632,10 +1632,49 @@ export async function executeChain(
   const executionId = externalId ?? crypto.randomBytes(8).toString("hex");
   const startedAt = new Date().toISOString();
 
-  // Validate required inputs
+  // Apply defaults + validate inputs
   for (const inputDef of chain.inputs ?? []) {
-    if (!inputDef.optional && input[inputDef.name] === undefined) {
-      throw new Error(`Missing required input: "${inputDef.name}"`);
+    // Apply default if not provided
+    if ((input[inputDef.name] === undefined || input[inputDef.name] === "") && inputDef.default != null) {
+      input[inputDef.name] = inputDef.default;
+    }
+    // Required check
+    if (!inputDef.optional && (input[inputDef.name] === undefined || input[inputDef.name] === "")) {
+      throw new Error(`Missing required input: "${inputDef.name}"${inputDef.description ? ` (${inputDef.description})` : ""}`);
+    }
+    const val = input[inputDef.name];
+    if (val === undefined) continue;
+    const itype = inputDef.type ?? "string";
+    // Type validation
+    if (itype === "number" && isNaN(Number(val))) {
+      throw new Error(`Input "${inputDef.name}" must be a number, got: "${val}"`);
+    }
+    if (itype === "boolean" && !["true", "false", "1", "0", "yes", "no"].includes(val.toLowerCase())) {
+      throw new Error(`Input "${inputDef.name}" must be a boolean (true/false), got: "${val}"`);
+    }
+    if (itype === "enum" && inputDef.enum && !inputDef.enum.includes(val)) {
+      throw new Error(`Input "${inputDef.name}" must be one of: ${inputDef.enum.join(", ")}. Got: "${val}"`);
+    }
+    if (itype === "url" && !/^https?:\/\/.+/.test(val)) {
+      throw new Error(`Input "${inputDef.name}" must be a valid URL, got: "${val}"`);
+    }
+    // Pattern validation
+    if (inputDef.pattern && !new RegExp(inputDef.pattern).test(val)) {
+      throw new Error(`Input "${inputDef.name}" does not match pattern: ${inputDef.pattern}`);
+    }
+    // Length validation
+    if (inputDef.min_length != null && val.length < inputDef.min_length) {
+      throw new Error(`Input "${inputDef.name}" must be at least ${inputDef.min_length} characters`);
+    }
+    if (inputDef.max_length != null && val.length > inputDef.max_length) {
+      throw new Error(`Input "${inputDef.name}" must be at most ${inputDef.max_length} characters`);
+    }
+    // Number range validation
+    if (itype === "number" && inputDef.min != null && Number(val) < inputDef.min) {
+      throw new Error(`Input "${inputDef.name}" must be >= ${inputDef.min}`);
+    }
+    if (itype === "number" && inputDef.max != null && Number(val) > inputDef.max) {
+      throw new Error(`Input "${inputDef.name}" must be <= ${inputDef.max}`);
     }
   }
 

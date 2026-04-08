@@ -1,9 +1,29 @@
 // ─── Chain definition (YAML schema) ───────────────────────────────────────────
 
+export type ChainInputType = "string" | "number" | "boolean" | "enum" | "file" | "image" | "json" | "url" | "text";
+
 export interface ChainInput {
   name: string;
   description?: string;
   optional?: boolean;
+  // Type system
+  type?: ChainInputType;       // default: "string"
+  default?: string;            // default value (used if input not provided)
+  placeholder?: string;        // hint text in UI
+  // Enum/select
+  enum?: string[];             // valid values for enum type
+  enum_labels?: Record<string, string>; // display labels for enum values
+  // Validation
+  pattern?: string;            // regex pattern for validation
+  min_length?: number;         // minimum string length
+  max_length?: number;         // maximum string length
+  min?: number;                // minimum number value
+  max?: number;                // maximum number value
+  // File/image constraints
+  accepts?: string[];          // MIME types or extensions: [".pdf", ".csv", "image/*"]
+  max_file_size?: number;      // max file size in bytes (default: 10MB)
+  // UX
+  examples?: string[];         // example values shown below input
 }
 
 export type PreToolType =

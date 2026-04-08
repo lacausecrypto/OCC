@@ -235,6 +235,19 @@ const ChainSchema = z.object({
         name: z.string(),
         description: z.string().optional(),
         optional: z.boolean().optional().default(false),
+        type: z.enum(["string", "number", "boolean", "enum", "file", "image", "json", "url", "text"]).optional(),
+        default: z.string().optional(),
+        placeholder: z.string().optional(),
+        enum: z.array(z.string()).optional(),
+        enum_labels: z.record(z.string(), z.string()).optional(),
+        pattern: z.string().optional(),
+        min_length: z.number().optional(),
+        max_length: z.number().optional(),
+        min: z.number().optional(),
+        max: z.number().optional(),
+        accepts: z.array(z.string()).optional(),
+        max_file_size: z.number().optional(),
+        examples: z.array(z.string()).optional(),
       })
     )
     .optional()

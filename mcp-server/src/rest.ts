@@ -435,12 +435,27 @@ app.post("/execute/:name", async (req: Request, res: Response) => {
     const input = (req.body?.input ?? {}) as Record<string, string>;
     const priority = typeof req.body?.priority === "number" ? req.body.priority : 5;
 
-    // Validate required inputs against chain definition
+    // Apply defaults + validate inputs
     for (const inputDef of chain.inputs ?? []) {
+      if ((input[inputDef.name] === undefined || input[inputDef.name] === "") && inputDef.default != null) {
+        input[inputDef.name] = inputDef.default;
+      }
       if (!inputDef.optional && (input[inputDef.name] === undefined || input[inputDef.name] === "")) {
         return res.status(400).json({
           error: `Missing required input: "${inputDef.name}"${inputDef.description ? ` (${inputDef.description})` : ""}`,
         });
+      }
+      const val = input[inputDef.name];
+      if (val === undefined) continue;
+      const itype = inputDef.type ?? "string";
+      if (itype === "enum" && inputDef.enum && !inputDef.enum.includes(val)) {
+        return res.status(400).json({ error: `Input "${inputDef.name}" must be one of: ${inputDef.enum.join(", ")}` });
+      }
+      if (itype === "number" && isNaN(Number(val))) {
+        return res.status(400).json({ error: `Input "${inputDef.name}" must be a number` });
+      }
+      if (itype === "url" && !/^https?:\/\/.+/.test(val)) {
+        return res.status(400).json({ error: `Input "${inputDef.name}" must be a valid URL` });
       }
     }
 

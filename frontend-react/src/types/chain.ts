@@ -49,10 +49,25 @@ export type PreToolType =
   | "approval_request"
   | "image_generate";
 
+export type ChainInputType = "string" | "number" | "boolean" | "enum" | "file" | "image" | "json" | "url" | "text";
+
 export interface ChainInput {
   name: string;
   description?: string;
   optional?: boolean;
+  type?: ChainInputType;
+  default?: string;
+  placeholder?: string;
+  enum?: string[];
+  enum_labels?: Record<string, string>;
+  pattern?: string;
+  min_length?: number;
+  max_length?: number;
+  min?: number;
+  max?: number;
+  accepts?: string[];
+  max_file_size?: number;
+  examples?: string[];
 }
 
 export interface PreTool {

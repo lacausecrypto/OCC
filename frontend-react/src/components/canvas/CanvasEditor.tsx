@@ -384,13 +384,13 @@ export function CanvasEditor() {
       <div className={styles.toolbar}>
         <CanvasToolbar
           onRun={() => {
-            const state = useCanvasStore.getState();
-            const pName = useAppStore.getState().pipelineName;
+            const appState = useAppStore.getState();
+            const pName = appState.pipelineName;
             if (pName) {
               setRunModal({ name: pName, type: "pipeline" });
             } else {
-              const first = [...state.nodes.values()][0];
-              if (first) setRunModal({ name: first.stepId || first.label, type: "chain" });
+              const chainName = appState.canvasChainName;
+              if (chainName) setRunModal({ name: chainName, type: "chain" });
             }
           }}
           onNew={() => {
