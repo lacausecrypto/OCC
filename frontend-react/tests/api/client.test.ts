@@ -11,7 +11,7 @@ describe("ApiClient", () => {
 
   it("creates with default values", () => {
     const c = new ApiClient();
-    expect(c.baseUrl).toBe("/api");
+    expect(c.baseUrl).toBe("");
     expect(c.apiKey).toBeNull();
   });
 

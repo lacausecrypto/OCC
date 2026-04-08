@@ -1057,6 +1057,16 @@ export function Settings() {
                 <div key={name} className={styles.row}><div className={styles.rowBody}><div className={styles.rowLabel} style={{ paddingLeft: 12 }}>{name}</div></div><span className={styles.rowValue}>{formatBytes(size)}</span></div>
               ))}
             </>)}
+            <div className={styles.row} style={{ borderTop: "1px solid var(--m-border)", marginTop: 8, paddingTop: 12 }}>
+              <div className={styles.rowBody}>
+                <div className={styles.rowLabel}>Setup Check</div>
+                <div className={styles.rowHint}>Verify all prerequisites (Claude CLI, Ollama, Docker...)</div>
+              </div>
+              <button
+                className={styles.rowBtn}
+                onClick={() => window.dispatchEvent(new Event("occ-recheck-prerequisites"))}
+              >Run Setup Check</button>
+            </div>
           </div>
         </div>
 
