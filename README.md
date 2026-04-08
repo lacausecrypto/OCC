@@ -94,7 +94,14 @@ You can mix models per step: Haiku for classification, Sonnet for synthesis, GPT
 ## Quick Start
 
 ### Prerequisites
-- **Node.js 20+** (22 recommended) · **Claude CLI** authenticated · npm 9+
+- **Node.js 20+** (22 recommended) · npm 9+
+- **Claude CLI** — install and authenticate:
+  ```bash
+  npm install -g @anthropic-ai/claude-code
+  claude   # opens browser to authenticate
+  ```
+
+> On first launch, the dashboard shows a **Setup Check modal** that verifies all prerequisites (Claude CLI, SQLite, Ollama, Docker...) and guides you through fixing any missing dependencies.
 
 ### Install via npm (recommended)
 

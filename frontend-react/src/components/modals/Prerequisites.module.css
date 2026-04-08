@@ -1,0 +1,385 @@
+/* ═══════════════════════════════════════════════════════════════
+   Prerequisites Modal — glass morphism setup check
+   ═══════════════════════════════════════════════════════════════ */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: overlayIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal {
+  background: var(--m-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: calc(var(--m-radius) + 4px);
+  width: min(500px, 92vw);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow:
+    0 32px 100px rgba(0, 0, 0, 0.6),
+    0 0 0 1px var(--glass-border),
+    0 0 60px -10px rgba(var(--m-accent-rgb, 10, 132, 255), 0.1);
+  animation: modalIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: center center;
+}
+
+/* ─── Header ─── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--m-border);
+  background: var(--glass-tint-subtle);
+}
+.headerTitle {
+  font-size: var(--s-lg);
+  font-weight: 700;
+  color: var(--m-text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.headerTitle svg {
+  color: var(--m-accent);
+}
+.version {
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  background: var(--glass-tint);
+  padding: 3px 8px;
+  border-radius: calc(var(--m-radius) - 6px);
+  font-family: var(--m-font-mono, monospace);
+}
+
+/* ─── Body ─── */
+.body {
+  padding: 16px 22px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* ─── Section ─── */
+.section {
+  margin-bottom: 16px;
+}
+.section:last-child {
+  margin-bottom: 0;
+}
+.sectionLabel {
+  font-size: var(--s-xs);
+  font-weight: 700;
+  color: var(--m-text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding-left: 2px;
+}
+
+/* ─── Check row ─── */
+.checkRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--m-radius);
+  margin-bottom: 4px;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  border: 1px solid transparent;
+}
+.checkRow.ok {
+  background: rgba(48, 209, 88, 0.04);
+}
+.checkRow.warn {
+  background: rgba(255, 159, 10, 0.06);
+  border-color: rgba(255, 159, 10, 0.12);
+}
+.checkRow.fail {
+  background: rgba(255, 55, 95, 0.06);
+  border-color: rgba(255, 55, 95, 0.15);
+}
+.checkRow.checking {
+  background: rgba(var(--m-accent-rgb, 10, 132, 255), 0.06);
+  border-color: rgba(var(--m-accent-rgb, 10, 132, 255), 0.15);
+}
+.checkIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.checkInfo {
+  flex: 1;
+  min-width: 0;
+}
+.checkLabel {
+  font-size: calc(var(--m-body-size) * 0.93);
+  font-weight: 600;
+  color: var(--m-text);
+}
+.checkDetail {
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  margin-top: 1px;
+  word-break: break-word;
+}
+
+/* ─── Hint code (clickable to copy) ─── */
+.hintRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+}
+.hintCode {
+  display: inline-block;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--m-font-mono, "SF Mono", "Fira Code", monospace);
+  background: var(--glass-tint-hover);
+  border-radius: calc(var(--m-radius) - 6px);
+  color: var(--m-accent);
+  border: 1px solid var(--glass-border);
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: all;
+}
+.hintCode:hover {
+  background: rgba(var(--m-accent-rgb, 10, 132, 255), 0.12);
+  border-color: var(--m-accent);
+}
+.hintCode:active {
+  transform: scale(0.97);
+}
+
+/* ─── Copied badge ─── */
+.copiedBadge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--c-success);
+  background: rgba(48, 209, 88, 0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  animation: fadeInBadge 0.2s ease;
+}
+
+/* ─── Action button per check ─── */
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--m-font);
+  color: var(--m-text);
+  background: var(--glass-tint);
+  border: 1px solid var(--glass-border);
+  border-radius: calc(var(--m-radius) - 4px);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(4px);
+}
+.actionBtn:hover {
+  background: var(--glass-tint-hover);
+  border-color: var(--m-accent);
+  color: var(--m-accent);
+  box-shadow: 0 0 8px -2px rgba(var(--m-accent-rgb, 10, 132, 255), 0.2);
+}
+.actionBtn:active {
+  transform: scale(0.96);
+}
+.actionBtn svg {
+  opacity: 0.7;
+}
+
+/* ─── Loading ─── */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 0;
+  color: var(--m-text2);
+  font-size: calc(var(--m-body-size) * 0.93);
+}
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--m-border);
+  border-top-color: var(--m-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.miniSpinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--m-border);
+  border-top-color: var(--m-accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+
+/* ─── Auto-refresh indicator ─── */
+.autoRefresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 0 4px;
+  font-size: 11px;
+  color: var(--m-text2);
+  opacity: 0.7;
+}
+
+/* ─── Error block ─── */
+.errorBlock {
+  display: flex;
+  gap: 14px;
+  padding: 20px;
+  border-radius: var(--m-radius);
+  background: rgba(255, 55, 95, 0.06);
+  border: 1px solid rgba(255, 55, 95, 0.15);
+}
+.errorIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.errorTitle {
+  font-weight: 700;
+  color: var(--c-error);
+  font-size: calc(var(--m-body-size) * 0.93);
+  margin-bottom: 4px;
+}
+.errorDetail {
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  margin-bottom: 6px;
+}
+
+/* ─── Footer ─── */
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 22px;
+  border-top: 1px solid var(--m-border);
+  background: var(--glass-tint-subtle);
+  gap: 12px;
+}
+.dontShowLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--s-xs);
+  color: var(--m-text2);
+  cursor: pointer;
+  user-select: none;
+}
+.dontShowCheck {
+  accent-color: var(--m-accent);
+  width: 14px;
+  height: 14px;
+}
+.footerActions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ─── Glass buttons ─── */
+.btnGlass {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: calc(var(--m-radius) - 2px);
+  font-size: calc(var(--m-body-size) * 0.93);
+  font-weight: 500;
+  font-family: var(--m-font);
+  cursor: pointer;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-tint);
+  color: var(--m-text);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btnGlass:hover:not(:disabled) {
+  background: var(--glass-tint-hover);
+  border-color: var(--m-accent);
+  box-shadow: 0 0 12px -2px rgba(var(--m-accent-rgb, 10, 132, 255), 0.2);
+}
+.btnGlass:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.btnGlass:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btnPrimary {
+  background: var(--m-accent);
+  color: var(--m-accent-contrast, #fff);
+  border-color: transparent;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.btnPrimary:hover:not(:disabled) {
+  filter: brightness(1.15);
+  background: var(--m-accent);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+/* ─── Animations ─── */
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.92) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes fadeInBadge {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 500px) {
+  .modal {
+    width: 96vw;
+    border-radius: var(--m-radius);
+  }
+  .header, .body, .footer {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .footer {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .footerActions {
+    width: 100%;
+  }
+  .btnGlass {
+    flex: 1;
+    justify-content: center;
+  }
+}

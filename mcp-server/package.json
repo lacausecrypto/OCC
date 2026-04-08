@@ -1,6 +1,6 @@
 {
   "name": "occ-orchestrator",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Claude Chain Orchestrator — Multi-step AI workflow engine with MCP + REST API",
   "type": "module",
   "engines": {

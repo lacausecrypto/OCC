@@ -2,7 +2,9 @@ import { useEffect, useRef } from "react";
 import { useServerStore } from "./stores/server";
 import { useMonitorStore } from "./stores/monitor";
 import { useDesignStore } from "./stores/design";
+import { useAppStore } from "./stores/app";
 import { AppLayout } from "./components/layout";
+import { PrerequisitesModal } from "./components/modals/PrerequisitesModal";
 
 function App() {
   const { checkHealth, serverOnline } = useServerStore();
@@ -34,7 +36,22 @@ function App() {
     applyBlend();
   }, [applyBlend]);
 
-  return <AppLayout />;
+  // Listen for tab navigation from Prerequisites modal
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const tab = (e as CustomEvent).detail;
+      if (tab) useAppStore.getState().setActiveTab(tab);
+    };
+    window.addEventListener("occ-navigate-tab", handler);
+    return () => window.removeEventListener("occ-navigate-tab", handler);
+  }, []);
+
+  return (
+    <>
+      <PrerequisitesModal />
+      <AppLayout />
+    </>
+  );
 }
 
 export default App;

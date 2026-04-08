@@ -1276,7 +1276,7 @@ app.get("/health", (_req, res) => {
 
   res.json({
     ok: true,
-    version: "0.3.0",
+    version: "0.3.1",
     runningExecutions: getRunningExecutionCount(),
     mcpServers: getConfiguredServers(),
     queue: getQueueStats(),
@@ -1302,6 +1302,99 @@ app.get("/health", (_req, res) => {
     blobBytes,
     blobSessionCount,
   });
+});
+
+// GET /prerequisites — check all required and optional dependencies
+app.get("/prerequisites", async (_req, res) => {
+  const checks: Array<{
+    id: string;
+    label: string;
+    required: boolean;
+    status: "ok" | "warn" | "fail";
+    detail: string;
+    hint?: string;
+  }> = [];
+
+  // 1. Backend running (always ok if we got here)
+  checks.push({ id: "backend", label: "OCC Backend", required: true, status: "ok", detail: `v0.3.0 — Node ${process.version}` });
+
+  // 2. Claude CLI installed
+  try {
+    const { execFileSync } = await import("node:child_process");
+    const ver = execFileSync(process.env.CLAUDE_CLI ?? "claude", ["--version"], { timeout: 5000, encoding: "utf-8" }).trim();
+    checks.push({ id: "claude_cli", label: "Claude CLI", required: true, status: "ok", detail: ver.split("\n")[0] });
+
+    // 3. Claude CLI authenticated (quick test)
+    try {
+      execFileSync(process.env.CLAUDE_CLI ?? "claude", ["-p", "hi", "--max-turns", "1", "--output-format", "json"], { timeout: 15000, encoding: "utf-8" });
+      checks.push({ id: "claude_auth", label: "Claude CLI authenticated", required: true, status: "ok", detail: "Responds to prompts" });
+    } catch (authErr: any) {
+      const msg = authErr?.stderr?.toString() ?? authErr?.message ?? "";
+      if (msg.includes("auth") || msg.includes("login") || msg.includes("API key")) {
+        checks.push({ id: "claude_auth", label: "Claude CLI authenticated", required: true, status: "fail", detail: "Not authenticated", hint: "Run: claude (opens browser to authenticate)" });
+      } else {
+        // It errored but maybe just a timeout or rate limit — mark as warning
+        checks.push({ id: "claude_auth", label: "Claude CLI authenticated", required: true, status: "warn", detail: msg.slice(0, 120) || "Could not verify", hint: "Run: claude -p \"test\" --max-turns 1" });
+      }
+    }
+  } catch {
+    checks.push({ id: "claude_cli", label: "Claude CLI", required: true, status: "fail", detail: "Not found in PATH", hint: "npm install -g @anthropic-ai/claude-code" });
+    checks.push({ id: "claude_auth", label: "Claude CLI authenticated", required: true, status: "fail", detail: "CLI not installed", hint: "Install Claude CLI first" });
+  }
+
+  // 4. SQLite database
+  try {
+    // If we got here, the DB was initialized at startup — just verify it works
+    const stats = getChainStats("__nonexistent__");
+    checks.push({ id: "sqlite", label: "SQLite database", required: true, status: "ok", detail: "Connected and operational" });
+  } catch (e: any) {
+    checks.push({ id: "sqlite", label: "SQLite database", required: true, status: "fail", detail: e?.message?.slice(0, 100) ?? "Cannot open", hint: "Check OCC_DB path and permissions" });
+  }
+
+  // 5. Chains loaded (use same dir as the loader)
+  try {
+    const { getChainsDir } = await import("./loader.js");
+    const chainsDir = getChainsDir();
+    const files = fs.readdirSync(chainsDir).filter((f: string) => f.endsWith(".yaml") || f.endsWith(".yml"));
+    checks.push({ id: "chains", label: "Chains directory", required: false, status: files.length > 0 ? "ok" : "warn", detail: `${files.length} chain(s) in ${chainsDir}`, hint: files.length === 0 ? "Add .yaml chain files to your chains directory" : undefined });
+  } catch {
+    checks.push({ id: "chains", label: "Chains directory", required: false, status: "warn", detail: "Directory not found", hint: "Set CHAINS_DIR or create ./chains/" });
+  }
+
+  // 6. LLM Providers configured
+  try {
+    const provMod = await import("./providers.js");
+    const providers = provMod.listProviders();
+    const enabled = providers.filter((p: any) => p.enabled);
+    checks.push({ id: "providers", label: "LLM Providers", required: false, status: enabled.length > 0 ? "ok" : "warn", detail: `${enabled.length} provider(s) enabled (${enabled.map((p: any) => p.name).join(", ") || "none"})`, hint: enabled.length === 0 ? "Configure providers in Settings > LLM Providers" : undefined });
+  } catch {
+    checks.push({ id: "providers", label: "LLM Providers", required: false, status: "warn", detail: "Could not load", hint: "Configure providers in Settings" });
+  }
+
+  // 7. Ollama running
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    const ollamaRes = await fetch("http://localhost:11434/api/tags", { signal: ctrl.signal });
+    clearTimeout(timer);
+    const data = await ollamaRes.json() as { models?: Array<{ name: string }> };
+    const models = data.models ?? [];
+    checks.push({ id: "ollama", label: "Ollama (local LLM)", required: false, status: "ok", detail: `${models.length} model(s): ${models.map((m: any) => m.name).slice(0, 3).join(", ") || "none"}` });
+  } catch {
+    checks.push({ id: "ollama", label: "Ollama (local LLM)", required: false, status: "warn", detail: "Not running", hint: "Install from ollama.com and run: ollama serve" });
+  }
+
+  // 8. Docker available
+  try {
+    const { execFileSync } = await import("node:child_process");
+    const ver = execFileSync("docker", ["--version"], { timeout: 3000, encoding: "utf-8" }).trim();
+    checks.push({ id: "docker", label: "Docker", required: false, status: "ok", detail: ver.split("\n")[0] });
+  } catch {
+    checks.push({ id: "docker", label: "Docker", required: false, status: "warn", detail: "Not found", hint: "Install Docker for sandboxed bash execution" });
+  }
+
+  const allRequiredOk = checks.filter(c => c.required).every(c => c.status === "ok");
+  res.json({ checks, allRequiredOk });
 });
 
 // GET /config — current server configuration
