@@ -506,7 +506,7 @@ export async function runStepWithRetry(
         // Check if this model should be routed to an HTTP provider
         // instead of the Claude CLI.
         const resolved = resolveProvider(stepWithModel.model ?? "", (stepWithModel as unknown as Record<string, unknown>).provider as string | undefined);
-        if (resolved && resolved.provider.type !== "claude" && resolved.provider.apiKey) {
+        if (resolved && resolved.provider.type !== "claude" && (resolved.provider.apiKey || resolved.provider.type === "ollama")) {
           // Non-Claude provider → use HTTP adapter
           onLog(`Using provider: ${resolved.provider.name} (${resolved.model})`, "info");
           const result = await runLLMHTTP(
@@ -516,6 +516,7 @@ export async function runStepWithRetry(
               prompt: resolvedPrompt,
               maxTokens: 8192,
               stream: true,
+              tools: step.tools,
             },
             onChunk,
           );

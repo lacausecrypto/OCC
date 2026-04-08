@@ -11,6 +11,13 @@ import { logger } from "./logger.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
+export interface ToolPermissions {
+  allowedTools?: string[];     // whitelist — if set, ONLY these tools can be used
+  deniedTools?: string[];      // blacklist — these tools are always blocked
+  maxIterations?: number;      // override MAX_TOOL_ITERATIONS (default 15)
+  toolsEnabled?: boolean;      // master switch — false = no tools at all (default true)
+}
+
 export interface LLMProvider {
   id: string;
   name: string;
@@ -21,6 +28,9 @@ export interface LLMProvider {
   enabled: boolean;
   models?: string[];
   createdAt: string;
+  toolPermissions?: ToolPermissions;
+  /** Per-model overrides — merges on top of provider-level toolPermissions */
+  perModelPermissions?: Record<string, Partial<ToolPermissions>>;
 }
 
 export interface LLMRunConfig {
@@ -31,6 +41,7 @@ export interface LLMRunConfig {
   maxTokens?: number;
   temperature?: number;
   stream?: boolean;
+  tools?: string[];
 }
 
 export interface LLMResult {
@@ -387,51 +398,257 @@ async function runOpenRouter(
   };
 }
 
+// ─── OpenAI-compatible tool definitions ─────────────────────────────────────
+// Maps OCC step tool names (Bash, Read, WebSearch, etc.) to OpenAI function calling format.
+// When a non-Claude provider has tools, we send these definitions and execute an agent loop.
+
+interface OAIToolDef {
+  type: "function";
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
+
+const TOOL_DEFS: Record<string, OAIToolDef> = {
+  Bash: { type: "function", function: {
+    name: "bash", description: "Execute a shell command and return stdout. Use for running scripts, installing packages, git operations, etc.",
+    parameters: { type: "object", properties: { command: { type: "string", description: "Shell command to execute" } }, required: ["command"] },
+  }},
+  Read: { type: "function", function: {
+    name: "read_file", description: "Read the contents of a file at the given path.",
+    parameters: { type: "object", properties: { path: { type: "string", description: "File path (relative to workspace)" } }, required: ["path"] },
+  }},
+  Write: { type: "function", function: {
+    name: "write_file", description: "Write content to a file. Creates the file if it does not exist.",
+    parameters: { type: "object", properties: { path: { type: "string", description: "File path" }, content: { type: "string", description: "Content to write" } }, required: ["path", "content"] },
+  }},
+  Edit: { type: "function", function: {
+    name: "write_file", description: "Edit a file by writing new content (full file replacement).",
+    parameters: { type: "object", properties: { path: { type: "string", description: "File path" }, content: { type: "string", description: "New file content" } }, required: ["path", "content"] },
+  }},
+  Glob: { type: "function", function: {
+    name: "bash", description: "Find files matching a glob pattern. Returns file paths.",
+    parameters: { type: "object", properties: { command: { type: "string", description: "Use: find . -name 'pattern' or ls pattern" } }, required: ["command"] },
+  }},
+  Grep: { type: "function", function: {
+    name: "bash", description: "Search file contents for a pattern using grep. Returns matching lines.",
+    parameters: { type: "object", properties: { command: { type: "string", description: "Use: grep -rn 'pattern' path/" } }, required: ["command"] },
+  }},
+  WebSearch: { type: "function", function: {
+    name: "web_search", description: "Search the web for information. Returns a summary of relevant results.",
+    parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] },
+  }},
+  WebFetch: { type: "function", function: {
+    name: "http_fetch", description: "Fetch the contents of a URL. Returns the response body as text.",
+    parameters: { type: "object", properties: { url: { type: "string", description: "URL to fetch" }, method: { type: "string", enum: ["GET", "POST"], default: "GET" } }, required: ["url"] },
+  }},
+};
+
+/** Convert OCC step tool names to OpenAI tool definitions */
+function mapToolsToOAI(tools: string[]): OAIToolDef[] {
+  const seen = new Set<string>();
+  const result: OAIToolDef[] = [];
+  for (const t of tools) {
+    // Handle patterns like "Bash(npm *)" → extract "Bash"
+    const base = t.includes("(") ? t.slice(0, t.indexOf("(")) : t;
+    const def = TOOL_DEFS[base];
+    if (def && !seen.has(def.function.name)) {
+      seen.add(def.function.name);
+      result.push(def);
+    }
+  }
+  return result;
+}
+
+/** Execute an OAI tool call using OCC's pre-tool executor */
+async function executeToolCall(
+  name: string,
+  args: Record<string, string>,
+  onLog: (msg: string) => void,
+): Promise<string> {
+  // Lazy import to avoid circular dependency
+  const { executeSinglePreTool } = await import("./pretool-executor.js");
+  const tool = { type: name as "bash", inject_as: "_tool_result", ...args };
+  try {
+    const result = await executeSinglePreTool(tool as any, args, (msg, level) => {
+      onLog(`[tool:${name}] ${msg}`);
+    });
+    return result;
+  } catch (err) {
+    return `[ERROR] ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+// ─── Agent loop constants ───────────────────────────────────────────────────
+const MAX_TOOL_ITERATIONS = 15;
+
+/** Filter OAI tool definitions based on provider's toolPermissions */
+function filterToolsByPermissions(tools: OAIToolDef[], perms?: ToolPermissions): OAIToolDef[] {
+  if (!perms) return tools;
+  if (perms.toolsEnabled === false) return [];
+
+  let filtered = tools;
+
+  // Whitelist: only allow these tools
+  if (perms.allowedTools && perms.allowedTools.length > 0) {
+    const allowed = new Set(perms.allowedTools);
+    filtered = filtered.filter(t => allowed.has(t.function.name));
+  }
+
+  // Blacklist: deny these tools
+  if (perms.deniedTools && perms.deniedTools.length > 0) {
+    const denied = new Set(perms.deniedTools);
+    filtered = filtered.filter(t => !denied.has(t.function.name));
+  }
+
+  return filtered;
+}
+
+/** Resolve the full denied set for a model (provider defaults + per-model overrides).
+ *  Returns tool IDs like "bash", pre-tool IDs like "pre:web_search", MCP IDs like "mcp:sports-hub". */
+export function getModelDeniedSet(model: string): Set<string> {
+  const resolved = resolveProvider(model);
+  if (!resolved) return new Set();
+  const { provider } = resolved;
+  const base = provider.toolPermissions ?? {};
+  const override = provider.perModelPermissions?.[model] ?? {};
+  const merged = { ...base, ...override };
+  if (merged.toolsEnabled === false) return new Set(["*"]); // everything blocked
+  return new Set(merged.deniedTools ?? []);
+}
+
 async function runOpenAICompat(
   provider: LLMProvider,
   config: LLMRunConfig,
   onChunk: ((chunk: string) => void) | undefined,
   startTime: number,
 ): Promise<LLMResult> {
-  const body = {
-    model: config.model,
-    messages: [
-      ...(config.systemPrompt ? [{ role: "system" as const, content: config.systemPrompt }] : []),
-      { role: "user" as const, content: config.prompt },
-    ],
-    max_tokens: config.maxTokens ?? 8192,
-    stream: !!onChunk,
-  };
+  const rawTools = config.tools && config.tools.length > 0 ? mapToolsToOAI(config.tools) : [];
+  // Resolve per-model permissions (override provider defaults)
+  const modelPerms = provider.perModelPermissions?.[config.model];
+  const effectivePerms: ToolPermissions | undefined = modelPerms
+    ? { ...provider.toolPermissions, ...modelPerms }
+    : provider.toolPermissions;
+  const oaiTools = filterToolsByPermissions(rawTools, effectivePerms);
+  const hasTools = oaiTools.length > 0;
+  const maxIter = effectivePerms?.maxIterations ?? MAX_TOOL_ITERATIONS;
+
+  // Build initial messages
+  const messages: Array<{ role: string; content?: string | null; tool_calls?: any[]; tool_call_id?: string; name?: string }> = [
+    ...(config.systemPrompt ? [{ role: "system", content: config.systemPrompt }] : []),
+    { role: "user", content: config.prompt },
+  ];
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "Authorization": `Bearer ${provider.apiKey}`,
   };
 
-  const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
+  let totalInput = 0;
+  let totalOutput = 0;
+  let finalText = "";
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => res.statusText);
-    throw new Error(`${provider.name} API ${res.status}: ${errText}`);
+  // ─── Agent loop: send → get tool_calls → execute → re-send ───
+  for (let iteration = 0; iteration <= maxIter; iteration++) {
+    const isLastIteration = iteration === maxIter;
+
+    const body: Record<string, unknown> = {
+      model: config.model,
+      messages,
+      max_tokens: config.maxTokens ?? 8192,
+    };
+
+    // Include tools (except on last forced iteration — force a text response)
+    if (hasTools && !isLastIteration) {
+      body.tools = oaiTools;
+      body.tool_choice = "auto";
+    }
+
+    // Only stream on the FINAL text response (not during tool calls)
+    const shouldStream = !!onChunk && (!hasTools || isLastIteration);
+    body.stream = shouldStream;
+
+    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      throw new Error(`${provider.name} API ${res.status}: ${errText}`);
+    }
+
+    // Streaming final response
+    if (shouldStream && res.body) {
+      const streamResult = await streamOpenAIResponse(res, provider, config.model, onChunk!, startTime);
+      return {
+        ...streamResult,
+        inputTokens: totalInput + streamResult.inputTokens,
+        outputTokens: totalOutput + streamResult.outputTokens,
+      };
+    }
+
+    // Non-streaming response — check for tool calls
+    const data = await res.json() as {
+      choices: Array<{
+        message: {
+          content?: string | null;
+          tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+        };
+        finish_reason?: string;
+      }>;
+      usage?: { prompt_tokens: number; completion_tokens: number };
+    };
+
+    totalInput += data.usage?.prompt_tokens ?? 0;
+    totalOutput += data.usage?.completion_tokens ?? 0;
+
+    const choice = data.choices?.[0];
+    if (!choice) break;
+
+    const toolCalls = choice.message.tool_calls;
+
+    // No tool calls → final text response
+    if (!toolCalls || toolCalls.length === 0 || !hasTools) {
+      finalText = choice.message.content ?? "";
+      if (onChunk && finalText) onChunk(finalText);
+      break;
+    }
+
+    // Has tool calls → execute them and feed results back
+    // Add assistant message with tool_calls to conversation
+    messages.push({
+      role: "assistant",
+      content: choice.message.content ?? null,
+      tool_calls: toolCalls,
+    });
+
+    // Execute each tool call
+    for (const tc of toolCalls) {
+      let args: Record<string, string> = {};
+      try { args = JSON.parse(tc.function.arguments); } catch {}
+
+      if (onChunk) onChunk(`\n[calling ${tc.function.name}(${Object.values(args).join(", ").slice(0, 80)})]\n`);
+
+      const result = await executeToolCall(
+        tc.function.name,
+        args,
+        (msg) => { if (onChunk) onChunk(`${msg}\n`); },
+      );
+
+      // Add tool result to conversation
+      messages.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: result.slice(0, 50000), // Cap tool output to prevent context overflow
+      });
+    }
+    // Loop continues — next iteration sends tool results back to LLM
   }
-
-  if (onChunk && body.stream && res.body) {
-    return streamOpenAIResponse(res, provider, config.model, onChunk, startTime);
-  }
-
-  const data = await res.json() as {
-    choices: Array<{ message: { content: string } }>;
-    usage?: { prompt_tokens: number; completion_tokens: number };
-  };
 
   return {
-    text: data.choices?.[0]?.message?.content ?? "",
-    inputTokens: data.usage?.prompt_tokens ?? 0,
-    outputTokens: data.usage?.completion_tokens ?? 0,
+    text: finalText,
+    inputTokens: totalInput,
+    outputTokens: totalOutput,
     durationMs: Date.now() - startTime,
     model: config.model,
     provider: provider.id,

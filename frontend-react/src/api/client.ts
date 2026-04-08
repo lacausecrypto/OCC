@@ -4,7 +4,7 @@ export class ApiClient {
   baseUrl: string;
   apiKey: string | null;
 
-  constructor(baseUrl = "/api", apiKey: string | null = null) {
+  constructor(baseUrl = "", apiKey: string | null = null) {
     this.baseUrl = baseUrl;
     this.apiKey = apiKey;
   }

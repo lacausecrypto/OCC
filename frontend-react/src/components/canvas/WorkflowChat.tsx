@@ -3,20 +3,20 @@
  * Two-stage: chat (architect) -> plan (creates canvas nodes).
  * Configurable prompts, models, and animated Unicode loader.
  */
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useWorkflowChatStore, type WFMessage } from "../../stores/workflowChat";
 
 /** Render markdown: **bold**, *italic*, `code`, ```blocks```, ###headings, - lists, > quotes */
-function renderMarkdown(text: string): JSX.Element {
+function renderMarkdown(text: string): React.ReactElement {
   const lines = text.split("\n");
-  const elements: JSX.Element[] = [];
+  const elements: React.ReactElement[] = [];
   let inCodeBlock = false;
   let codeBuffer: string[] = [];
   const codeStyle = { background: "var(--glass-tint)", padding: "1px 5px", borderRadius: 3, fontSize: "0.88em", fontFamily: "monospace" } as const;
   const preStyle = { background: "var(--glass-tint)", padding: "6px 8px", borderRadius: 6, fontSize: 10, overflowX: "auto" as const, margin: "4px 0", whiteSpace: "pre-wrap" as const, fontFamily: "monospace" };
 
   /** Parse inline markdown: code first (to protect content), then bold, italic, links */
-  const renderInline = (line: string, key: number): JSX.Element => {
+  const renderInline = (line: string, key: number): React.ReactElement => {
     // 1. Extract inline code spans first (protect their content from further parsing)
     const codeSegments: string[] = [];
     const withCodePlaceholders = line.replace(/`([^`]+)`/g, (_, code) => {
@@ -25,16 +25,16 @@ function renderMarkdown(text: string): JSX.Element {
     });
 
     // 2. Parse bold, italic, bold+italic on the protected string
-    const parts: JSX.Element[] = [];
+    const parts: React.ReactElement[] = [];
     let idx = 0;
     // Order matters: bold+italic (***) → bold (**) → italic (*)
     const regex = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|__(.+?)__|_(.+?)_)/g;
     let match: RegExpExecArray | null;
     let lastIndex = 0;
 
-    const restoreCode = (s: string): JSX.Element => {
+    const restoreCode = (s: string): React.ReactElement => {
       // Replace code placeholders back with styled elements
-      const codeParts: (string | JSX.Element)[] = [];
+      const codeParts: (string | React.ReactElement)[] = [];
       let remaining = s;
       let codeMatch: RegExpExecArray | null;
       const codeRe = /\x00CODE(\d+)\x00/g;

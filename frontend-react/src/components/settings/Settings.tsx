@@ -461,15 +461,15 @@ export function Settings() {
 
   // Available LLM models (from all providers)
   const [availableModels, setAvailableModels] = useState<{ provider: string; providerName: string; model: string }[]>([]);
+  const [providers, setProviders] = useState<LLMProvider[]>([]);
 
   // Local settings
   const [autoConnect, setAutoConnect] = useState(() => localStorage.getItem("occ-auto-connect") !== "false");
   const [autoScroll, setAutoScroll] = useState(() => localStorage.getItem("occ-auto-scroll") !== "false");
   const [showMinimap, setShowMinimap] = useState(() => localStorage.getItem("occ-show-minimap") !== "false");
-
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [h, q, , e, , cfg] = await Promise.all([
+    const [h, q, , e, prov, cfg] = await Promise.all([
       fetchJson<HealthData>("/health"),
       fetchJson<QueueStats>("/queue"),
       fetchJson<Schedule[]>("/schedules"),
@@ -478,6 +478,7 @@ export function Settings() {
       fetchJson<ServerConfig>("/config"),
     ]);
     if (cfg) setConfig(cfg);
+    if (Array.isArray(prov)) setProviders(prov);
     setHealth(h);
     setQueue(q);
     setExecutions(Array.isArray(e) ? e : []);
@@ -540,6 +541,7 @@ export function Settings() {
     { id: "providers", label: "Providers" },
     { id: "ollama", label: "Ollama" },
     { id: "huggingface", label: "HuggingFace" },
+    { id: "toolsecurity", label: "Tool Security" },
     { id: "queue", label: "Queue" },
     { id: "schedules", label: "Schedules" },
     { id: "mcp", label: "MCP Servers" },
@@ -747,6 +749,136 @@ export function Settings() {
           <div className={styles.sectionCard}>
             <HuggingFaceSection />
           </div>
+        </div>
+
+        {/* ═══ Tool Security ═══ */}
+        <div id="toolsecurity" className={styles.section}>
+          <div className={styles.sectionTitle}>Tool Security</div>
+
+          {/* Per-model permissions with preset buttons */}
+          {(() => {
+            const ALL_ITEMS = [
+              // Tools
+              "bash", "read_file", "write_file", "web_search", "http_fetch",
+              // Pre-tools
+              ...["web_search","http_fetch","read_file","write_file","bash","current_datetime","env_var","json_parse",
+                "state_save","state_load","db_query","mcp_call","vector_query","vector_index","diff_inject","notify",
+                "email","parallel_fetch","screenshot","pdf_generate","ocr","cost_gate","ast_parse","graph_query",
+                "semantic_cache","sandbox_exec","template_render","approval_request","embed_compare"].map(t => `pre:${t}`),
+              // MCP
+              ...Object.keys(mcpServers).map(s => `mcp:${s}`),
+            ];
+            // Dangerous = shell exec, file write, sandbox, email
+            const DANGEROUS = new Set(["bash", "write_file", "pre:bash", "pre:write_file", "pre:sandbox_exec", "pre:email", "pre:db_query", "pre:notify"]);
+            // Safe = read-only + search + data parsing
+            const SAFE_ALLOWED = new Set([
+              "read_file", "web_search", "http_fetch",
+              "pre:web_search", "pre:http_fetch", "pre:read_file", "pre:current_datetime", "pre:env_var",
+              "pre:json_parse", "pre:state_load", "pre:vector_query", "pre:diff_inject", "pre:cost_gate",
+              "pre:ast_parse", "pre:graph_query", "pre:semantic_cache", "pre:embed_compare", "pre:template_render",
+              ...Object.keys(mcpServers).map(s => `mcp:${s}`),
+            ]);
+
+            const PRESETS = [
+              { id: "full", label: "Full Access", desc: "All tools enabled", color: "#30d158", denied: [] as string[] },
+              { id: "standard", label: "Standard", desc: "No shell/write", color: "var(--m-accent)", denied: ALL_ITEMS.filter(i => DANGEROUS.has(i)) },
+              { id: "safe", label: "Read-only", desc: "Search + read only", color: "#ff9f0a", denied: ALL_ITEMS.filter(i => !SAFE_ALLOWED.has(i)) },
+              { id: "none", label: "No Tools", desc: "LLM only, no tools", color: "#ff375f", denied: [...ALL_ITEMS] },
+            ];
+
+            const detectPreset = (denied: Set<string>) => {
+              if (denied.size === 0) return "full";
+              if (denied.size === ALL_ITEMS.length) return "none";
+              const dangerousDenied = [...DANGEROUS].every(d => denied.has(d));
+              const nonDangerousAllowed = ALL_ITEMS.filter(i => !DANGEROUS.has(i)).every(i => !denied.has(i));
+              if (dangerousDenied && nonDangerousAllowed) return "standard";
+              const safeMatch = ALL_ITEMS.every(i => SAFE_ALLOWED.has(i) ? !denied.has(i) : denied.has(i));
+              if (safeMatch) return "safe";
+              return "custom";
+            };
+
+            const nonClaude = (providers ?? []).filter(p => p.type !== "claude");
+            const tColor: Record<string, string> = { ollama: "var(--icon-cyan-bg)", huggingface: "var(--icon-orange-bg)", openrouter: "var(--icon-purple-bg)", openai: "var(--icon-green-bg)" };
+
+            if (nonClaude.length === 0) return <div className={styles.sectionCard}><div className={styles.row}><div className={styles.rowBody}><div className={styles.rowDesc}>No non-Claude providers configured.</div></div></div></div>;
+
+            const updateModelPerms = async (p: LLMProvider, model: string, patch: Record<string, unknown>) => {
+              const existing = (p as any).perModelPermissions ?? {};
+              const modelPerms = { ...(existing[model] ?? {}), ...patch };
+              await fetch(`/providers/${p.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ perModelPermissions: { ...existing, [model]: modelPerms } }) });
+              loadAll();
+            };
+            const toggleItem = (denied: Set<string>, item: string): string[] => {
+              const d = [...denied];
+              if (!denied.has(item)) d.push(item); else { const i = d.indexOf(item); if (i !== -1) d.splice(i, 1); }
+              return d;
+            };
+            const pillStyle = (on: boolean): React.CSSProperties => ({
+              fontSize: 8, padding: "2px 5px", borderRadius: 3, cursor: "pointer", border: "none",
+              fontFamily: "var(--m-font-mono)", fontWeight: 600, lineHeight: 1,
+              background: on ? "rgba(48,209,88,0.15)" : "rgba(255,55,95,0.08)",
+              color: on ? "#30d158" : "rgba(255,55,95,0.4)",
+            });
+
+            return nonClaude.map((p) => (
+              <div key={p.id} className={styles.sectionCard} style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ padding: "5px 12px", background: "var(--glass-tint-subtle)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 4, background: tColor[p.type] ?? "var(--m-text2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 700, color: "#fff" }}>{p.name.charAt(0).toUpperCase()}</div>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "var(--m-text2)", textTransform: "uppercase", letterSpacing: 0.5 }}>{p.name}</span>
+                  <span style={{ fontSize: 9, color: "var(--m-text2)", opacity: 0.5 }}>{(p.models ?? []).length} model{(p.models ?? []).length !== 1 ? "s" : ""}</span>
+                </div>
+                {(p.models ?? []).map((model) => {
+                  const base = (p as any).toolPermissions ?? {};
+                  const override = (p as any).perModelPermissions?.[model] ?? {};
+                  const perms = { ...base, ...override };
+                  const on = perms.toolsEnabled !== false;
+                  const denied = new Set<string>(perms.deniedTools ?? []);
+                  const iter = perms.maxIterations ?? 15;
+                  const activePreset = detectPreset(denied);
+
+                  return (
+                    <div key={model} style={{ padding: "8px 12px", borderTop: "1px solid var(--glass-border)", opacity: on ? 1 : 0.3 }}>
+                      {/* Row 1: model name + presets + iter + toggle */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, fontFamily: "var(--m-font-mono)", color: "var(--m-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>{model.includes("/") ? model.split("/").pop() : model}</span>
+                        {on && <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+                          {PRESETS.map(pr => (
+                            <button key={pr.id} title={pr.desc} onClick={() => updateModelPerms(p, model, { deniedTools: pr.denied })}
+                              style={{
+                                fontSize: 8, padding: "2px 6px", borderRadius: 3, border: "none", cursor: "pointer",
+                                fontWeight: 700, letterSpacing: 0.2,
+                                background: activePreset === pr.id ? pr.color : "var(--glass-tint)",
+                                color: activePreset === pr.id ? "#fff" : "var(--m-text2)",
+                                opacity: activePreset === pr.id ? 1 : 0.6,
+                              }}>{pr.label}</button>
+                          ))}
+                          {activePreset === "custom" && <span style={{ fontSize: 8, padding: "2px 4px", color: "var(--m-accent)", fontWeight: 600 }}>Custom</span>}
+                        </div>}
+                        <input type="number" min={1} max={50} value={iter} onChange={(e) => updateModelPerms(p, model, { maxIterations: parseInt(e.target.value) || 15 })} disabled={!on}
+                          style={{ width: 32, textAlign: "center", fontSize: 10, background: "var(--m-surface)", border: "1px solid var(--m-border)", borderRadius: 3, color: "var(--m-text)", padding: "1px 0", flexShrink: 0 }} />
+                        <div style={{ flexShrink: 0 }}><Toggle on={on} onToggle={() => updateModelPerms(p, model, { toolsEnabled: !on })} /></div>
+                      </div>
+                      {/* Row 2: individual pills (only if custom or user wants fine-tuning) */}
+                      {on && denied.size > 0 && denied.size < ALL_ITEMS.length && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 2, marginTop: 5 }}>
+                          {ALL_ITEMS.map(item => {
+                            const isOn = !denied.has(item);
+                            const label = item.startsWith("pre:") ? item.slice(4) : item.startsWith("mcp:") ? item.slice(4) : item;
+                            const prefix = item.startsWith("mcp:") ? "\u{1F50C}" : item.startsWith("pre:") ? "" : "";
+                            return (
+                              <button key={item} title={item} onClick={() => updateModelPerms(p, model, { deniedTools: toggleItem(denied, item) })}
+                                style={pillStyle(isOn)}>{prefix}{label}</button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {(p.models ?? []).length === 0 && <div style={{ padding: "8px 12px", fontSize: 10, color: "var(--m-text2)", fontStyle: "italic" }}>No models selected</div>}
+              </div>
+            ));
+          })()}
         </div>
 
         {/* ═══ Job Queue ═══ */}
