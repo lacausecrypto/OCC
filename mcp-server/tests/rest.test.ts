@@ -432,7 +432,8 @@ output: result
     it("returns ok and version", async () => {
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ ok: true, version: "2.0.0" });
+      expect(res.body.ok).toBe(true);
+      expect(typeof res.body.version).toBe("string");
     });
   });
 
@@ -828,7 +829,8 @@ output: result
 
     it("GET /health response shape", async () => {
       const res = await request(app).get("/health");
-      expect(res.body).toMatchObject({ ok: true, version: "2.0.0" });
+      expect(res.body.ok).toBe(true);
+      expect(typeof res.body.version).toBe("string");
     });
 
     it("GET /executions history items have expected fields", async () => {

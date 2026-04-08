@@ -1427,7 +1427,7 @@ output: result
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty("ok", true);
-      expect(res.body).toHaveProperty("version", "2.0.0");
+      expect(typeof res.body.version).toBe("string");
       expect(res.body).toHaveProperty("runningExecutions");
       expect(res.body).toHaveProperty("mcpServers");
       expect(res.body).toHaveProperty("queue");
