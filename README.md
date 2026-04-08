@@ -9,7 +9,7 @@
 [![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
 [![Pre--tools](https://img.shields.io/badge/Pre--tools-30%20types-orange)](#pre-tools)
 [![REST](https://img.shields.io/badge/REST%20API-102%20endpoints-green)](#rest-api-102-endpoints)
-[![Tests](https://img.shields.io/badge/Tests-2344%20passed-brightgreen)](#tests)
+[![Tests](https://img.shields.io/badge/Tests-3243%20passed-brightgreen)](#tests)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](#)
@@ -36,7 +36,7 @@ Multi-model workflow engine built on Claude. Define chains in YAML, run them wit
 - [Benchmarks](#benchmarks) — OCC vs raw API, economy of scale
 - [Deployment](#deployment-on-a-vps) · [Security](SECURITY.md) · [Configuration](#configuration)
 - [Example Chains (16)](#example-chains-15-included) · [Pipelines (5)](#example-pipelines-5-included)
-- [Tests (2344)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
+- [Tests (3243)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
 
 ---
 
@@ -76,7 +76,7 @@ You can mix models per step: Haiku for classification, Sonnet for synthesis, GPT
 
 | Interface | Details |
 |-----------|---------|
-| **React frontend** | Canvas chain editor, live SSE monitor, BLOB sessions, workflow chat, design space |
+| **React frontend** | Canvas chain editor, live SSE monitor, BLOB sessions, workflow chat, design space, setup check modal |
 | **CLI** | 17 commands — run, validate, dry-run, generate, monitor, approve/reject |
 | **REST API** | 102 endpoints with Bearer auth, rate limiting, SSE streaming |
 | **MCP** | Bidirectional — exposes 28 tools AND consumes external MCP servers |
@@ -534,13 +534,16 @@ CORS_ORIGIN=https://yourdomain.com
 
 ## Tests
 
-**2344 tests** across 59 files:
+**3243 tests** across 111 files (59 backend + 52 frontend):
 
 ```bash
-cd mcp-server && npm test
+cd mcp-server && npm test       # 2344 backend tests (59 files)
+cd frontend-react && npm test   # 899 frontend tests (52 files)
 ```
 
-Coverage: REST security · pre-tool execution (SSRF, SQL injection, path traversal, shell escaping) · executor (parallel, retry, fallback) · gate manager · queue · storage · loader · linter (15 chains) · CLI (17 commands) · types · providers · blob · scheduler · MCP client · pipeline executor · context budget.
+**Backend coverage:** REST security · pre-tool execution (SSRF, SQL injection, path traversal, shell escaping) · executor (parallel, retry, fallback) · gate manager · queue · storage · loader · linter (15 chains) · CLI (17 commands) · types · providers · blob · scheduler · MCP client · pipeline executor · context budget.
+
+**Frontend coverage:** components (RunModal, Settings, ExecResultModal, Sidebar, MonitorSidebar, Timeline, ApprovalPanel, LogViewer, SaveChainModal) · stores (app, blob, shortcuts, workflowChat) · utils (canvasToYaml, extractPalette) · API client.
 
 ---
 

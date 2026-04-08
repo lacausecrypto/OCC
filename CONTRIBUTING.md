@@ -38,10 +38,15 @@ mcp-server/src/
 ### Running Tests
 
 ```bash
+# Backend (2344 tests, 59 files)
 cd mcp-server
-npm test              # Run all 2344 tests (59 files)
+npm test              # Run all backend tests
 npm test -- --watch   # Watch mode
 npm test -- loader    # Run specific test file
+
+# Frontend (899 tests, 52 files)
+cd frontend-react
+npm test              # Run all frontend tests
 ```
 
 ### Building
