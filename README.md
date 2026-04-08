@@ -7,7 +7,7 @@
 [![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
 [![Pre--tools](https://img.shields.io/badge/Pre--tools-30%20types-orange)](#pre-tools)
 [![REST](https://img.shields.io/badge/REST%20API-102%20endpoints-green)](#rest-api-102-endpoints)
-[![Tests](https://img.shields.io/badge/Tests-2333%20passed-brightgreen)](#tests)
+[![Tests](https://img.shields.io/badge/Tests-2344%20passed-brightgreen)](#tests)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](#)
@@ -34,7 +34,7 @@ Multi-model workflow engine built on Claude. Define chains in YAML, run them wit
 - [Benchmarks](#benchmarks) — OCC vs raw API, economy of scale
 - [Deployment](#deployment-on-a-vps) · [Security](SECURITY.md) · [Configuration](#configuration)
 - [Example Chains (16)](#example-chains-15-included) · [Pipelines (5)](#example-pipelines-5-included)
-- [Tests (2333)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
+- [Tests (2344)](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
 
 ---
 
@@ -518,7 +518,7 @@ CORS_ORIGIN=https://yourdomain.com
 
 ## Tests
 
-**2333 tests** across 59 files:
+**2344 tests** across 59 files:
 
 ```bash
 cd mcp-server && npm test
