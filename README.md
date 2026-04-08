@@ -1,5 +1,7 @@
 # OCC — Claude Chain Orchestrator
 
+[![npm version](https://img.shields.io/npm/v/occ-orchestrator?color=cb3837&logo=npm)](https://www.npmjs.com/package/occ-orchestrator)
+[![npm downloads](https://img.shields.io/npm/dm/occ-orchestrator?color=cb3837&logo=npm)](https://www.npmjs.com/package/occ-orchestrator)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Tests](https://github.com/lacausecrypto/OCC/actions/workflows/ci.yml/badge.svg)](https://github.com/lacausecrypto/OCC/actions)
 [![Node.js](https://img.shields.io/badge/Node.js-20%20%7C%2022-brightgreen)](https://nodejs.org)
@@ -94,7 +96,14 @@ You can mix models per step: Haiku for classification, Sonnet for synthesis, GPT
 ### Prerequisites
 - **Node.js 20+** (22 recommended) · **Claude CLI** authenticated · npm 9+
 
-### Install & Run
+### Install via npm (recommended)
+
+```bash
+npm install -g occ-orchestrator
+occ run my-chain.yaml -i topic="AI safety"
+```
+
+### Install from source
 
 ```bash
 git clone https://github.com/lacausecrypto/OCC.git

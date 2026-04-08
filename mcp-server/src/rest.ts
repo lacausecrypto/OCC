@@ -1276,7 +1276,7 @@ app.get("/health", (_req, res) => {
 
   res.json({
     ok: true,
-    version: "2.0.0",
+    version: "0.3.0",
     runningExecutions: getRunningExecutionCount(),
     mcpServers: getConfiguredServers(),
     queue: getQueueStats(),
