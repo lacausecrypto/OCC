@@ -1,7 +1,7 @@
 # OCC — Orchestrator Chain Chimera
 
 [![npm version](https://img.shields.io/npm/v/occ-orchestrator?color=cb3837&logo=npm)](https://www.npmjs.com/package/occ-orchestrator)
-[![npm downloads](https://img.shields.io/npm/dm/occ-orchestrator?color=cb3837&logo=npm)](https://www.npmjs.com/package/occ-orchestrator)
+[![npm downloads](https://img.shields.io/npm/dt/occ-orchestrator?color=cb3837&logo=npm)](https://www.npmjs.com/package/occ-orchestrator)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Tests](https://github.com/lacausecrypto/OCC/actions/workflows/ci.yml/badge.svg)](https://github.com/lacausecrypto/OCC/actions)
 [![Tests](https://img.shields.io/badge/Tests-3243%20passed-brightgreen)](#tests)
