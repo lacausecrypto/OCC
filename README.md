@@ -62,11 +62,11 @@ occ start                                          # start server → http://127
 occ run hello-world -i topic="quantum computing"   # run your first chain
 ```
 
-**From source:** `git clone https://github.com/lacausecrypto/OCC.git && cd OCC/mcp-server && npm install && npm run build && npm run rest`
+**From source:** `git clone https://github.com/lacausecrypto/OCC.git && cd OCC/mcp-server && npm install && npm run build:all && npm run rest`
 
 **Docker:** `cp .env.example .env && docker compose up`
 
-**Frontend:** `cd frontend-react && npm install && npm run dev` (http://localhost:5173)
+The dashboard is served automatically at http://localhost:4242 (single server, no separate frontend process needed).
 
 > On first launch, a **Setup Check modal** verifies all prerequisites and helps fix missing dependencies.
 

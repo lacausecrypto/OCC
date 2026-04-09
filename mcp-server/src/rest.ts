@@ -1300,7 +1300,7 @@ app.get("/health", (_req, res) => {
 
   res.json({
     ok: true,
-    version: "0.4.0",
+    version: "0.4.1",
     runningExecutions: getRunningExecutionCount(),
     mcpServers: getConfiguredServers(),
     queue: getQueueStats(),
@@ -2988,6 +2988,50 @@ if (HOST === "0.0.0.0" && !API_KEY) {
   ].join("\n");
   process.stderr.write(banner);
   logger.warn("occ-auth", "API bound to 0.0.0.0 without authentication — set OCC_API_KEY");
+}
+
+// ─── Serve frontend static build (SPA) ──────────────────────────────────────
+// Looks for built React frontend in several locations.
+// In production or npm install, serves index.html for all non-API routes.
+{
+  const frontendCandidates = [
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../frontend-dist"),  // bundled in npm package
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../frontend-react/dist"),  // from source (mcp-server/)
+    path.resolve("frontend-dist"),   // CWD
+    path.resolve("frontend-react/dist"),  // repo root CWD
+  ];
+  let frontendDir: string | null = null;
+  for (const candidate of frontendCandidates) {
+    if (fs.existsSync(path.join(candidate, "index.html"))) {
+      frontendDir = candidate;
+      break;
+    }
+  }
+  if (frontendDir) {
+    app.use(express.static(frontendDir));
+    // SPA fallback: any route that isn't an API endpoint serves index.html
+    app.get("*", (req, res, next) => {
+      // Skip API-like paths (they'll 404 naturally)
+      if (req.path.startsWith("/api/") || req.path.startsWith("/execute") ||
+          req.path.startsWith("/chains") || req.path.startsWith("/pipelines") ||
+          req.path.startsWith("/executions") || req.path.startsWith("/providers") ||
+          req.path.startsWith("/blobs") || req.path.startsWith("/queue") ||
+          req.path.startsWith("/schedules") || req.path.startsWith("/knowledge") ||
+          req.path.startsWith("/ollama") || req.path.startsWith("/huggingface") ||
+          req.path.startsWith("/events") || req.path.startsWith("/health") ||
+          req.path.startsWith("/config") || req.path.startsWith("/prerequisites") ||
+          req.path.startsWith("/mcp-servers") || req.path.startsWith("/workflow-chat") ||
+          req.path.startsWith("/generate-chain") || req.path.startsWith("/images") ||
+          req.path.startsWith("/download") || req.path.startsWith("/cache") ||
+          req.path.startsWith("/proxy") || req.path.startsWith("/extract-style") ||
+          req.path.startsWith("/approvals") || req.path.startsWith("/yaml-to-json") ||
+          req.path.startsWith("/pipeline-executions")) {
+        return next();
+      }
+      res.sendFile(path.join(frontendDir!, "index.html"));
+    });
+    logger.info("occ-rest", `Serving frontend from ${frontendDir}`);
+  }
 }
 
 const server = app.listen(PORT, HOST, () => {

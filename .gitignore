@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+frontend-dist/
 *.js.map
 
 # Runtime data
