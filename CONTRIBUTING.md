@@ -1,6 +1,6 @@
 # Contributing to OCC
 
-Thank you for your interest in contributing to OCC (Claude Chain Orchestrator).
+Thank you for your interest in contributing to OCC (Orchestrator Chain Chimera).
 
 ## Getting Started
 

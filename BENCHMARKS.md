@@ -1,4 +1,4 @@
-# OCC Benchmarks — Real Execution Results
+# OCC (Orchestrator Chain Chimera) — Benchmarks
 
 > All results from **real executions** on April 8, 2026.  
 > Hardware: MacBook Pro (Apple Silicon), 16 GB RAM, OCC v2.0.0.  
