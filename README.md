@@ -6,8 +6,8 @@
 [![Tests](https://github.com/lacausecrypto/OCC/actions/workflows/ci.yml/badge.svg)](https://github.com/lacausecrypto/OCC/actions)
 [![Tests](https://img.shields.io/badge/Tests-3243%20passed-brightgreen)](#tests)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
-[![MCP](https://img.shields.io/badge/MCP-28%20tools-purple)](https://modelcontextprotocol.io)
-[![REST](https://img.shields.io/badge/REST%20API-102%20endpoints-green)](#rest-api)
+[![MCP](https://img.shields.io/badge/MCP-29%20tools-purple)](https://modelcontextprotocol.io)
+[![REST](https://img.shields.io/badge/REST%20API-106%20endpoints-green)](#rest-api)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
 
@@ -144,7 +144,7 @@ output: summary
 
 Steps without shared `depends_on` run **in parallel automatically**.
 
-### LLM Providers
+### LLM Providers (6)
 
 | Provider | Access | Best For |
 |----------|--------|----------|
@@ -155,7 +155,7 @@ Steps without shared `depends_on` run **in parallel automatically**.
 | **HuggingFace** | HTTP API | Open-source models, free tier |
 | **Custom** | OpenAI-compat | Groq, Together, any compatible endpoint |
 
-All providers support tool use (Bash, Read, Write, Glob, Grep, WebSearch, WebFetch) via an OpenAI function calling agent loop.
+All non-Claude providers support tool use (Bash, Read, Write, Glob, Grep, WebSearch, WebFetch) via an OpenAI function calling agent loop.
 
 ### Step Types (12)
 
@@ -225,7 +225,7 @@ Types: `string` · `number` · `boolean` · `enum` · `file` · `image` · `json
 
 The frontend renders specialized widgets: dropdowns, toggles, file pickers with preview, range inputs, textareas with character counter.
 
-### Advanced Config
+### Advanced Step Config
 
 ```yaml
 retry: { max: 3, delay_ms: 2000, backoff: 2 }
@@ -242,7 +242,7 @@ guardrails: [{ type: min_length, value: 500 }]
 ## Frontend (Chimera)
 
 ### Canvas Editor
-- Visual DAG editor with drag, connect, and inline step editing
+- Visual DAG editor — drag, connect, double-click to edit steps
 - Live SSE streaming per node with traffic light status dots
 - Save chain (Ctrl+S), version history with diff + restore
 - Blueprints — save and reuse step groups
@@ -293,7 +293,7 @@ Autonomous exploratory AI canvas. Unlike chains (predefined), BLOB sessions grow
 
 ## CLI
 
-17 commands:
+20 commands (+ aliases):
 
 ```bash
 occ validate ./chains                    # Lint all chains
@@ -301,14 +301,14 @@ occ dry-run deep-researcher -i topic=AI  # Execution plan + cost estimate (0 tok
 occ run deep-researcher -i topic=AI      # Run + stream logs
 occ run-pipeline research-to-content     # Run multi-chain pipeline
 occ generate "Monitor BTC price"         # Natural language → chain YAML
-occ list | status | logs | timeline | stats | queue | cancel | approve | reject
+occ list | status | logs | timeline | stats | queue | cancel | approve | reject | health
 ```
 
 ---
 
 ## REST API
 
-102 endpoints with Bearer auth, rate limiting, and SSE streaming. **[Interactive docs at /api/docs](http://localhost:4242/api/docs/)** (Swagger UI). OpenAPI spec: [openapi.yaml](openapi.yaml).
+106 endpoints with Bearer auth, rate limiting, and SSE streaming. **[Interactive docs at /api/docs](http://localhost:4242/api/docs/)** (Swagger UI). OpenAPI spec: [openapi.yaml](openapi.yaml).
 
 <details>
 <summary>Endpoint list</summary>
@@ -331,7 +331,7 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject
 
 **HuggingFace:** model search, info, test
 
-**System:** `/health` · `/config` · `/prerequisites` · `/events` (SSE) · `/mcp-servers` · `/generate-chain` · `/workflow-chat`
+**System:** `/health` · `/config` · `/prerequisites` · `/events` (SSE) · `/mcp-servers` · `/generate-chain` · `/workflow-chat` · `/api/docs`
 
 </details>
 
@@ -343,7 +343,7 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject
 
 ## Benchmarks
 
-Real execution data from April 2026 — full methodology in [BENCHMARKS.md](BENCHMARKS.md).
+Real execution data — full methodology in [BENCHMARKS.md](BENCHMARKS.md).
 
 ### Economy of Scale (10 steps, 4 waves, 3 runs each)
 
@@ -383,7 +383,7 @@ See [SECURITY.md](SECURITY.md) for the full hardening checklist.
 
 ## Examples
 
-### Chains (19)
+### Chains (20)
 
 | Chain | Steps | Parallel | Key Features |
 |-------|:-----:|----------|-------------|
@@ -404,8 +404,9 @@ See [SECURITY.md](SECURITY.md) for the full hardening checklist.
 | `api-doc-generator` | 6 | 4-way | ast_parse |
 | `full-stack-scaffold` | 5 | seq | bash/write, retry, cache |
 | `bench-complex` | 10 | 4-wave | Haiku+Sonnet routing benchmark |
-| `bench-claude` | 4 | 3-way | provider comparison |
-| `bench-ollama` | 4 | 3-way | provider comparison |
+| `bench-claude` | 4 | 3-way | provider benchmark (Claude) |
+| `bench-ollama` | 4 | 3-way | provider benchmark (Ollama) |
+| `bench-huggingface` | 4 | 3-way | provider benchmark (HuggingFace) |
 
 ### Pipelines (5)
 
