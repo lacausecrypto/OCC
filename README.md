@@ -11,101 +11,68 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
 
-**Define chains, not code.** Multi-model LLM workflows in YAML with automatic parallel execution, 30 pre-tools at zero token cost, and 6 LLM providers. [Benchmarked](BENCHMARKS.md): 70% faster and 70% cheaper than naive approaches on complex tasks.
-
-```yaml
-steps:
-  - id: market
-    model: claude-haiku-4-5          # cheap for subtasks
-    prompt: "Analyze the market for {input.topic}"
-    output_var: market_data
-  - id: risks
-    model: claude-haiku-4-5
-    prompt: "Identify risks for {input.topic}"
-    output_var: risk_data
-  - id: summary
-    model: claude-sonnet-4-6         # smart for synthesis
-    depends_on: [market, risks]      # runs after both complete
-    prompt: "Executive summary:\n{market_data}\n{risk_data}"
-    output_var: report
-```
-
-`market` and `risks` run in parallel. `summary` waits for both. No code needed.
+**Define chains, not code.** Multi-model LLM workflows in YAML with automatic parallel execution, 30 pre-tools at zero token cost, and 6 LLM providers.
 
 <p align="center">
   <img src="demo.gif" alt="OCC Demo" width="720">
 </p>
 
-### Why OCC?
+```bash
+npm install -g occ-orchestrator
+occ run my-chain.yaml -i topic="AI safety"
+```
 
-| Problem | Solution |
-|---------|----------|
+---
+
+| Problem | How OCC solves it |
+|---------|-------------------|
 | LLM workflows require Python boilerplate | **YAML chains** — declarative, git-friendly, reviewable by non-devs |
 | Data collection wastes LLM tokens | **30 pre-tools** — fetch URLs, run bash, query DBs at 0 token cost |
 | One model for everything is expensive | **Model routing** — Haiku for subtasks, Sonnet for synthesis = [80% cheaper](BENCHMARKS.md) |
 | Sequential execution is slow | **Auto-parallelism** — DAG resolution runs independent steps simultaneously |
 | Long workflows crash and lose progress | **SQLite checkpoints** — crash recovery resumes from last completed step |
-| No TypeScript alternative to LangChain | **TS native** — `npm install -g occ-orchestrator` |
+| No TypeScript alternative to LangChain | **TS native** — single `npm install`, no Python |
 
-> **New to OCC?** Read the [Getting Started guide](GETTING_STARTED.md) — first chain running in 5 minutes.
+> [Getting Started](GETTING_STARTED.md) — first chain running in 5 minutes | [Architecture](ARCHITECTURE.md) | [FAQ](FAQ.md) | [Benchmarks](BENCHMARKS.md)
 
 ---
 
 ## Table of Contents
 
-- [Quick Start](#quick-start) · [Getting Started](GETTING_STARTED.md) · [Architecture](ARCHITECTURE.md) · [FAQ](FAQ.md)
-- [Chain Format](#chain-format) — step types, pre-tools, typed inputs
-- [Frontend (Chimera)](#frontend-chimera) — canvas, workflow chat, monitor
-- [Pipelines](#pipelines) · [BLOB Sessions](#blob-sessions) · [CLI](#cli)
-- [REST API](#rest-api) · [Benchmarks](BENCHMARKS.md)
-- [Deployment](#deployment) · [Security](SECURITY.md) · [Configuration](#configuration)
-- [Examples](#examples) · [Tests](#tests) · [Limitations](#limitations) · [Contributing](#contributing)
+1. [Quick Start](#quick-start)
+2. [Chain Format](#chain-format) — YAML reference, providers, step types, pre-tools, typed inputs
+3. [Frontend](#frontend-chimera) — canvas editor, workflow chat, monitor, settings
+4. [Pipelines](#pipelines) · [BLOB Sessions](#blob-sessions) · [CLI](#cli)
+5. [REST API](#rest-api) — 106 endpoints, Swagger UI, auth
+6. [Benchmarks](#benchmarks) — real data, economy of scale
+7. [Examples](#examples) — 20 chains, 5 pipelines
+8. [Tests](#tests) · [Deployment](#deployment) · [Configuration](#configuration) · [Limitations](#limitations)
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-
-- **Node.js 20+** · npm 9+
-- **Claude CLI** — install and authenticate:
-  ```bash
-  npm install -g @anthropic-ai/claude-code
-  claude   # opens browser to authenticate
-  ```
-
-> On first launch, a **Setup Check modal** verifies all prerequisites and guides you through fixing any issues.
-
-### Install
+**Prerequisites:** Node.js 20+ · Claude CLI (`npm install -g @anthropic-ai/claude-code && claude`)
 
 ```bash
-# npm (recommended)
+# Install
 npm install -g occ-orchestrator
 
-# From source
+# Or from source
 git clone https://github.com/lacausecrypto/OCC.git
 cd OCC/mcp-server && npm install && npm run build
-```
 
-### Run
+# Start
+cd mcp-server && npm run rest                      # Backend → http://127.0.0.1:4242
+cd frontend-react && npm install && npm run dev    # Frontend → http://localhost:5173
 
-```bash
-# Start backend
-cd mcp-server && npm run rest        # http://127.0.0.1:4242
-
-# Start frontend (optional)
-cd frontend-react && npm install && npm run dev   # http://localhost:5173
-
-# Execute a chain
+# Run a chain
 occ run deep-researcher -i topic="quantum computing"
 ```
 
-### Docker
+**Docker:** `cp .env.example .env && docker compose up`
 
-```bash
-cp .env.example .env   # set OCC_API_KEY
-docker compose up      # non-root, cap_drop ALL, read-only FS
-```
+> On first launch, a **Setup Check modal** verifies all prerequisites and helps fix missing dependencies.
 
 ---
 
@@ -113,12 +80,9 @@ docker compose up      # non-root, cap_drop ALL, read-only FS
 
 ```yaml
 name: my-chain
-description: "Research and summarize a topic"
-
 inputs:
   - name: topic
     type: string
-    placeholder: "e.g. quantum computing"
 
 steps:
   - id: research
@@ -140,9 +104,9 @@ steps:
 output: summary
 ```
 
-**Variables:** `{input.topic}` (chain input) · `{research}` (step output) · `{search_results}` (pre-tool injection)
-
 Steps without shared `depends_on` run **in parallel automatically**.
+
+**Variables:** `{input.topic}` (chain input) · `{research}` (step output) · `{search_results}` (pre-tool injection)
 
 ### LLM Providers (6)
 
@@ -155,7 +119,7 @@ Steps without shared `depends_on` run **in parallel automatically**.
 | **HuggingFace** | HTTP API | Open-source models, free tier |
 | **Custom** | OpenAI-compat | Groq, Together, any compatible endpoint |
 
-All non-Claude providers support tool use (Bash, Read, Write, Glob, Grep, WebSearch, WebFetch) via an OpenAI function calling agent loop.
+Mix models per step: Haiku for classification, Sonnet for synthesis, Ollama for private data. All non-Claude providers support tool use via OpenAI function calling agent loop.
 
 ### Step Types (12)
 
@@ -176,10 +140,10 @@ All non-Claude providers support tool use (Bash, Read, Write, Glob, Grep, WebSea
 
 ### Pre-Tools (30)
 
-Inject data **before** the LLM call — 0 tokens for data collection. All support `{variable}` interpolation, `on_error`, `timeout_ms`, `retry`, `cache_ttl_minutes`.
+Inject data **before** the LLM call — 0 tokens for data collection.
 
 <details>
-<summary>Full list</summary>
+<summary>Full list (6 categories)</summary>
 
 **Data:** `http_fetch` · `web_search` · `mcp_call` · `db_query` · `parallel_fetch`
 
@@ -194,6 +158,8 @@ Inject data **before** the LLM call — 0 tokens for data collection. All suppor
 **System:** `env_var` · `sandbox_exec` (Docker) · `image_generate` (DALL-E 3 / FLUX / SD3)
 
 </details>
+
+All support `{variable}` interpolation, `on_error` (inject/skip/fail), `timeout_ms`, `retry`, `cache_ttl_minutes`.
 
 ### Typed Inputs (9 types)
 
@@ -211,19 +177,13 @@ inputs:
     type: number
     min: 1
     max: 10
-  - name: verbose
-    type: boolean
-    default: "false"
   - name: banner
     type: image
     accepts: ["image/png", "image/jpeg"]
-    max_file_size: 5242880
     optional: true
 ```
 
-Types: `string` · `number` · `boolean` · `enum` · `file` · `image` · `json` · `url` · `text`
-
-The frontend renders specialized widgets: dropdowns, toggles, file pickers with preview, range inputs, textareas with character counter.
+Types: `string` · `number` · `boolean` · `enum` · `file` · `image` · `json` · `url` · `text` — the frontend renders specialized widgets (dropdowns, toggles, file pickers, range inputs).
 
 ### Advanced Step Config
 
@@ -241,35 +201,19 @@ guardrails: [{ type: min_length, value: 500 }]
 
 ## Frontend (Chimera)
 
-### Canvas Editor
-- Visual DAG editor — drag, connect, double-click to edit steps
-- Live SSE streaming per node with traffic light status dots
-- Save chain (Ctrl+S), version history with diff + restore
-- Blueprints — save and reuse step groups
+**Canvas Editor** — Visual DAG editor with drag-and-connect, live SSE streaming per node, version history with diff + restore, blueprints.
 
-### Workflow Chat
-- Conversational chain builder — describe what you want, AI creates nodes
-- Agentic actions: run, stop, debug, analyze, dry-run, modify steps
-- Multi-session per chain, configurable model per stage
-- Markdown rendering, token tracking, persisted to localStorage
+**Workflow Chat** — Conversational chain builder with agentic actions (run, stop, debug, analyze, dry-run, modify steps). Multi-session, configurable model, markdown rendering.
 
-### Monitor
-- Real-time execution tracking with step timeline
-- Gate approval panel — approve/reject from the UI
-- Error messages inline, historical execution loading
+**Monitor** — Real-time execution tracking, step timeline, gate approval panel, historical execution loading.
 
-### Settings
-- LLM provider management (add/remove/test)
-- Ollama model marketplace — pull, delete, use in chains
-- HuggingFace model browser — 118+ models, tier filters
-- Setup Check — verify all prerequisites at any time
-- Token usage charts, queue stats, server config
+**Settings** — LLM providers, Ollama marketplace, HuggingFace browser (118+ models), Setup Check, token usage charts, server config.
 
 ---
 
 ## Pipelines
 
-Orchestrate multiple chains:
+Orchestrate multiple chains with their own dependency graph:
 
 ```yaml
 name: full-security-review
@@ -283,17 +227,16 @@ chains:
   - id: final-report
     chain: report-generator
     depends_on: [static-analysis, dependency-check]
-    inputs: { audit: "{static-analysis}", deps: "{dependency-check}" }
 output: final-report
 ```
 
 ## BLOB Sessions
 
-Autonomous exploratory AI canvas. Unlike chains (predefined), BLOB sessions grow organically from conversations. Three-stage pipeline: chat (Haiku) → plan (Sonnet) → execute (Sonnet with tools). Features: branching, knowledge graph auto-extraction, autonomous mode with budget guard.
+Autonomous exploratory AI canvas. Three-stage pipeline: chat (Haiku) → plan (Sonnet) → execute (Sonnet with tools). Branching, knowledge graph auto-extraction, autonomous mode with budget guard.
 
 ## CLI
 
-20 commands (+ aliases):
+20 commands:
 
 ```bash
 occ validate ./chains                    # Lint all chains
@@ -308,36 +251,29 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject 
 
 ## REST API
 
-106 endpoints with Bearer auth, rate limiting, and SSE streaming. **[Interactive docs at /api/docs](http://localhost:4242/api/docs/)** (Swagger UI). OpenAPI spec: [openapi.yaml](openapi.yaml).
+106 endpoints. **[Interactive docs at /api/docs](http://localhost:4242/api/docs/)** (Swagger UI). Spec: [openapi.yaml](openapi.yaml).
 
 <details>
-<summary>Endpoint list</summary>
+<summary>Endpoint categories</summary>
 
-**Chains:** `GET /chains` · `GET/POST/DELETE /chains/:name` · `GET /chains/:name/stats` · versioning endpoints
-
-**Execution:** `POST /execute/:name` · `GET /executions` · `GET/DELETE /executions/:id` · `GET /executions/:id/stream` (SSE) · `GET /executions/:id/timeline` · `GET /executions/token-usage` · resume/approve endpoints
-
-**Queue:** `GET /queue` · job management · purge
-
-**Scheduling:** CRUD on `/schedules` + toggle + manual run
-
-**Pipelines:** CRUD + execute + versioning
-
-**Providers:** CRUD + `GET /providers/models` + `POST /providers/:id/test`
-
-**BLOB:** 17 endpoints (sessions, chat, plan, execute, branches, knowledge)
-
-**Ollama:** status, models, pull (streaming), delete
-
-**HuggingFace:** model search, info, test
-
-**System:** `/health` · `/config` · `/prerequisites` · `/events` (SSE) · `/mcp-servers` · `/generate-chain` · `/workflow-chat` · `/api/docs`
+| Category | Endpoints | Key routes |
+|----------|:---------:|-----------|
+| **Chains** | 10 | CRUD, stats, versioning |
+| **Executions** | 13 | run, stream (SSE), timeline, token usage, resume, approve |
+| **Queue** | 6 | stats, jobs, purge |
+| **Schedules** | 6 | CRUD, toggle, manual run |
+| **Pipelines** | 12 | CRUD, execute, versioning |
+| **Providers** | 6 | CRUD, models, test |
+| **BLOB** | 17 | sessions, chat, plan, execute, branches, knowledge |
+| **Ollama** | 4 | status, models, pull, delete |
+| **HuggingFace** | 3 | search, info, test |
+| **Knowledge** | 6 | CRUD, link, extract |
+| **Cache** | 3 | stats, clear steps, clear pretools |
+| **System** | 20 | health, config, prerequisites, events, MCP, generate, workflow-chat, docs |
 
 </details>
 
-**Auth:** `Authorization: Bearer <key>` — required when `NODE_ENV=production`.
-
-**Rate limiting:** `/execute/*` 20/min · `/generate-chain` 5/min · `/config` 30/min.
+**Auth:** `Authorization: Bearer <key>` (required in production). **Rate limits:** `/execute/*` 20/min · `/generate-chain` 5/min · `/config` 30/min.
 
 ---
 
@@ -345,45 +281,20 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject 
 
 Real execution data — full methodology in [BENCHMARKS.md](BENCHMARKS.md).
 
-### Economy of Scale (10 steps, 4 waves, 3 runs each)
-
 | Approach | Duration | Cost/run | Monthly (100/day) |
 |----------|:--------:|:--------:|:-----------------:|
 | Sequential, all Sonnet (naive) | 229s | $0.602 | $1,807 |
 | Sequential, Haiku+Sonnet (smart) | 97s | $0.121 | $362 |
 | **OCC parallel, Haiku+Sonnet** | **69s** | **$0.179** | **$537** |
 
-**vs naive:** 70% faster, 70% cheaper. **Model routing alone:** 80% cost reduction.
-
-### Overhead on Simple Tasks
-
-+14% duration, same tokens, same cost. Worth it for 4+ step workflows.
-
----
-
-## Deployment
-
-> OCC is single-process, single-user. Not a multi-tenant SaaS.
-
-**Requirements:** 1 vCPU, 1 GB RAM · Node.js 20+ · Claude CLI
-
-**Production env vars:**
-
-```env
-NODE_ENV=production
-OCC_API_KEY=your-secret-key
-OCC_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
-REST_HOST=0.0.0.0                        # only behind reverse proxy
-CORS_ORIGIN=https://yourdomain.com
-```
-
-See [SECURITY.md](SECURITY.md) for the full hardening checklist.
+**vs naive:** 70% faster, 70% cheaper. **Model routing alone:** 80% cost reduction. **Overhead on simple tasks:** +14% (worth it for 4+ steps).
 
 ---
 
 ## Examples
 
-### Chains (20)
+<details>
+<summary>20 chains included</summary>
 
 | Chain | Steps | Parallel | Key Features |
 |-------|:-----:|----------|-------------|
@@ -408,7 +319,10 @@ See [SECURITY.md](SECURITY.md) for the full hardening checklist.
 | `bench-ollama` | 4 | 3-way | provider benchmark (Ollama) |
 | `bench-huggingface` | 4 | 3-way | provider benchmark (HuggingFace) |
 
-### Pipelines (5)
+</details>
+
+<details>
+<summary>5 pipelines included</summary>
 
 | Pipeline | Chains | Pattern |
 |----------|--------|---------|
@@ -417,6 +331,8 @@ See [SECURITY.md](SECURITY.md) for the full hardening checklist.
 | `full-security-review` | security-audit + code-review | Parallel |
 | `startup-launch` | researcher → pitch → content | 3-stage |
 | `repo-full-audit` | health + security + docs | 3-way parallel |
+
+</details>
 
 ---
 
@@ -429,19 +345,23 @@ cd mcp-server && npm test       # 2344 backend tests
 cd frontend-react && npm test   # 899 frontend tests
 ```
 
-**Backend:** REST security, pre-tool execution (SSRF, SQL injection, path traversal, shell escaping), executor, gate manager, queue, storage, loader, linter, CLI, providers, blob, scheduler, MCP client, pipeline executor.
-
-**Frontend:** components (RunModal, Settings, ExecResultModal, Sidebar, MonitorSidebar, Timeline, ApprovalPanel, LogViewer), stores (app, blob, shortcuts, workflowChat), utils (canvasToYaml, extractPalette), API client.
-
 ---
 
-## Limitations
+## Deployment
 
-- **Single machine** — no distributed execution. SQLite, not Redis.
-- **No multi-tenant** — single API key, no per-user isolation.
-- **No built-in TLS** — use nginx/Caddy as reverse proxy.
-- **Non-Claude models** — tool use via agent loop, not native MCP.
-- **Bash pre-tool** — can execute arbitrary commands. Review YAML before running untrusted chains.
+> Single-process, single-user. Not a multi-tenant SaaS.
+
+**Requirements:** 1 vCPU, 1 GB RAM · Node.js 20+ · Claude CLI
+
+```env
+NODE_ENV=production
+OCC_API_KEY=your-secret-key
+OCC_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+REST_HOST=0.0.0.0                        # only behind reverse proxy
+CORS_ORIGIN=https://yourdomain.com
+```
+
+See [SECURITY.md](SECURITY.md) for the full hardening checklist.
 
 ---
 
@@ -462,12 +382,19 @@ cd frontend-react && npm test   # 899 frontend tests
 
 ---
 
+## Limitations
+
+- **Single machine** — no distributed execution. SQLite, not Redis.
+- **No multi-tenant** — single API key, no per-user isolation.
+- **No built-in TLS** — use nginx/Caddy as reverse proxy.
+- **Non-Claude models** — tool use via agent loop, not native MCP.
+- **Bash pre-tool** — can execute arbitrary commands. Review YAML before running untrusted chains.
+
+---
+
 ## Contributing
 
-Contributions welcome. [Open an issue](https://github.com/lacausecrypto/OCC/issues) first.
-
-1. Fork → branch → `cd mcp-server && npm test` → PR
-2. See [CONTRIBUTING.md](CONTRIBUTING.md) for code style and guidelines
+Contributions welcome. [Open an issue](https://github.com/lacausecrypto/OCC/issues) first. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
