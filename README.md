@@ -1,4 +1,4 @@
-# OCC — Orchestrator Chain Chimera
+# [OCC] Orchestrator Chain Chimera
 
 [![npm version](https://img.shields.io/npm/v/occ-orchestrator?color=cb3837&logo=npm)](https://www.npmjs.com/package/occ-orchestrator)
 [![npm downloads](https://img.shields.io/npm/dt/occ-orchestrator?color=cb3837&logo=npm)](https://www.npmjs.com/package/occ-orchestrator)
