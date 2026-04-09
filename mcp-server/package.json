@@ -1,7 +1,7 @@
 {
   "name": "occ-orchestrator",
-  "version": "0.3.1",
-  "description": "Claude Chain Orchestrator — Multi-step AI workflow engine with MCP + REST API",
+  "version": "0.4.0",
+  "description": "OCC (Orchestrator Chain Chimera) — YAML-first LLM orchestrator with auto-parallelism, 30 pre-tools, 6 providers",
   "type": "module",
   "engines": {
     "node": ">=20"

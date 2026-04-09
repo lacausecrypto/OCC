@@ -5,119 +5,66 @@
 ## Step 1 — Install
 
 ```bash
-# Option A: npm (recommended)
 npm install -g occ-orchestrator
-
-# Option B: from source
-git clone https://github.com/lacausecrypto/OCC.git
-cd OCC/mcp-server && npm install && npm run build
 ```
 
 ## Step 2 — Install Claude CLI
-
-OCC uses Claude as its default LLM engine. Install and authenticate:
 
 ```bash
 npm install -g @anthropic-ai/claude-code
 claude   # opens browser to authenticate your Anthropic account
 ```
 
-Verify it works:
+## Step 3 — Create a Project
 
 ```bash
-claude -p "Say hello" --max-turns 1
+occ init my-project
+cd my-project
 ```
 
-## Step 3 — Start the Server
+This creates:
+- `chains/` with 3 example chains (hello-world, web-analyzer, parallel-pros-cons)
+- `pipelines/` ready for multi-chain workflows
+- `.env` with default configuration
+- `.gitignore` for databases and secrets
+
+## Step 4 — Check Prerequisites
 
 ```bash
-# If installed via npm:
-cd your-project && occ rest
-
-# If installed from source:
-cd OCC/mcp-server && npm run rest
+occ doctor
 ```
 
-You should see:
+All green? You're ready. Something red? Follow the hints.
 
-```
-[occ-rest] Listening on http://127.0.0.1:4242
-```
-
-## Step 4 — Start the Frontend (optional)
+## Step 5 — Start the Server
 
 ```bash
-cd OCC/frontend-react && npm install && npm run dev
-# → http://localhost:5173
+occ start
 ```
 
-On first load, a **Setup Check modal** verifies all prerequisites. Green = ready, orange = optional, red = action needed.
+You should see `[occ-rest] Listening on http://127.0.0.1:4242`.
 
-## Step 5 — Create Your First Chain
+**Frontend (optional):** `cd frontend-react && npm install && npm run dev` (http://localhost:5173). On first load, a **Setup Check modal** verifies all prerequisites visually.
 
-Create a file `my-chain.yaml`:
+## Step 6 — Run a Chain
 
-```yaml
-name: my-chain
-description: "My first OCC chain"
+`occ init` created 3 example chains. Try them:
 
-inputs:
-  - name: topic
-    description: "What to analyze"
-
-steps:
-  - id: research
-    model: claude-haiku-4-5
-    prompt: |
-      Research the topic "{input.topic}" and provide:
-      1. Key facts (5 bullet points)
-      2. Recent trends
-      3. Main challenges
-    output_var: research_result
-
-  - id: summary
-    model: claude-haiku-4-5
-    depends_on: [research]
-    prompt: |
-      Based on this research, write a 3-sentence executive summary:
-      {research_result}
-    output_var: final_summary
-
-output: final_summary
-```
-
-## Step 6 — Run It
-
-**Via CLI:**
 ```bash
-occ run my-chain.yaml -i topic="renewable energy"
+occ run hello-world -i topic="renewable energy"
+occ run parallel-pros-cons -i topic="remote work"
+occ run web-analyzer -i url="https://en.wikipedia.org/wiki/AI"
 ```
 
-**Via REST API:**
+Or via REST API:
+
 ```bash
-curl -X POST http://localhost:4242/execute/my-chain \
+curl -X POST http://localhost:4242/execute/hello-world \
   -H "Content-Type: application/json" \
   -d '{"input": {"topic": "renewable energy"}}'
 ```
 
-**Via the React Dashboard:**
-1. Open http://localhost:5173
-2. Click on `my-chain` in the chain list
-3. Click "Run", enter your topic, click "Execute"
-
-## What Just Happened?
-
-```
-1. Loader parsed my-chain.yaml and validated it with Zod
-2. Executor resolved dependencies:
-   - Wave 1: [research]         ← runs first
-   - Wave 2: [summary]          ← runs after research completes
-3. Step "research" called Claude Haiku with your prompt
-4. Result stored in {research_result} variable
-5. Step "summary" received {research_result} in its prompt
-6. Final output returned via SSE stream
-7. Everything checkpointed to SQLite (crash-safe)
-```
+Or via the React Dashboard (http://localhost:5173): click a chain, click "Run".
 
 ## Next Steps
 

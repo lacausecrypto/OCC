@@ -59,7 +59,11 @@ async function fetchJSON(path: string, method = "GET", body?: unknown): Promise<
     }
   } catch (err) {
     console.error(`\x1b[31mError: Cannot connect to OCC server at ${BASE_URL}\x1b[0m`);
-    console.error(`Start the server: cd mcp-server && npm run rest`);
+    console.error(`\nThe server is not running. Start it with:\n`);
+    console.error(`  \x1b[1mocc start\x1b[0m`);
+    console.error(`\nOr manually:`);
+    console.error(`  cd mcp-server && npm run rest\n`);
+    console.error(`\x1b[2mTip: run \x1b[0m\x1b[1mocc doctor\x1b[0m\x1b[2m to check all prerequisites.\x1b[0m`);
     process.exit(1);
   }
 }
@@ -590,56 +594,395 @@ async function cmdGenerateAnswer(sessionId: string, answers: string) {
   console.log(JSON.stringify(data, null, 2));
 }
 
+// ─── occ init ──────────────────────────────────────────────────────────────
+
+const EXAMPLE_CHAINS: Record<string, string> = {
+  "hello-world": `name: hello-world
+description: "Your first OCC chain"
+inputs:
+  - name: topic
+    description: "What to research"
+steps:
+  - id: research
+    model: claude-haiku-4-5
+    prompt: |
+      Give me 5 key facts about "{input.topic}".
+      Be concise, one sentence per fact.
+    output_var: facts
+  - id: summary
+    model: claude-haiku-4-5
+    depends_on: [research]
+    prompt: |
+      Based on these facts, write a 3-sentence summary:
+      {facts}
+    output_var: result
+output: result
+`,
+  "web-analyzer": `name: web-analyzer
+description: "Fetch and analyze a web page (pre-tool demo, 0 token data collection)"
+inputs:
+  - name: url
+    type: url
+    description: "URL to analyze"
+    default: "https://en.wikipedia.org/wiki/Artificial_intelligence"
+steps:
+  - id: analyze
+    model: claude-haiku-4-5
+    pre_tools:
+      - type: http_fetch
+        url: "{input.url}"
+        inject_as: page_content
+    prompt: |
+      Analyze this web page and provide:
+      1. Title
+      2. Summary (3 sentences)
+      3. Key topics (5 bullet points)
+
+      PAGE CONTENT:
+      {page_content}
+    output_var: analysis
+output: analysis
+`,
+  "parallel-pros-cons": `name: parallel-pros-cons
+description: "Parallel execution demo: 2 agents run simultaneously, then merge"
+inputs:
+  - name: topic
+    description: "Topic to evaluate"
+steps:
+  - id: pros
+    model: claude-haiku-4-5
+    prompt: "List 5 compelling advantages of {input.topic}. One sentence each."
+    output_var: pros_list
+  - id: cons
+    model: claude-haiku-4-5
+    prompt: "List 5 significant disadvantages of {input.topic}. One sentence each."
+    output_var: cons_list
+  - id: verdict
+    model: claude-haiku-4-5
+    depends_on: [pros, cons]
+    prompt: |
+      Based on this analysis, give a final verdict in 3 sentences.
+      PROS: {pros_list}
+      CONS: {cons_list}
+    output_var: final_verdict
+output: final_verdict
+`,
+};
+
+const INIT_ENV = `# OCC (Orchestrator Chain Chimera) configuration
+# See: https://github.com/lacausecrypto/OCC
+
+# Server
+REST_PORT=4242
+REST_HOST=127.0.0.1
+
+# Paths
+CHAINS_DIR=./chains
+PIPELINES_DIR=./pipelines
+WORKSPACE_DIR=.
+
+# Execution
+CLAUDE_CLI=claude
+CLAUDE_TIMEOUT_MS=1800000
+MAX_CONCURRENT_EXECUTIONS=5
+
+# Storage
+# OCC_DB=./occ.db
+# OCC_QUEUE_DB=./occ-queue.db
+
+# Security (uncomment for production)
+# OCC_API_KEY=your-secret-key
+# OCC_ENCRYPTION_KEY=generate-with-node-crypto
+
+# Logging
+LOG_LEVEL=info
+`;
+
+function cmdInit(projectName?: string) {
+  const dir = projectName ? path.resolve(projectName) : process.cwd();
+  const name = projectName || path.basename(dir);
+
+  if (projectName) {
+    if (fs.existsSync(dir)) {
+      console.error(`\x1b[31mError:\x1b[0m Directory "${projectName}" already exists`);
+      process.exit(1);
+    }
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  // Create directories
+  const chainsDir = path.join(dir, "chains");
+  const pipelinesDir = path.join(dir, "pipelines");
+  if (!fs.existsSync(chainsDir)) fs.mkdirSync(chainsDir, { recursive: true });
+  if (!fs.existsSync(pipelinesDir)) fs.mkdirSync(pipelinesDir, { recursive: true });
+
+  // Write .env
+  const envPath = path.join(dir, ".env");
+  if (!fs.existsSync(envPath)) {
+    fs.writeFileSync(envPath, INIT_ENV);
+  }
+
+  // Write example chains
+  let chainCount = 0;
+  for (const [chainName, yaml] of Object.entries(EXAMPLE_CHAINS)) {
+    const chainPath = path.join(chainsDir, `${chainName}.yaml`);
+    if (!fs.existsSync(chainPath)) {
+      fs.writeFileSync(chainPath, yaml);
+      chainCount++;
+    }
+  }
+
+  // Write .gitignore
+  const gitignorePath = path.join(dir, ".gitignore");
+  if (!fs.existsSync(gitignorePath)) {
+    fs.writeFileSync(gitignorePath, `*.db\n*.db-wal\n*.db-shm\nnode_modules/\n.env\n`);
+  }
+
+  console.log(`
+\x1b[1m\x1b[32mOCC project initialized!\x1b[0m  ${projectName ? dir : "(current directory)"}
+
+  \x1b[36mchains/\x1b[0m              ${chainCount} example chain(s)
+  \x1b[36mpipelines/\x1b[0m           ready for multi-chain workflows
+  \x1b[36m.env\x1b[0m                 server configuration
+  \x1b[36m.gitignore\x1b[0m           ignores databases and .env
+
+\x1b[1mNext steps:\x1b[0m
+  ${projectName ? `cd ${projectName}\n  ` : ""}occ doctor             check prerequisites
+  occ start              start the server
+  occ run hello-world -i topic="quantum computing"
+`);
+}
+
+// ─── occ start ─────────────────────────────────────────────────────────────
+
+async function cmdStart() {
+  // Find the rest.js entry point
+  const candidates = [
+    path.resolve("node_modules/occ-orchestrator/dist/rest.js"),      // npm global
+    path.resolve("dist/rest.js"),                                     // from source (in mcp-server/)
+    path.resolve("mcp-server/dist/rest.js"),                          // from source (in repo root)
+    path.join(__dirname, "../rest.js"),                                // relative to bin
+  ];
+
+  let restPath: string | null = null;
+  for (const c of candidates) {
+    if (fs.existsSync(c)) { restPath = c; break; }
+  }
+
+  if (!restPath) {
+    // Try to find via npm root
+    try {
+      const { execSync } = await import("node:child_process");
+      const npmRoot = execSync("npm root -g", { encoding: "utf-8" }).trim();
+      const npmPath = path.join(npmRoot, "occ-orchestrator/dist/rest.js");
+      if (fs.existsSync(npmPath)) restPath = npmPath;
+    } catch {}
+  }
+
+  if (!restPath) {
+    console.error(`\x1b[31mError:\x1b[0m Cannot find OCC server entry point.`);
+    console.error(`\nIf installed from source, run from the mcp-server/ directory:`);
+    console.error(`  cd mcp-server && npm run rest`);
+    console.error(`\nIf installed via npm, make sure occ-orchestrator is installed:`);
+    console.error(`  npm install -g occ-orchestrator`);
+    process.exit(1);
+  }
+
+  console.log(`\x1b[1mStarting OCC server...\x1b[0m`);
+  console.log(`\x1b[2m${restPath}\x1b[0m\n`);
+
+  const { spawn } = await import("node:child_process");
+  const child = spawn("node", [restPath], {
+    stdio: "inherit",
+    env: { ...process.env },
+    cwd: process.cwd(),
+  });
+
+  child.on("error", (err) => {
+    console.error(`\x1b[31mFailed to start server:\x1b[0m ${err.message}`);
+    process.exit(1);
+  });
+
+  child.on("exit", (code) => {
+    process.exit(code ?? 1);
+  });
+
+  // Forward signals
+  process.on("SIGINT", () => child.kill("SIGINT"));
+  process.on("SIGTERM", () => child.kill("SIGTERM"));
+}
+
+// ─── occ doctor ────────────────────────────────────────────────────────────
+
+async function cmdDoctor() {
+  const { execFileSync, execSync } = await import("node:child_process");
+
+  console.log(`\x1b[1mOCC Doctor\x1b[0m\n`);
+
+  const results: Array<{ label: string; ok: boolean; detail: string; fix?: string }> = [];
+
+  // Node.js
+  const nodeVer = process.version;
+  const nodeMajor = parseInt(nodeVer.slice(1));
+  results.push({
+    label: "Node.js",
+    ok: nodeMajor >= 20,
+    detail: nodeVer,
+    fix: nodeMajor < 20 ? "Install Node.js 20+: https://nodejs.org" : undefined,
+  });
+
+  // Claude CLI
+  let claudeOk = false;
+  let claudeDetail = "Not found";
+  let claudeFix: string | undefined = "npm install -g @anthropic-ai/claude-code";
+  try {
+    const ver = execFileSync(process.env.CLAUDE_CLI ?? "claude", ["--version"], { timeout: 5000, encoding: "utf-8" }).trim().split("\n")[0];
+    claudeOk = true;
+    claudeDetail = ver;
+    claudeFix = undefined;
+  } catch {}
+  results.push({ label: "Claude CLI", ok: claudeOk, detail: claudeDetail, fix: claudeFix });
+
+  // Claude auth
+  let authOk = false;
+  let authDetail = "Not authenticated";
+  let authFix: string | undefined = 'Run: claude  (opens browser)';
+  if (claudeOk) {
+    try {
+      execFileSync(process.env.CLAUDE_CLI ?? "claude", ["-p", "hi", "--max-turns", "1", "--output-format", "json"], { timeout: 20000, encoding: "utf-8" });
+      authOk = true;
+      authDetail = "Authenticated";
+      authFix = undefined;
+    } catch (e: any) {
+      authDetail = e?.stderr?.toString()?.slice(0, 80) || "Failed to verify";
+    }
+  } else {
+    authDetail = "Install Claude CLI first";
+  }
+  results.push({ label: "Claude CLI auth", ok: authOk, detail: authDetail, fix: authFix });
+
+  // Ollama
+  let ollamaOk = false;
+  let ollamaDetail = "Not running";
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    const res = await fetch("http://localhost:11434/api/tags", { signal: ctrl.signal });
+    clearTimeout(timer);
+    const data = await res.json() as { models?: Array<{ name: string }> };
+    const models = data.models ?? [];
+    ollamaOk = true;
+    ollamaDetail = `Running, ${models.length} model(s)${models.length > 0 ? ": " + models.map((m: any) => m.name).slice(0, 3).join(", ") : ""}`;
+  } catch {}
+  results.push({ label: "Ollama (optional)", ok: ollamaOk, detail: ollamaDetail, fix: ollamaOk ? undefined : "https://ollama.com/download" });
+
+  // Docker
+  let dockerOk = false;
+  let dockerDetail = "Not found";
+  try {
+    const ver = execFileSync("docker", ["--version"], { timeout: 3000, encoding: "utf-8" }).trim().split("\n")[0];
+    dockerOk = true;
+    dockerDetail = ver;
+  } catch {}
+  results.push({ label: "Docker (optional)", ok: dockerOk, detail: dockerDetail, fix: dockerOk ? undefined : "https://docker.com/get-started" });
+
+  // Chains directory
+  const chainsDir = process.env.CHAINS_DIR ?? "./chains";
+  let chainsOk = false;
+  let chainsDetail = "Not found";
+  try {
+    const files = fs.readdirSync(chainsDir).filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
+    chainsOk = files.length > 0;
+    chainsDetail = `${files.length} chain(s) in ${chainsDir}`;
+  } catch {}
+  results.push({ label: "Chains directory", ok: chainsOk, detail: chainsDetail, fix: chainsOk ? undefined : "Run: occ init" });
+
+  // OCC Server
+  let serverOk = false;
+  let serverDetail = "Not running";
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    const res = await fetch(`${BASE_URL}/health`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    const data = await res.json() as { ok?: boolean; version?: string };
+    serverOk = !!data.ok;
+    serverDetail = `Running v${data.version ?? "?"}`;
+  } catch {}
+  results.push({ label: "OCC Server", ok: serverOk, detail: serverDetail, fix: serverOk ? undefined : "Run: occ start" });
+
+  // Print results
+  let allRequired = true;
+  for (const r of results) {
+    const icon = r.ok ? "\x1b[32m✓\x1b[0m" : (r.label.includes("optional") ? "\x1b[33m○\x1b[0m" : "\x1b[31m✗\x1b[0m");
+    console.log(`  ${icon} \x1b[1m${r.label}\x1b[0m: ${r.detail}`);
+    if (r.fix) console.log(`    \x1b[2m→ ${r.fix}\x1b[0m`);
+    if (!r.ok && !r.label.includes("optional")) allRequired = false;
+  }
+
+  console.log();
+  if (allRequired) {
+    console.log(`\x1b[32mAll required checks passed!\x1b[0m`);
+  } else {
+    console.log(`\x1b[33mSome required checks failed. Fix them and run \x1b[1mocc doctor\x1b[0m\x1b[33m again.\x1b[0m`);
+    process.exit(1);
+  }
+}
+
+// ─── Help ──────────────────────────────────────────────────────────────────
+
 function printHelp() {
   console.log(`
-\x1b[1mOCC — Claude Chain Orchestrator CLI\x1b[0m
+\x1b[1mOCC (Orchestrator Chain Chimera) CLI\x1b[0m
 
 \x1b[1mUsage:\x1b[0m
   occ <command> [options]
 
-\x1b[1mCommands:\x1b[0m
-  list                              List all chains and pipelines
-  run <chain> [--input k=v]         Execute a chain (queues if busy)
+\x1b[1mSetup:\x1b[0m
+  init [name]                       Create a new OCC project with example chains
+  start                             Start the OCC server
+  doctor                            Check all prerequisites (Node, Claude CLI, Ollama...)
+
+\x1b[1mChain execution:\x1b[0m
+  run <chain> [--input k=v]         Execute a chain
   run-pipeline <name> [--input k=v] Execute a pipeline
+  list                              List all chains and pipelines
   validate [path]                   Lint and validate all chains
-  dry-run <chain> [--input k=v]     Preview execution plan (no LLM calls)
+  dry-run <chain> [--input k=v]     Preview execution plan (0 tokens)
+
+\x1b[1mMonitoring:\x1b[0m
   status <executionId>              Check execution status
   logs <executionId>                Stream execution logs (SSE)
   cancel <executionId>              Cancel a running execution
-  queue                             Show queue stats and recent jobs
-  timeline <executionId>            Time-travel: step checkpoint history
+  queue                             Show queue stats
+  timeline <executionId>            Step checkpoint history
   stats <chainName>                 Execution stats for a chain
+
+\x1b[1mHuman-in-the-loop:\x1b[0m
   approve <execId> <stepId>         Approve a gate step
   reject <execId> <stepId>          Reject a gate step
-  generate "<description>"          Generate a chain from natural language
-  generate-answer <sessionId> "..." Answer Claude's questions during generation
+
+\x1b[1mGeneration:\x1b[0m
+  generate "<description>"          Natural language to chain YAML
+  generate-answer <id> "<answers>"  Continue chain generation
+
+\x1b[1mSystem:\x1b[0m
   health                            Check server health
 
 \x1b[1mFlags:\x1b[0m
   --input k=v, -i k=v              Chain input (repeatable)
-  --priority N, -p N                Execution priority 1-10 (default: 5)
-  --json                            Output raw JSON (for scripting)
+  --priority N, -p N                Execution priority 1-10
+  --json                            Output raw JSON
 
-\x1b[1mExamples:\x1b[0m
-  occ list
-  occ run deep-researcher --input topic="quantum computing"
-  occ run deep-researcher -i topic="AI" --priority 10
-  occ run-pipeline research-to-content --input topic="AI"
-  occ validate ./chains
-  occ dry-run code-review --input path="./src"
-  occ status 1a2b3c4d
-  occ cancel 1a2b3c4d
-  occ queue
-  occ timeline 1a2b3c4d
-  occ stats deep-researcher
-  occ approve 1a2b3c4d gate_step
-  occ generate "Monitor BTC price, alert if >5% change in 24h"
-  occ health --json
+\x1b[1mQuick start:\x1b[0m
+  occ init my-project && cd my-project
+  occ doctor
+  occ start
+  occ run hello-world -i topic="quantum computing"
 
 \x1b[1mEnvironment:\x1b[0m
   OCC_URL          Server URL (default: http://localhost:4242)
-  CHAINS_DIR       Chains directory (for validate/dry-run)
-  REST_PORT        Server port (default: 4242)
+  CHAINS_DIR       Chains directory (default: ./chains)
 `);
 }
 
@@ -650,6 +993,18 @@ const args = process.argv.slice(2).filter((a) => a !== "--json");
 const command = args[0];
 
 switch (command) {
+  case "init":
+    cmdInit(args[1]);
+    break;
+  case "start":
+  case "serve":
+  case "server":
+    cmdStart();
+    break;
+  case "doctor":
+  case "check":
+    cmdDoctor();
+    break;
   case "list":
   case "ls":
     cmdList();

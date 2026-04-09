@@ -63,7 +63,7 @@ describe("occ help", () => {
     const { stdout, exitCode } = occ([]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("OCC");
-    expect(stdout).toContain("Commands:");
+    expect(stdout).toContain("Chain execution:");
     expect(stdout).toContain("list");
     expect(stdout).toContain("run");
     expect(stdout).toContain("validate");
@@ -73,19 +73,19 @@ describe("occ help", () => {
   it("shows help with --help", () => {
     const { stdout, exitCode } = occ(["--help"]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Commands:");
+    expect(stdout).toContain("Chain execution:");
   });
 
   it("shows help with -h", () => {
     const { stdout, exitCode } = occ(["-h"]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Commands:");
+    expect(stdout).toContain("Chain execution:");
   });
 
   it("shows help with help command", () => {
     const { stdout, exitCode } = occ(["help"]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Examples:");
+    expect(stdout).toContain("Quick start:");
   });
 });
 

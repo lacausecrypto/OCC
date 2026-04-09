@@ -55,22 +55,18 @@ occ run my-chain.yaml -i topic="AI safety"
 **Prerequisites:** Node.js 20+ · Claude CLI (`npm install -g @anthropic-ai/claude-code && claude`)
 
 ```bash
-# Install
 npm install -g occ-orchestrator
-
-# Or from source
-git clone https://github.com/lacausecrypto/OCC.git
-cd OCC/mcp-server && npm install && npm run build
-
-# Start
-cd mcp-server && npm run rest                      # Backend → http://127.0.0.1:4242
-cd frontend-react && npm install && npm run dev    # Frontend → http://localhost:5173
-
-# Run a chain
-occ run deep-researcher -i topic="quantum computing"
+occ init my-project && cd my-project
+occ doctor                                         # check prerequisites
+occ start                                          # start server → http://127.0.0.1:4242
+occ run hello-world -i topic="quantum computing"   # run your first chain
 ```
 
+**From source:** `git clone https://github.com/lacausecrypto/OCC.git && cd OCC/mcp-server && npm install && npm run build && npm run rest`
+
 **Docker:** `cp .env.example .env && docker compose up`
+
+**Frontend:** `cd frontend-react && npm install && npm run dev` (http://localhost:5173)
 
 > On first launch, a **Setup Check modal** verifies all prerequisites and helps fix missing dependencies.
 
