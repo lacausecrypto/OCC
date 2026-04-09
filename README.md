@@ -308,7 +308,7 @@ occ list | status | logs | timeline | stats | queue | cancel | approve | reject
 
 ## REST API
 
-102 endpoints with Bearer auth, rate limiting, and SSE streaming.
+102 endpoints with Bearer auth, rate limiting, and SSE streaming. **[Interactive docs at /api/docs](http://localhost:4242/api/docs/)** (Swagger UI). OpenAPI spec: [openapi.yaml](openapi.yaml).
 
 <details>
 <summary>Endpoint list</summary>

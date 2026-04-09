@@ -1,0 +1,1541 @@
+openapi: 3.1.0
+info:
+  title: OCC — Orchestrator Chain Chimera API
+  version: 0.3.1
+  description: |
+    YAML-first LLM orchestrator with automatic parallel execution, 30 pre-tools at zero token cost, and 6 LLM providers.
+
+    **Authentication:** Set `OCC_API_KEY` env var. Send `Authorization: Bearer <key>` header. Required when `NODE_ENV=production`.
+
+    **Rate Limits:** Execution endpoints: 20/min. Generation endpoints: 5/min. Config/provider endpoints: 30/min.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  contact:
+    name: OCC GitHub
+    url: https://github.com/lacausecrypto/OCC
+
+servers:
+  - url: http://localhost:4242
+    description: Local development server
+
+tags:
+  - name: System
+    description: Health, prerequisites, config
+  - name: Chains
+    description: Chain CRUD, versioning, stats
+  - name: Executions
+    description: Run chains, track progress, token usage
+  - name: Queue
+    description: Job queue management
+  - name: Schedules
+    description: Cron-based chain scheduling
+  - name: Pipelines
+    description: Multi-chain pipeline orchestration
+  - name: Providers
+    description: LLM provider management
+  - name: Ollama
+    description: Ollama local model management
+  - name: HuggingFace
+    description: HuggingFace model browsing
+  - name: BLOB
+    description: Autonomous exploratory AI canvas
+  - name: Knowledge
+    description: Persistent knowledge graph
+  - name: Workflow Chat
+    description: Conversational chain builder
+  - name: Cache
+    description: Step and pre-tool cache management
+  - name: Files
+    description: Image serving and file downloads
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Set OCC_API_KEY env var. Required in production.
+
+  schemas:
+    ChainInput:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+          enum: [string, number, boolean, enum, file, image, json, url, text]
+        optional:
+          type: boolean
+        default:
+          type: string
+        placeholder:
+          type: string
+        enum:
+          type: array
+          items: { type: string }
+        min:
+          type: number
+        max:
+          type: number
+        min_length:
+          type: integer
+        max_length:
+          type: integer
+        pattern:
+          type: string
+        accepts:
+          type: array
+          items: { type: string }
+        max_file_size:
+          type: integer
+        examples:
+          type: array
+          items: { type: string }
+
+    ChainSummary:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        version: { type: string }
+        stepCount: { type: integer }
+        inputs:
+          type: array
+          items: { $ref: "#/components/schemas/ChainInput" }
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              type: { type: string }
+              model: { type: string }
+
+    StepResult:
+      type: object
+      properties:
+        stepId: { type: string }
+        status: { type: string, enum: [pending, running, done, error, skipped] }
+        output: { type: string }
+        error: { type: string }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        durationMs: { type: integer }
+        inputTokens: { type: integer }
+        outputTokens: { type: integer }
+
+    ChainExecution:
+      type: object
+      properties:
+        id: { type: string }
+        chainName: { type: string }
+        status: { type: string, enum: [running, done, error, cancelled] }
+        input: { type: object, additionalProperties: { type: string } }
+        steps:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/StepResult" }
+        result: { type: string }
+        error: { type: string }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        durationMs: { type: integer }
+
+    PrerequisiteCheck:
+      type: object
+      properties:
+        id: { type: string }
+        label: { type: string }
+        required: { type: boolean }
+        status: { type: string, enum: [ok, warn, fail] }
+        detail: { type: string }
+        hint: { type: string }
+
+    QueueStats:
+      type: object
+      properties:
+        queued: { type: integer }
+        running: { type: integer }
+        done: { type: integer }
+        errored: { type: integer }
+        avgWaitSeconds: { type: number }
+        maxWorkers: { type: integer }
+        activeWorkers: { type: integer }
+
+    Schedule:
+      type: object
+      properties:
+        id: { type: string }
+        label: { type: string }
+        chainName: { type: string }
+        cron: { type: string }
+        enabled: { type: boolean }
+        input: { type: object, additionalProperties: { type: string } }
+        lastRunAt: { type: string, format: date-time }
+        nextRunAt: { type: string, format: date-time }
+
+    LLMProvider:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [claude, openrouter, openai, ollama, huggingface, custom] }
+        apiKey: { type: string, description: "Masked in responses" }
+        baseUrl: { type: string }
+        defaultModel: { type: string }
+        enabled: { type: boolean }
+        models: { type: array, items: { type: string } }
+        createdAt: { type: string, format: date-time }
+
+    KnowledgeEntry:
+      type: object
+      properties:
+        id: { type: string }
+        concept: { type: string }
+        facts: { type: array, items: { type: string } }
+        sessionId: { type: string }
+        nodeId: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    TokenUsage:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        input: { type: integer }
+        output: { type: integer }
+        executions: { type: integer }
+
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ═══ SYSTEM ═══
+  /health:
+    get:
+      tags: [System]
+      summary: Server health check
+      security: []
+      responses:
+        "200":
+          description: Server status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  version: { type: string }
+                  runningExecutions: { type: integer }
+                  chainCount: { type: integer }
+                  pipelineCount: { type: integer }
+                  nodeVersion: { type: string }
+                  uptime: { type: integer }
+                  platform: { type: string }
+                  arch: { type: string }
+                  memoryMB: { type: integer }
+                  queue: { $ref: "#/components/schemas/QueueStats" }
+
+  /prerequisites:
+    get:
+      tags: [System]
+      summary: Check all prerequisites (Claude CLI, SQLite, Ollama, Docker...)
+      security: []
+      responses:
+        "200":
+          description: Prerequisite check results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checks:
+                    type: array
+                    items: { $ref: "#/components/schemas/PrerequisiteCheck" }
+                  allRequiredOk: { type: boolean }
+
+  /config:
+    get:
+      tags: [System]
+      summary: Get server configuration
+      responses:
+        "200":
+          description: Current config
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: { type: string } }
+    put:
+      tags: [System]
+      summary: Update server configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: { type: string } }
+      responses:
+        "200":
+          description: Config updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+
+  /events:
+    get:
+      tags: [System]
+      summary: Global SSE event stream
+      description: Server-sent events for all executions. Events include execution_started, step_started, step_output, step_done, execution_done, execution_error.
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  # ═══ CHAINS ═══
+  /chains:
+    get:
+      tags: [Chains]
+      summary: List all chains
+      responses:
+        "200":
+          description: Chain list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ChainSummary" }
+
+  /chains/{name}:
+    get:
+      tags: [Chains]
+      summary: Get chain YAML
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Chain YAML content
+          content:
+            text/yaml:
+              schema: { type: string }
+        "404":
+          description: Chain not found
+    post:
+      tags: [Chains]
+      summary: Save or create a chain
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                yaml: { type: string }
+                versionMessage: { type: string }
+          text/yaml:
+            schema: { type: string }
+      responses:
+        "200":
+          description: Chain saved
+    delete:
+      tags: [Chains]
+      summary: Delete a chain
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Chain deleted
+
+  /chains/{name}/stats:
+    get:
+      tags: [Chains]
+      summary: Get chain execution statistics
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Chain stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalRuns: { type: integer }
+                  successRate: { type: number }
+                  avgDurationMs: { type: integer }
+                  totalTokens:
+                    type: object
+                    properties:
+                      input: { type: integer }
+                      output: { type: integer }
+
+  /chains/{name}/versions:
+    get:
+      tags: [Chains]
+      summary: List chain versions
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Version list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions: { type: array, items: { type: object } }
+                  total: { type: integer }
+
+  /chains/{name}/versions/{version}:
+    get:
+      tags: [Chains]
+      summary: Get specific chain version
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: version
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Version with YAML content
+    delete:
+      tags: [Chains]
+      summary: Delete a chain version
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: version
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Version deleted
+
+  /chains/{name}/versions/{version}/restore:
+    post:
+      tags: [Chains]
+      summary: Restore chain to a previous version
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: version
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Chain restored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  restoredFrom: { type: integer }
+
+  # ═══ EXECUTIONS ═══
+  /execute/{name}:
+    post:
+      tags: [Executions]
+      summary: Start a chain execution
+      description: Starts execution immediately or queues it if all workers are busy. Returns executionId for polling.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties:
+                input:
+                  type: object
+                  additionalProperties: { type: string }
+                priority:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+                  default: 5
+      responses:
+        "200":
+          description: Execution started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  executionId: { type: string }
+                  queued: { type: boolean }
+        "202":
+          description: Execution queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId: { type: string }
+                  queued: { type: boolean }
+                  position: { type: integer }
+        "400":
+          description: Invalid chain or missing inputs
+
+  /executions:
+    get:
+      tags: [Executions]
+      summary: List execution history
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Execution list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ChainExecution" }
+    delete:
+      tags: [Executions]
+      summary: Clear all execution history
+      responses:
+        "200":
+          description: History cleared
+
+  /executions/{id}:
+    get:
+      tags: [Executions]
+      summary: Get execution status and result
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Execution details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChainExecution" }
+        "404":
+          description: Execution not found
+    delete:
+      tags: [Executions]
+      summary: Cancel a running execution
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Execution cancelled
+
+  /executions/{id}/stream:
+    get:
+      tags: [Executions]
+      summary: SSE stream for a specific execution
+      description: Includes catch-up replay of past events.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  /executions/{id}/timeline:
+    get:
+      tags: [Executions]
+      summary: Get checkpoint timeline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Step checkpoint history
+
+  /executions/{id}/resume:
+    post:
+      tags: [Executions]
+      summary: Resume a failed execution from checkpoint
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Execution resumed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  executionId: { type: string }
+                  result: { type: string }
+
+  /executions/{id}/approve/{stepId}:
+    post:
+      tags: [Executions]
+      summary: Approve or reject a gate step
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: stepId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approved]
+              properties:
+                approved: { type: boolean }
+      responses:
+        "200":
+          description: Gate resolved
+
+  /approvals:
+    get:
+      tags: [Executions]
+      summary: List pending gate approvals
+      responses:
+        "200":
+          description: Pending approvals list
+
+  /executions/token-usage:
+    get:
+      tags: [Executions]
+      summary: Aggregated daily token usage
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 30, maximum: 90 }
+      responses:
+        "200":
+          description: Daily token usage
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TokenUsage" }
+
+  /executions/token-usage-detailed:
+    get:
+      tags: [Executions]
+      summary: Detailed token usage by source and chain
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 30, maximum: 90 }
+      responses:
+        "200":
+          description: Detailed breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  days: { type: integer }
+                  totals:
+                    type: object
+                    properties:
+                      input: { type: integer }
+                      output: { type: integer }
+                      executions: { type: integer }
+                  topChains:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        executions: { type: integer }
+                        input: { type: integer }
+                        output: { type: integer }
+
+  # ═══ QUEUE ═══
+  /queue:
+    get:
+      tags: [Queue]
+      summary: Get queue statistics
+      responses:
+        "200":
+          description: Queue stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueStats" }
+    delete:
+      tags: [Queue]
+      summary: Clear all queue entries
+      responses:
+        "200":
+          description: Queue cleared
+
+  /queue/jobs:
+    get:
+      tags: [Queue]
+      summary: List queue jobs
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: status
+          in: query
+          schema: { type: string, enum: [queued, running, done, error] }
+      responses:
+        "200":
+          description: Job list
+
+  /queue/jobs/{id}:
+    get:
+      tags: [Queue]
+      summary: Get a specific job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Job details
+    delete:
+      tags: [Queue]
+      summary: Cancel a queued job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Job cancelled
+
+  /queue/purge:
+    delete:
+      tags: [Queue]
+      summary: Purge old completed/failed jobs
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 7 }
+      responses:
+        "200":
+          description: Jobs purged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  purged: { type: integer }
+
+  # ═══ SCHEDULES ═══
+  /schedules:
+    get:
+      tags: [Schedules]
+      summary: List all schedules
+      responses:
+        "200":
+          description: Schedule list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Schedule" }
+    post:
+      tags: [Schedules]
+      summary: Create a schedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainName, cron]
+              properties:
+                label: { type: string }
+                chainName: { type: string }
+                cron: { type: string, description: "Cron expression (e.g. '0 9 * * *')" }
+                enabled: { type: boolean, default: true }
+                input: { type: object, additionalProperties: { type: string } }
+      responses:
+        "201":
+          description: Schedule created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+
+  /schedules/{id}:
+    get:
+      tags: [Schedules]
+      summary: Get a schedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Schedule details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+    put:
+      tags: [Schedules]
+      summary: Update a schedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Schedule updated
+    delete:
+      tags: [Schedules]
+      summary: Delete a schedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Schedule deleted
+
+  /schedules/{id}/toggle:
+    patch:
+      tags: [Schedules]
+      summary: Toggle schedule enabled/disabled
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Schedule toggled
+
+  /schedules/{id}/run:
+    post:
+      tags: [Schedules]
+      summary: Trigger schedule immediately
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Execution started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  executionId: { type: string }
+
+  # ═══ PIPELINES ═══
+  /pipelines:
+    get:
+      tags: [Pipelines]
+      summary: List all pipelines
+      responses:
+        "200":
+          description: Pipeline list
+
+  /pipelines/{name}:
+    get:
+      tags: [Pipelines]
+      summary: Get pipeline YAML
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Pipeline YAML
+          content:
+            text/yaml:
+              schema: { type: string }
+    post:
+      tags: [Pipelines]
+      summary: Save or create a pipeline
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                yaml: { type: string }
+                versionMessage: { type: string }
+      responses:
+        "200":
+          description: Pipeline saved
+    delete:
+      tags: [Pipelines]
+      summary: Delete a pipeline
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Pipeline deleted
+
+  /pipelines/{name}/execute:
+    post:
+      tags: [Pipelines]
+      summary: Execute a pipeline
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties:
+                input: { type: object, additionalProperties: { type: string } }
+      responses:
+        "200":
+          description: Pipeline execution started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  executionId: { type: string }
+
+  /pipeline-executions:
+    get:
+      tags: [Pipelines]
+      summary: List pipeline executions
+      responses:
+        "200":
+          description: Pipeline execution list
+
+  /pipeline-executions/{id}:
+    get:
+      tags: [Pipelines]
+      summary: Get pipeline execution
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Pipeline execution details
+
+  # ═══ PROVIDERS ═══
+  /providers:
+    get:
+      tags: [Providers]
+      summary: List LLM providers (API keys masked)
+      responses:
+        "200":
+          description: Provider list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LLMProvider" }
+    post:
+      tags: [Providers]
+      summary: Create LLM provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, type]
+              properties:
+                id: { type: string }
+                name: { type: string }
+                type: { type: string, enum: [claude, openrouter, openai, ollama, huggingface, custom] }
+                apiKey: { type: string }
+                baseUrl: { type: string }
+                defaultModel: { type: string }
+                enabled: { type: boolean }
+                models: { type: array, items: { type: string } }
+      responses:
+        "201":
+          description: Provider created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LLMProvider" }
+
+  /providers/models:
+    get:
+      tags: [Providers]
+      summary: Get all models across all enabled providers
+      responses:
+        "200":
+          description: Model list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    provider: { type: string }
+                    providerName: { type: string }
+                    model: { type: string }
+
+  /providers/{id}:
+    get:
+      tags: [Providers]
+      summary: Get provider details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Provider details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LLMProvider" }
+    put:
+      tags: [Providers]
+      summary: Update provider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Provider updated
+    delete:
+      tags: [Providers]
+      summary: Delete provider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Provider deleted
+
+  /providers/{id}/test:
+    post:
+      tags: [Providers]
+      summary: Test provider connection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  error: { type: string }
+                  models: { type: array, items: { type: string } }
+
+  # ═══ OLLAMA ═══
+  /ollama/status:
+    get:
+      tags: [Ollama]
+      summary: Check if Ollama is running
+      responses:
+        "200":
+          description: Ollama status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  online: { type: boolean }
+                  models: { type: integer }
+                  host: { type: string }
+
+  /ollama/models:
+    get:
+      tags: [Ollama]
+      summary: List installed Ollama models
+      responses:
+        "200":
+          description: Model list
+
+  /ollama/pull:
+    post:
+      tags: [Ollama]
+      summary: Pull an Ollama model (streaming progress)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model]
+              properties:
+                model: { type: string }
+      responses:
+        "200":
+          description: NDJSON progress stream
+
+  /ollama/models/{name}:
+    delete:
+      tags: [Ollama]
+      summary: Delete an Ollama model
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Model deleted
+
+  # ═══ HUGGINGFACE ═══
+  /huggingface/models:
+    get:
+      tags: [HuggingFace]
+      summary: Search HuggingFace models
+      parameters:
+        - name: search
+          in: query
+          schema: { type: string }
+        - name: filter
+          in: query
+          schema: { type: string, default: text-generation }
+        - name: sort
+          in: query
+          schema: { type: string, default: downloads }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        "200":
+          description: Model search results
+
+  /huggingface/test:
+    post:
+      tags: [HuggingFace]
+      summary: Test HuggingFace API connection
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string }
+                model: { type: string }
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  model: { type: string }
+                  error: { type: string }
+
+  # ═══ KNOWLEDGE ═══
+  /knowledge:
+    get:
+      tags: [Knowledge]
+      summary: List or search knowledge entries
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Knowledge entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/KnowledgeEntry" }
+    post:
+      tags: [Knowledge]
+      summary: Upsert a knowledge entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [concept]
+              properties:
+                concept: { type: string }
+                facts: { type: array, items: { type: string } }
+                sessionId: { type: string }
+                nodeId: { type: string }
+      responses:
+        "201":
+          description: Entry created
+    delete:
+      tags: [Knowledge]
+      summary: Clear all knowledge entries
+      responses:
+        "200":
+          description: Knowledge cleared
+
+  /knowledge/{id}:
+    put:
+      tags: [Knowledge]
+      summary: Update knowledge entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Entry updated
+    delete:
+      tags: [Knowledge]
+      summary: Delete knowledge entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Entry deleted
+
+  /knowledge/link:
+    post:
+      tags: [Knowledge]
+      summary: Link two concepts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id1, id2]
+              properties:
+                id1: { type: string }
+                id2: { type: string }
+      responses:
+        "200":
+          description: Concepts linked
+
+  /knowledge/extract:
+    post:
+      tags: [Knowledge]
+      summary: Extract concepts from text via LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string }
+                sessionId: { type: string }
+                nodeId: { type: string }
+      responses:
+        "200":
+          description: Extracted concepts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  extracted:
+                    type: array
+                    items: { $ref: "#/components/schemas/KnowledgeEntry" }
+
+  # ═══ CACHE ═══
+  /cache/stats:
+    get:
+      tags: [Cache]
+      summary: Get cache sizes
+      responses:
+        "200":
+          description: Cache stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stepCache: { type: integer }
+                  preToolCache: { type: integer }
+
+  /cache/steps:
+    delete:
+      tags: [Cache]
+      summary: Clear step result cache
+      responses:
+        "200":
+          description: Cache cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cleared: { type: integer }
+                  type: { type: string }
+
+  /cache/pretools:
+    delete:
+      tags: [Cache]
+      summary: Clear pre-tool cache
+      responses:
+        "200":
+          description: Cache cleared
+
+  # ═══ WORKFLOW CHAT ═══
+  /workflow-chat:
+    post:
+      tags: [Workflow Chat]
+      summary: Two-stage conversational chain builder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage, message]
+              properties:
+                stage: { type: string, enum: [chat, plan] }
+                message: { type: string }
+                context:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role: { type: string }
+                      content: { type: string }
+                systemPrompt: { type: string }
+                model: { type: string }
+                canvasContext: { type: string }
+      responses:
+        "200":
+          description: Chat response (SSE for chat stage, JSON for plan stage)
+
+  # ═══ GENERATE CHAIN ═══
+  /generate-chain:
+    post:
+      tags: [Workflow Chat]
+      summary: Generate chain from natural language description
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description: { type: string }
+                sessionId: { type: string }
+                answers: { type: string }
+      responses:
+        "200":
+          description: Chain generated or questions returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [questions, created] }
+                  sessionId: { type: string }
+                  questions: { type: array, items: { type: string } }
+                  chainName: { type: string }
+                  yaml: { type: string }
+                  summary: { type: string }
+
+  # ═══ FILES ═══
+  /images/{filename}:
+    get:
+      tags: [Files]
+      summary: Serve generated images
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Image file
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+
+  /download:
+    get:
+      tags: [Files]
+      summary: Download a local file
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: File download
+
+  # ═══ MCP ═══
+  /mcp-servers:
+    get:
+      tags: [System]
+      summary: Get MCP server config
+      parameters:
+        - name: discover
+          in: query
+          schema: { type: boolean }
+          description: If true, discovers available tools
+      responses:
+        "200":
+          description: MCP config or tools
+    put:
+      tags: [System]
+      summary: Save MCP config and reload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties:
+                type: object
+                properties:
+                  command: { type: string }
+                  args: { type: array, items: { type: string } }
+                  env: { type: object, additionalProperties: { type: string } }
+      responses:
+        "200":
+          description: Config saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  servers: { type: integer }
+
+  # ═══ UTILITY ═══
+  /proxy:
+    get:
+      tags: [System]
+      summary: CORS proxy (SSRF-protected, 512KB max)
+      security: []
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Proxied content
+
+  /extract-style:
+    get:
+      tags: [System]
+      summary: Extract CSS design tokens from a website
+      security: []
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Extracted style tokens

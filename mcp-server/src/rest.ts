@@ -3,6 +3,7 @@
  * Runs on port 4242 alongside the MCP stdio server.
  */
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -156,6 +157,29 @@ function emitSSE(executionId: string, event: ExecutionEvent): void {
   });
   globalSSEClients.length = filtered.length;
   for (let i = 0; i < filtered.length; i++) globalSSEClients[i] = filtered[i];
+}
+
+// ─── Swagger UI ──────────────────────────────────────────────────────────────
+import swaggerUi from "swagger-ui-express";
+import jsYaml from "js-yaml";
+
+try {
+  const specPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../openapi.yaml");
+  if (fs.existsSync(specPath)) {
+    const spec = jsYaml.load(fs.readFileSync(specPath, "utf-8")) as Record<string, unknown>;
+    app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(spec, {
+      customCss: ".swagger-ui .topbar { display: none }",
+      customSiteTitle: "OCC API Documentation",
+    }));
+    app.get("/api/openapi.yaml", (_req, res) => {
+      res.setHeader("Content-Type", "text/yaml");
+      res.sendFile(specPath);
+    });
+    app.get("/api/openapi.json", (_req, res) => res.json(spec));
+    logger.info("occ-rest", "Swagger UI available at /api/docs");
+  }
+} catch (e) {
+  logger.warn("occ-rest", "Could not load OpenAPI spec: " + (e instanceof Error ? e.message : String(e)));
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────

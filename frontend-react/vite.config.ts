@@ -40,6 +40,8 @@ export default defineConfig({
       "/download": { target: OCC_BACKEND, changeOrigin: true },
       "/cache": { target: OCC_BACKEND, changeOrigin: true },
       "/prerequisites": { target: OCC_BACKEND, changeOrigin: true },
+      "/api/docs": { target: OCC_BACKEND, changeOrigin: true },
+      "/api/openapi": { target: OCC_BACKEND, changeOrigin: true },
       // SSE event stream
       "/events": {
         target: OCC_BACKEND,
