@@ -19,6 +19,8 @@ interface CanvasState {
   nodes: Map<string, CanvasNode>;
   edges: Map<string, CanvasEdge>;
   selection: Set<string>;
+  /** Currently selected edge ID (null = no edge selected) */
+  selectedEdgeId: string | null;
   camera: Camera;
   dragState: DragState;
   activeTool: ActiveTool;
@@ -34,10 +36,12 @@ interface CanvasState {
 
   // Edge operations
   addEdge: (edge: CanvasEdge) => void;
+  updateEdge: (id: string, patch: Partial<CanvasEdge>) => void;
   removeEdge: (id: string) => void;
 
   // Selection
   select: (ids: string[]) => void;
+  selectEdge: (id: string | null) => void;
   clearSelection: () => void;
   removeSelected: () => void;
 
@@ -65,6 +69,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   nodes: new Map(),
   edges: new Map(),
   selection: new Set(),
+  selectedEdgeId: null,
   camera: { x: 0, y: 0, zoom: 1 },
   dragState: { type: "none" },
   activeTool: "select",
@@ -109,15 +114,26 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       return { edges };
     }),
 
+  updateEdge: (id, patch) =>
+    set((s) => {
+      const existing = s.edges.get(id);
+      if (!existing) return s;
+      const edges = new Map(s.edges);
+      edges.set(id, { ...existing, ...patch });
+      return { edges };
+    }),
+
   removeEdge: (id) =>
     set((s) => {
       const edges = new Map(s.edges);
       edges.delete(id);
-      return { edges };
+      const selectedEdgeId = s.selectedEdgeId === id ? null : s.selectedEdgeId;
+      return { edges, selectedEdgeId };
     }),
 
-  select: (ids) => set({ selection: new Set(ids) }),
-  clearSelection: () => set({ selection: new Set() }),
+  select: (ids) => set({ selection: new Set(ids), selectedEdgeId: null }),
+  selectEdge: (id) => set({ selectedEdgeId: id, selection: new Set() }),
+  clearSelection: () => set({ selection: new Set(), selectedEdgeId: null }),
 
   removeSelected: () => {
     const { selection, pushUndo } = get();
@@ -334,6 +350,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       nodes: new Map(),
       edges: new Map(),
       selection: new Set(),
+      selectedEdgeId: null,
       undoStack: [],
       redoStack: [],
     }),

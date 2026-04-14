@@ -65,6 +65,11 @@ export default defineConfig({
         target: OCC_BACKEND,
         changeOrigin: true,
       },
+      // Portal proxy for iframe embedding (strips X-Frame-Options)
+      "/portal": {
+        target: OCC_BACKEND,
+        changeOrigin: true,
+      },
     },
   },
 });

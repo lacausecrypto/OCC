@@ -79,6 +79,9 @@ export interface StepAdvancedConfig {
   guardrails?: Array<{ type: string; value?: string | number }>;
 }
 
+/** Discriminator for canvas item kinds */
+export type CanvasItemKind = "step" | "sticky" | "text" | "portal" | "file" | "link" | "terminal";
+
 export interface CanvasNode {
   id: string;
   x: number;
@@ -95,13 +98,54 @@ export interface CanvasNode {
   prompt: string;
   /** Advanced configuration — resilience, caching, type-specific fields */
   advanced?: StepAdvancedConfig;
+  /** Item kind — "step" for workflow nodes (default), or rich canvas items */
+  kind?: CanvasItemKind;
+  // ─── Sticky note fields ─────────────────────────────────────────
+  stickyColor?: string;
+  stickyText?: string;
+  fontSize?: number;
+  // ─── Text block fields ──────────────────────────────────────────
+  markdown?: string;
+  // ─── Portal (embedded browser / link preview) fields ────────────
+  portalUrl?: string;
+  portalScreenshot?: string;
+  portalTitle?: string;
+  portalDescription?: string;
+  portalFavicon?: string;
+  portalStatus?: "loading" | "loaded" | "error";
+  // ─── File viewer fields ─────────────────────────────────────────
+  filePath?: string;
+  fileContent?: string;
+  // ─── Link bookmark fields ───────────────────────────────────────
+  linkUrl?: string;
+  linkTitle?: string;
+  linkFavicon?: string;
+  // ─── Terminal/Agent node fields ─────────────────────────────────
+  terminalProvider?: string;      // provider ID (e.g. "openrouter", "ollama")
+  terminalModel?: string;         // model ID
+  terminalSystemPrompt?: string;  // role instructions
+  terminalMessages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+  terminalName?: string;          // display name (e.g. "Claude Code", "GPT-4o")
 }
 
 export interface CanvasEdge {
   id: string;
   from: string;
   to: string;
+  /** Optional bezier control point offsets for manual reshaping */
+  cp1?: { dx: number; dy: number };
+  cp2?: { dx: number; dy: number };
 }
+
+/** Pastel colors for sticky notes */
+export const STICKY_COLORS = [
+  "#FFF9C4", // yellow
+  "#F8BBD0", // pink
+  "#C8E6C9", // green
+  "#BBDEFB", // blue
+  "#E1BEE7", // purple
+  "#FFE0B2", // orange
+] as const;
 
 export interface Camera {
   x: number;
@@ -111,8 +155,11 @@ export interface Camera {
 
 export type ActiveTool = "select" | "pan" | "connect";
 
+/** Which corner/edge is being resized */
+export type ResizeHandle = "se" | "sw" | "ne" | "nw" | "e" | "w" | "n" | "s";
+
 export interface DragState {
-  type: "none" | "node" | "pan" | "box" | "connect";
+  type: "none" | "node" | "pan" | "box" | "connect" | "controlPoint" | "resize";
   /** Offsets for dragging multiple selected nodes */
   offsets?: Map<string, { dx: number; dy: number }>;
   /** For connect: source node ID */
@@ -124,6 +171,17 @@ export interface DragState {
   my?: number;
   lastX?: number;
   lastY?: number;
+  /** For controlPoint drag: which edge and which handle */
+  edgeId?: string;
+  cpHandle?: "cp1" | "cp2";
+  /** Canvas-space origin when control point drag started */
+  cpOriginX?: number;
+  cpOriginY?: number;
+  /** For resize: target node and handle */
+  resizeNodeId?: string;
+  resizeHandle?: ResizeHandle;
+  /** Original bounds when resize started */
+  resizeOrigin?: { x: number; y: number; w: number; h: number };
 }
 
 export interface NodeExecState {

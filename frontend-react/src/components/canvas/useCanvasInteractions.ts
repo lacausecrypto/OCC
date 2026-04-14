@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef } from "react";
 import { useCanvasStore } from "../../stores/canvas";
 import { useAnnotationStore } from "../../stores/annotations";
 import { useShortcutStore } from "../../stores/shortcuts";
-import { screenToCanvas, nodeAt, computeZoomToFit } from "./canvasRenderer";
+import { screenToCanvas, nodeAt, computeZoomToFit, resizeHandleAt } from "./canvasRenderer";
+import { edgeAt, controlPointAt } from "./connectionHit";
 import type { CanvasNode, CanvasEdge } from "../../types/canvas";
 
 // Module-level clipboard (avoids re-renders)
@@ -53,10 +54,32 @@ export function useCanvasInteractions(
         return;
       }
 
+      // Check resize handle on selected nodes first
+      {
+        const c = screenToCanvas(sx, sy, state.camera);
+        for (const selId of state.selection) {
+          const selNode = state.nodes.get(selId);
+          if (!selNode) continue;
+          const handle = resizeHandleAt(c.x, c.y, selNode);
+          if (handle) {
+            useCanvasStore.setState({
+              dragState: {
+                type: "resize",
+                resizeNodeId: selId,
+                resizeHandle: handle,
+                resizeOrigin: { x: selNode.x, y: selNode.y, w: selNode.w, h: selNode.h },
+                sx, sy, mx: sx, my: sy,
+              },
+            });
+            return;
+          }
+        }
+      }
+
       // Select tool (default)
       const hit = nodeAt(sx, sy, state.camera, state.nodes);
       if (hit) {
-        // Select node
+        // Select node (deselect any edge)
         let sel = new Set(state.selection);
         if (e.shiftKey) {
           if (sel.has(hit)) sel.delete(hit);
@@ -75,11 +98,46 @@ export function useCanvasInteractions(
 
         useCanvasStore.setState({
           selection: sel,
+          selectedEdgeId: null,
           dragState: { type: "node", offsets, sx, sy, mx: sx, my: sy },
         });
       } else {
-        // Empty space → box select
-        if (!e.shiftKey) useCanvasStore.setState({ selection: new Set() });
+        const c = screenToCanvas(sx, sy, state.camera);
+
+        // Check control point hit on selected edge
+        if (state.selectedEdgeId) {
+          const selectedEdge = state.edges.get(state.selectedEdgeId);
+          if (selectedEdge) {
+            const cpHit = controlPointAt(c.x, c.y, selectedEdge, state.nodes);
+            if (cpHit) {
+              useCanvasStore.setState({
+                dragState: {
+                  type: "controlPoint",
+                  edgeId: state.selectedEdgeId,
+                  cpHandle: cpHit.handle,
+                  cpOriginX: c.x,
+                  cpOriginY: c.y,
+                  sx, sy, mx: sx, my: sy,
+                },
+              });
+              return;
+            }
+          }
+        }
+
+        // Check edge hit
+        const edgeHit = edgeAt(c.x, c.y, state.edges, state.nodes);
+        if (edgeHit) {
+          useCanvasStore.setState({
+            selectedEdgeId: edgeHit,
+            selection: new Set(),
+            dragState: { type: "none" },
+          });
+          return;
+        }
+
+        // Empty space → box select (deselect edge too)
+        if (!e.shiftKey) useCanvasStore.setState({ selection: new Set(), selectedEdgeId: null });
         useCanvasStore.setState({
           dragState: {
             type: "box",
@@ -114,9 +172,19 @@ export function useCanvasInteractions(
         const sy = e.clientY - rect.top;
         const c = screenToCanvas(sx, sy, state.camera);
         const nodes = new Map(state.nodes);
+        const gridSize = 20;
+        const snap = !e.shiftKey; // default snap; hold shift for free move
         for (const [id, off] of ds.offsets) {
           const n = nodes.get(id);
-          if (n) nodes.set(id, { ...n, x: c.x + off.dx, y: c.y + off.dy });
+          if (n) {
+            let nx = c.x + off.dx;
+            let ny = c.y + off.dy;
+            if (snap) {
+              nx = Math.round(nx / gridSize) * gridSize;
+              ny = Math.round(ny / gridSize) * gridSize;
+            }
+            nodes.set(id, { ...n, x: nx, y: ny });
+          }
         }
         useCanvasStore.setState({ nodes });
       } else if (ds.type === "box") {
@@ -127,6 +195,23 @@ export function useCanvasInteractions(
             my: e.clientY - rect.top,
           },
         });
+      } else if (ds.type === "controlPoint" && ds.edgeId && ds.cpHandle) {
+        const sx2 = e.clientX - rect.left;
+        const sy2 = e.clientY - rect.top;
+        const c = screenToCanvas(sx2, sy2, state.camera);
+        const dx = c.x - (ds.cpOriginX ?? c.x);
+        const dy = c.y - (ds.cpOriginY ?? c.y);
+        const edge = state.edges.get(ds.edgeId);
+        if (edge) {
+          const prevOffset = ds.cpHandle === "cp1" ? (edge.cp1 ?? { dx: 0, dy: 0 }) : (edge.cp2 ?? { dx: 0, dy: 0 });
+          useCanvasStore.getState().updateEdge(ds.edgeId, {
+            [ds.cpHandle]: { dx: prevOffset.dx + dx, dy: prevOffset.dy + dy },
+          });
+          // Update origin so delta is incremental
+          useCanvasStore.setState({
+            dragState: { ...ds, cpOriginX: c.x, cpOriginY: c.y },
+          });
+        }
       } else if (ds.type === "connect") {
         useCanvasStore.setState({
           dragState: {
@@ -135,6 +220,47 @@ export function useCanvasInteractions(
             my: e.clientY - rect.top,
           },
         });
+      } else if (ds.type === "resize" && ds.resizeNodeId && ds.resizeHandle && ds.resizeOrigin) {
+        const sx2 = e.clientX - rect.left;
+        const sy2 = e.clientY - rect.top;
+        const c = screenToCanvas(sx2, sy2, state.camera);
+        const startC = screenToCanvas(ds.sx!, ds.sy!, state.camera);
+        const deltaX = c.x - startC.x;
+        const deltaY = c.y - startC.y;
+        const o = ds.resizeOrigin;
+        const handle = ds.resizeHandle;
+        const gridSize = 20;
+        const snap = !e.shiftKey;
+
+        let nx = o.x, ny = o.y, nw = o.w, nh = o.h;
+
+        // Apply deltas based on which handle
+        if (handle.includes("e")) nw = o.w + deltaX;
+        if (handle.includes("w")) { nx = o.x + deltaX; nw = o.w - deltaX; }
+        if (handle.includes("s")) nh = o.h + deltaY;
+        if (handle.includes("n")) { ny = o.y + deltaY; nh = o.h - deltaY; }
+
+        // Min sizes
+        const minW = 60, minH = 32;
+        if (nw < minW) { if (handle.includes("w")) nx = o.x + o.w - minW; nw = minW; }
+        if (nh < minH) { if (handle.includes("n")) ny = o.y + o.h - minH; nh = minH; }
+
+        // Snap to grid
+        if (snap) {
+          nx = Math.round(nx / gridSize) * gridSize;
+          ny = Math.round(ny / gridSize) * gridSize;
+          nw = Math.round(nw / gridSize) * gridSize;
+          nh = Math.round(nh / gridSize) * gridSize;
+          if (nw < minW) nw = minW;
+          if (nh < minH) nh = minH;
+        }
+
+        const n = state.nodes.get(ds.resizeNodeId);
+        if (n) {
+          const nodes = new Map(state.nodes);
+          nodes.set(ds.resizeNodeId, { ...n, x: nx, y: ny, w: nw, h: nh });
+          useCanvasStore.setState({ nodes });
+        }
       }
     },
     [getRect],
@@ -148,7 +274,11 @@ export function useCanvasInteractions(
       const state = useCanvasStore.getState();
       const ds = state.dragState;
 
-      if (ds.type === "node") {
+      if (ds.type === "controlPoint") {
+        state.pushUndo();
+      } else if (ds.type === "node") {
+        state.pushUndo();
+      } else if (ds.type === "resize") {
         state.pushUndo();
       } else if (ds.type === "box" && ds.sx !== undefined && ds.mx !== undefined) {
         // Box select: find nodes inside box
@@ -227,7 +357,13 @@ export function useCanvasInteractions(
         spaceRef.current = true;
       }
       if (matches(e, "canvas.delete")) {
-        useCanvasStore.getState().removeSelected();
+        const store = useCanvasStore.getState();
+        if (store.selectedEdgeId) {
+          store.pushUndo();
+          store.removeEdge(store.selectedEdgeId);
+        } else {
+          store.removeSelected();
+        }
       }
       if (matches(e, "canvas.selectAll")) {
         e.preventDefault();

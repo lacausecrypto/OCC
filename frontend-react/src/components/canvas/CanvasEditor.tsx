@@ -19,7 +19,22 @@ import { RunModal, SaveChainModal } from "../modals";
 import { StepEditModal } from "./StepEditModal";
 import { STEP_TYPES } from "./pretoolFields";
 import type { StepType } from "../../types/chain";
+import type { CanvasItemKind } from "../../types/canvas";
+import { CanvasOverlays } from "./CanvasOverlays";
+import { CanvasItemEditModal } from "./CanvasItemEditModal";
+import { TerminalOverlays } from "./TerminalOverlay";
+import { ConnectionPopover } from "./ConnectionPopover";
+import { FloorIndicator } from "./FloorIndicator";
+import { FloorOverview } from "./FloorOverview";
+import { useFloorsStore } from "../../stores/floors";
 import styles from "./CanvasEditor.module.css";
+
+/** Renders FloorOverview only when open (subscribes to store) */
+function FloorOverviewGate() {
+  const open = useFloorsStore((s) => s.overviewOpen);
+  if (!open) return null;
+  return <FloorOverview />;
+}
 
 export function CanvasEditor() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -119,6 +134,11 @@ export function CanvasEditor() {
   } = useCanvasInteractions(canvasRef);
 
   const [editNodeId, setEditNodeId] = useState<string | null>(null);
+  const [itemEditState, setItemEditState] = useState<{
+    nodeId: string | null;
+    createKind?: CanvasItemKind;
+    createPosition?: { x: number; y: number };
+  } | null>(null);
   const [runModal, setRunModal] = useState<{ name: string; type: "chain" | "pipeline" } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
@@ -185,15 +205,21 @@ export function CanvasEditor() {
       if (hit) {
         // ─── Right-click on a node ───
         const node = state.nodes.get(hit);
+        const isCanvasItem = node?.kind && node.kind !== "step";
         const items: (ContextMenuItem | "---")[] = [
-          // Run
-          { icon: "\u25B6", label: "Run this chain", disabled: !serverOnline, action: () => {
-            const chainName = node?.stepId || node?.label || "";
-            if (chainName) setRunModal({ name: chainName, type: "chain" });
+          // Run (only for step nodes)
+          ...(!isCanvasItem ? [
+            { icon: "\u25B6", label: "Run this chain", disabled: !serverOnline, action: () => {
+              const chainName = node?.stepId || node?.label || "";
+              if (chainName) setRunModal({ name: chainName, type: "chain" });
+            }} as ContextMenuItem,
+            "---" as const,
+          ] : []),
+          // Edit — opens the right modal based on kind
+          { icon: "\u270E", label: isCanvasItem ? "Edit Item" : "Edit Step", action: () => {
+            if (isCanvasItem) setItemEditState({ nodeId: hit });
+            else setEditNodeId(hit);
           }},
-          "---",
-          // Edit
-          { icon: "\u270E", label: "Edit Step", action: () => setEditNodeId(hit) },
           { icon: "\u2702", label: "Duplicate", action: () => {
             if (!node) return;
             state.pushUndo();
@@ -256,6 +282,20 @@ export function CanvasEditor() {
           "---",
           // Add step (submenu)
           { icon: "\u2795", label: "Add Step", sub: addStepSub },
+          // Add rich canvas items — open modal for each kind
+          { icon: "\u{1F4CC}", label: "Add Canvas Item", sub: (["sticky", "text", "portal", "file", "link", "terminal"] as CanvasItemKind[]).map((kind) => {
+            const icons: Record<string, string> = { sticky: "\uD83D\uDCCB", text: "\uD83D\uDCDD", portal: "\uD83C\uDF10", file: "\uD83D\uDCC4", link: "\uD83D\uDD17", terminal: "\uD83D\uDCBB" };
+            const labels: Record<string, string> = { sticky: "Sticky Note", text: "Text Block", portal: "Portal (Browser)", file: "File Viewer", link: "Link Bookmark", terminal: "Terminal (Agent)" };
+            return {
+              label: `${icons[kind] ?? ""} ${labels[kind] ?? kind}`,
+              icon: "",
+              action: () => {
+                const cx = (sx - state.camera.x) / state.camera.zoom;
+                const cy = (sy - state.camera.y) / state.camera.zoom;
+                setItemEditState({ nodeId: null, createKind: kind, createPosition: { x: cx, y: cy } });
+              },
+            };
+          })},
           // Paste blueprint (submenu)
           { icon: "\u{1F4CB}", label: "Paste Blueprint", sub: bpPasteSub },
           "---",
@@ -282,6 +322,13 @@ export function CanvasEditor() {
 
   const bpCount = useBlueprintStore((s) => s.blueprints.length);
 
+  // ─── Floor spatial zoom transition (continuous spring values) ──
+  const floorTransition = useFloorsStore((s) => s.transition);
+  const transitionScale = useFloorsStore((s) => s.transitionScale);
+  const stackViewOpen = useFloorsStore((s) => s.stackViewOpen);
+  const isTransitioning = floorTransition !== "idle";
+  const floorTransitionClass = isTransitioning ? styles.floorTransitioning : "";
+
   // ─── Ctrl+S save shortcut ───────────────────────────────────
   useEffect(() => {
     const onSaveEvent = () => {
@@ -293,8 +340,41 @@ export function CanvasEditor() {
     return () => window.removeEventListener("occ-canvas-save", onSaveEvent);
   }, []);
 
+  // Floor card positions for spatial zoom
+  const floorsMap = useFloorsStore((s) => s.floors);
+  const activeFloorId = useFloorsStore((s) => s.activeFloorId);
+  const transitionTargetId = useFloorsStore((s) => s.transitionTargetId);
+
+  // Hide canvas when zoomed out far enough or in stack view
+  const canvasHidden = (isTransitioning || stackViewOpen) && transitionScale < 0.5;
+
   return (
-    <div className={styles.canvasWrap} onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+    <div className={styles.canvasOuter}>
+      {/* ── Floor cards layer: visible during transitions + stack view ── */}
+      {(isTransitioning || stackViewOpen) && (
+        <FloorCardsLayer
+          floors={floorsMap}
+          activeFloorId={activeFloorId}
+          targetFloorId={transitionTargetId}
+          scale={transitionScale}
+          interactive={stackViewOpen && floorTransition === "overview"}
+        />
+      )}
+
+      {/* ── Main canvas (hidden during overview, scaled during zoom in/out) ── */}
+      <div
+        className={`${styles.canvasWrap} ${floorTransitionClass}`}
+        style={{
+          ...(canvasHidden ? { opacity: 0, pointerEvents: "none" as const } : {}),
+          ...(isTransitioning && !canvasHidden ? {
+            transform: `scale(${transitionScale})`,
+            transformOrigin: "center center",
+            opacity: Math.max(0, Math.min(1, (transitionScale - 0.35) / 0.35)),
+          } : {}),
+        }}
+        onDrop={onDrop}
+        onDragOver={(e) => e.preventDefault()}
+      >
       <canvas
         ref={canvasRef}
         onPointerDown={(e) => {
@@ -369,8 +449,18 @@ export function CanvasEditor() {
           if (ann.activeTool !== "none") return;
           const rect = canvasRef.current?.getBoundingClientRect();
           if (!rect) return;
-          const hit = nodeAt(e.clientX - rect.left, e.clientY - rect.top, useCanvasStore.getState().camera, useCanvasStore.getState().nodes);
-          if (hit) setEditNodeId(hit);
+          const state = useCanvasStore.getState();
+          const hit = nodeAt(e.clientX - rect.left, e.clientY - rect.top, state.camera, state.nodes);
+          if (hit) {
+            const node = state.nodes.get(hit);
+            // Non-step canvas items → open item edit modal
+            if (node?.kind && node.kind !== "step") {
+              setItemEditState({ nodeId: hit });
+              return;
+            }
+            // Step nodes → open step edit modal
+            setEditNodeId(hit);
+          }
         }}
         onContextMenu={onContextMenu}
         style={{
@@ -379,6 +469,13 @@ export function CanvasEditor() {
             : useCanvasStore.getState().activeTool === "pan" ? "grab" : "default"
         }}
       />
+
+      {/* HTML overlays for portal/file/terminal nodes (positioned over canvas) */}
+      <CanvasOverlays />
+      <TerminalOverlays />
+
+      {/* Connection popover when edge is selected */}
+      <ConnectionPopover />
 
       {/* Glass overlays — inside canvasWrap with position:absolute */}
       <div className={styles.toolbar}>
@@ -434,6 +531,15 @@ export function CanvasEditor() {
 
       {editNodeId && <StepEditModal nodeId={editNodeId} onClose={() => setEditNodeId(null)} />}
 
+      {itemEditState && (
+        <CanvasItemEditModal
+          nodeId={itemEditState.nodeId}
+          createKind={itemEditState.createKind}
+          createPosition={itemEditState.createPosition}
+          onClose={() => setItemEditState(null)}
+        />
+      )}
+
       {runModal && (
         <RunModal
           name={runModal.name}
@@ -476,7 +582,7 @@ export function CanvasEditor() {
       {wfChatOpen && (
         <div style={{
           position: "absolute",
-          bottom: 58,
+          bottom: 94,
           ...(bpPanelOpen
             ? { right: 16 }
             : { left: "50%", transform: "translateX(-50%)" }
@@ -507,6 +613,141 @@ export function CanvasEditor() {
           <WorkflowChat onClose={() => setWfChatOpen(false)} />
         </div>
       )}
+
+      {/* Floor system — bottom-left */}
+      <FloorIndicator />
+      <FloorOverviewGate />
+    </div>
+    </div>
+  );
+}
+
+/**
+ * Floor cards visible during spatial zoom transition.
+ * Full-screen overlay showing all floors as 3D-perspective cards in a row.
+ * Fades in as the canvas zooms out, fades out as it zooms back in.
+ */
+function FloorCardsLayer({ floors, activeFloorId, targetFloorId, scale, interactive }: {
+  floors: Map<string, import("../../stores/floors").FloorData>;
+  activeFloorId: string;
+  targetFloorId: string | null;
+  scale: number;
+  interactive?: boolean;
+}) {
+  const floorList = [...floors.values()];
+  const count = floorList.length;
+
+  // Card sizing
+  const cardW = Math.min(560, window.innerWidth * 0.65);
+  const cardH = cardW * 0.56;
+  // Vertical stacking: each card offset upward, like layers in a stack
+  const stackGap = cardH * 0.32; // vertical distance between layers
+
+  // Opacity: fade in as scale decreases
+  const opacity = Math.max(0, Math.min(1, (0.7 - scale) / 0.35));
+  if (opacity < 0.02) return null;
+
+  // Total stack height
+  const totalH = cardH + (count - 1) * stackGap;
+
+  const handleCardClick = (id: string) => {
+    if (!interactive) return;
+    useFloorsStore.getState().selectFromStack(id);
+  };
+
+  const handleCardContextMenu = (e: React.MouseEvent, floorId: string) => {
+    if (!interactive) return;
+    e.preventDefault();
+    const floor = floorList.find((f) => f.id === floorId);
+    const name = window.prompt("Rename floor:", floor?.name ?? "");
+    if (name) useFloorsStore.getState().renameFloor(floorId, name);
+  };
+
+  return (
+    <div className={styles.floorCardsLayer} style={{ opacity, perspective: "1200px", pointerEvents: interactive ? "auto" : "none" }}>
+      <div className={styles.floorCardsStack} style={{ height: totalH }}>
+        {floorList.map((floor, idx) => {
+          const isActive = floor.id === activeFloorId;
+          const isTarget = floor.id === targetFloorId;
+          const nodeCount = floor.nodes.size;
+
+          // Vertical position: bottom floor = idx 0 at bottom, top floor = last at top
+          const reverseIdx = count - 1 - idx;
+          const yPos = reverseIdx * stackGap;
+          // Perspective: floors are "lying flat" tilted towards viewer
+          const rotateX = 55; // tilted like a table viewed from above
+          // Target floor pops up slightly
+          const translateZ = isTarget ? 40 : 0;
+          const scaleCard = isTarget ? 1.04 : 1;
+
+          return (
+            <div
+              key={floor.id}
+              className={`${styles.floorTransCard} ${isTarget ? styles.floorTransCardTarget : ""} ${interactive ? styles.floorTransCardInteractive : ""}`}
+              onClick={() => handleCardClick(floor.id)}
+              onContextMenu={(e) => handleCardContextMenu(e, floor.id)}
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: yPos,
+                width: cardW,
+                height: cardH,
+                marginLeft: -cardW / 2,
+                transform: `rotateX(${rotateX}deg) translateZ(${translateZ}px) scale(${scaleCard})`,
+                zIndex: idx, // higher floors on top
+                borderColor: isTarget ? floor.color : isActive ? floor.color + "40" : "rgba(255,255,255,0.06)",
+                boxShadow: isTarget
+                  ? `0 0 50px ${floor.color}30, 0 40px 80px rgba(0,0,0,0.6)`
+                  : `0 ${24 + idx * 6}px ${48 + idx * 10}px rgba(0,0,0,${0.25 + idx * 0.04})`,
+              }}
+            >
+              {/* Mini node preview */}
+              <svg viewBox="0 0 400 220" className={styles.floorTransCardSvg}>
+                {[...floor.nodes.values()].slice(0, 25).map((n) => (
+                  <rect
+                    key={n.id}
+                    x={n.x * 0.2 + 40}
+                    y={n.y * 0.2 + 20}
+                    width={Math.max(6, n.w * 0.2)}
+                    height={Math.max(4, n.h * 0.2)}
+                    rx={2}
+                    fill={floor.color + "70"}
+                  />
+                ))}
+                {[...floor.edges.values()].slice(0, 20).map((e) => {
+                  const from = floor.nodes.get(e.from);
+                  const to = floor.nodes.get(e.to);
+                  if (!from || !to) return null;
+                  return (
+                    <line
+                      key={e.id}
+                      x1={(from.x + from.w / 2) * 0.2 + 40}
+                      y1={(from.y + from.h) * 0.2 + 20}
+                      x2={(to.x + to.w / 2) * 0.2 + 40}
+                      y2={to.y * 0.2 + 20}
+                      stroke={floor.color + "30"}
+                      strokeWidth={1}
+                    />
+                  );
+                })}
+                {nodeCount === 0 && (
+                  <text x="200" y="120" textAnchor="middle" fill="rgba(255,255,255,0.12)" fontSize="14">
+                    Empty
+                  </text>
+                )}
+              </svg>
+
+              {/* Label bar */}
+              <div className={styles.floorTransCardLabel}>
+                <span className={styles.floorDot} style={{ background: floor.color }} />
+                <span>{floor.name}</span>
+                {isTarget && <span style={{ marginLeft: "auto", color: floor.color }}>{"\u25C0"}</span>}
+                {isActive && !isTarget && <span style={{ marginLeft: "auto", opacity: 0.4, fontSize: 10 }}>current</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

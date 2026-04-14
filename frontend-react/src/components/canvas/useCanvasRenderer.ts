@@ -3,6 +3,7 @@ import { useCanvasStore } from "../../stores/canvas";
 import { useCanvasExecStore } from "../../stores/canvasExec";
 import { useAnnotationStore } from "../../stores/annotations";
 import { renderCanvas, renderMinimap } from "./canvasRenderer";
+import { tickRopes, pruneRopeStates } from "./ropePhysics";
 
 /**
  * Hook that drives the canvas rendering loop via requestAnimationFrame.
@@ -37,6 +38,7 @@ export function useCanvasRenderer(
       annState.annotations,
       annState.drawing,
       annState.selectedId,
+      state.selectedEdgeId,
     );
 
     // Minimap
@@ -58,8 +60,13 @@ export function useCanvasRenderer(
     const loop = () => {
       if (!running) return;
       const now = performance.now();
-      if (now - lastRenderRef.current >= 16) {
+      const dt = now - lastRenderRef.current;
+      if (dt >= 16) {
         lastRenderRef.current = now;
+        // Tick rope physics before render
+        const edges = useCanvasStore.getState().edges;
+        pruneRopeStates(new Set(edges.keys()));
+        tickRopes(dt);
         render();
       }
       animRef.current = requestAnimationFrame(loop);

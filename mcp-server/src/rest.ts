@@ -259,6 +259,71 @@ app.get("/proxy", async (req, res) => {
   }
 });
 
+// GET /portal?url=... → proxy a web page for iframe embedding on the canvas.
+// Strips X-Frame-Options and CSP frame-ancestors so the page renders in an iframe.
+// Rewrites relative URLs to absolute so assets (CSS, images) load correctly.
+// Limited to 2MB to prevent abuse. Only serves text/html content.
+app.get("/portal", async (req, res) => {
+  const url = req.query.url as string;
+  if (!url || !url.match(/^https?:\/\//)) return res.status(400).json({ error: "Invalid URL" });
+  try {
+    await checkSSRF(url);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    let currentUrl = url;
+    let redirectCount = 0;
+    const MAX_REDIRECTS = 5;
+    let resp: globalThis.Response;
+    while (true) {
+      resp = await fetch(currentUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", Accept: "text/html,application/xhtml+xml,*/*" },
+        signal: ctrl.signal,
+        redirect: "manual",
+      });
+      if ([301, 302, 303, 307, 308].includes(resp.status)) {
+        if (++redirectCount > MAX_REDIRECTS) throw new Error("Too many redirects");
+        const location = resp.headers.get("location");
+        if (!location) throw new Error("Redirect without Location header");
+        currentUrl = new URL(location, currentUrl).href;
+        await checkSSRF(currentUrl);
+        continue;
+      }
+      break;
+    }
+    clearTimeout(timer);
+    if (!resp.ok) return res.status(502).json({ error: `Upstream ${resp.status}` });
+    const ct = resp.headers.get("content-type") ?? "";
+    if (!ct.includes("text/html") && !ct.includes("application/xhtml")) {
+      return res.status(400).json({ error: "Not an HTML page" });
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length > 2 * 1024 * 1024) return res.status(413).json({ error: "Page too large (>2MB)" });
+
+    let html = buf.toString("utf-8");
+
+    // Inject <base> tag so relative URLs resolve against the original origin
+    const baseUrl = new URL(currentUrl);
+    const baseTag = `<base href="${baseUrl.origin}${baseUrl.pathname.replace(/\/[^/]*$/, "/")}">`;
+    if (html.includes("<head")) {
+      html = html.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+    } else if (html.includes("<html")) {
+      html = html.replace(/<html([^>]*)>/i, `<html$1><head>${baseTag}</head>`);
+    } else {
+      html = baseTag + html;
+    }
+
+    // Serve with permissive headers — no X-Frame-Options, no CSP frame-ancestors
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "public, max-age=300");
+    // Explicitly remove any frame-blocking headers
+    res.removeHeader("X-Frame-Options");
+    res.setHeader("Content-Security-Policy", "frame-ancestors *");
+    res.send(html);
+  } catch (err) {
+    res.status(502).json({ error: safeErrorMessage(err) });
+  }
+});
+
 // GET /yaml-to-json?url=... → fetch YAML from URL, return parsed JSON
 app.get("/yaml-to-json", async (req, res) => {
   const url = req.query.url as string;
@@ -2957,8 +3022,8 @@ if (fs.existsSync(frontendDir)) {
   const indexHtml = path.join(frontendDir, "index.html");
   if (fs.existsSync(indexHtml)) {
     app.get("*", (_req, res, next) => {
-      // Don't intercept API routes or file requests with extensions
-      if (_req.path.startsWith("/api") || _req.path.includes(".")) return next();
+      // Don't intercept API routes, file requests with extensions, or portal proxy
+      if (_req.path.startsWith("/api") || _req.path.startsWith("/portal") || _req.path.includes(".")) return next();
       res.sendFile(indexHtml);
     });
   }
@@ -3023,7 +3088,8 @@ if (HOST === "0.0.0.0" && !API_KEY) {
           req.path.startsWith("/mcp-servers") || req.path.startsWith("/workflow-chat") ||
           req.path.startsWith("/generate-chain") || req.path.startsWith("/images") ||
           req.path.startsWith("/download") || req.path.startsWith("/cache") ||
-          req.path.startsWith("/proxy") || req.path.startsWith("/extract-style") ||
+          req.path.startsWith("/proxy") || req.path.startsWith("/portal") ||
+          req.path.startsWith("/extract-style") ||
           req.path.startsWith("/approvals") || req.path.startsWith("/yaml-to-json") ||
           req.path.startsWith("/pipeline-executions")) {
         return next();

@@ -35,22 +35,20 @@ function useChainReadiness(): { ready: boolean; checks: ReadinessCheck[] } {
   const edges = useCanvasStore((s) => s.edges);
   const serverOnline = useServerStore((s) => s.serverOnline);
 
-  const nodeList = [...nodes.values()];
+  // Only validate step nodes — canvas items (sticky, text, portal, link, file, terminal) are decorative
+  const stepNodes = [...nodes.values()].filter((n) => !n.kind || n.kind === "step");
 
   const checks: ReadinessCheck[] = [
     { label: "Server online", ok: serverOnline },
-    { label: "At least 1 step", ok: nodeList.length >= 1 },
-    { label: "All steps have a prompt", ok: nodeList.length > 0 && nodeList.every((n) => n.prompt && n.prompt.trim() && !n.prompt.startsWith("TODO")) },
-    { label: "All steps have an output variable", ok: nodeList.length > 0 && nodeList.every((n) => !!n.outputVar) },
-    { label: "No disconnected steps (all wired)", ok: nodeList.length <= 1 || (() => {
-      // Check that every non-root node has at least one incoming edge
+    { label: "At least 1 step", ok: stepNodes.length >= 1 },
+    { label: "All steps have a prompt", ok: stepNodes.length > 0 && stepNodes.every((n) => n.prompt && n.prompt.trim() && !n.prompt.startsWith("TODO")) },
+    { label: "All steps have an output variable", ok: stepNodes.length > 0 && stepNodes.every((n) => !!n.outputVar) },
+    { label: "No disconnected steps (all wired)", ok: stepNodes.length <= 1 || (() => {
       const hasIncoming = new Set<string>();
       const hasOutgoing = new Set<string>();
       for (const e of edges.values()) { hasIncoming.add(e.to); hasOutgoing.add(e.from); }
-      // Root nodes: no incoming. Leaf nodes: no outgoing. Middle: both.
-      // Valid if: at most 1 node has no incoming (the root), unless parallel roots
-      const orphans = nodeList.filter((n) => !hasIncoming.has(n.id) && !hasOutgoing.has(n.id));
-      return orphans.length <= 1; // Allow 1 orphan (single-node chain) but not multiple disconnected
+      const orphans = stepNodes.filter((n) => !hasIncoming.has(n.id) && !hasOutgoing.has(n.id));
+      return orphans.length <= 1;
     })() },
   ];
 

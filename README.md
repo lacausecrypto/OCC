@@ -197,13 +197,40 @@ guardrails: [{ type: min_length, value: 500 }]
 
 ## Frontend (Chimera)
 
-**Canvas Editor** — Visual DAG editor with drag-and-connect, live SSE streaming per node, version history with diff + restore, blueprints.
+React 19 + TypeScript + Zustand + TanStack Query, built with Vite. Served by the same Express process at `http://localhost:4242` (no separate dev server needed in production). **899 tests across 52 files.**
 
-**Workflow Chat** — Conversational chain builder with agentic actions (run, stop, debug, analyze, dry-run, modify steps). Multi-session, configurable model, markdown rendering.
+### Canvas Editor
 
-**Monitor** — Real-time execution tracking, step timeline, gate approval panel, historical execution loading.
+A visual DAG editor for chains, built on raw HTML5 Canvas 2D (no React-flow / no SVG) for predictable pan/zoom performance on large graphs.
 
-**Settings** — LLM providers, Ollama marketplace, HuggingFace browser (118+ models), Setup Check, token usage charts, server config.
+- **Drag-and-connect** node editing with port hit-testing and bezier edges.
+- **Rope physics** on connections — edges sag under gravity via Verlet-style springs, purely cosmetic but makes dense graphs readable at a glance.
+- **Multi-floor workspaces** — each floor is an isolated canvas (nodes, edges, annotations, camera) with spring-based zoom transitions between floors. Think tabs, but spatial.
+- **Live execution overlay** — per-node SSE streaming of status, logs, token counts, and step output while a chain runs. Click a running node to tail its logs inline.
+- **Specialized node types:**
+  - *Portal nodes* — embed a live external web page inside the canvas via the `/portal` proxy (strips `X-Frame-Options` / `frame-ancestors`, 2 MB cap, SSRF-checked, redirect-limited). Public pages only — no authenticated browsing.
+  - *Terminal nodes* — run bash and render stdout/stderr in an inline xterm-style overlay.
+  - Standard step, pre-tool, and gate nodes with type-specific inline editors (`CanvasItemEditModal`, `StepEditModal`, `PreToolCard`).
+- **Annotations layer** — free-draw, highlights, and text notes stored per floor, separate from the DAG.
+- **Blueprints** — save a selection (nodes + edges + annotations) as a reusable template and paste it back into any canvas.
+- **Version history** — every save snapshots the chain; panel shows a diff and restores any prior version.
+- **Connection popover** — inline edit of edge metadata without opening a modal.
+- **Workflow Chat side panel** — conversational chain builder with agentic actions (run, stop, debug, analyze, dry-run, modify steps). Multi-session, model-configurable, markdown rendering.
+- **Keyboard shortcuts, context menu, copy/paste, undo** via a dedicated shortcuts store.
+
+**Known limits:** canvas is desktop-first — no touch gesture support, no mobile layout. Everything is client-side state; nothing persists until you explicitly save the chain YAML.
+
+### Monitor
+
+Real-time execution tracking across all runs: execution list with filters, step timeline with timings, SSE log viewer, gate approval panel for `human_gate` steps, and historical replay of past executions from SQLite.
+
+### Settings
+
+LLM providers CRUD (6 providers: Claude, OpenAI, Gemini, Ollama, HuggingFace, Groq), Ollama model marketplace with pull/delete, HuggingFace browser (118+ models), MCP server manager, scheduler CRUD, Setup Check modal that verifies Node/Claude CLI/API keys on first launch, token-usage charts.
+
+### BLOB Canvas
+
+Separate from the main chain editor: an autonomous exploratory canvas for BLOB sessions (see [BLOB Sessions](#blob-sessions)). Includes a physarum-inspired organic layout simulation, knowledge graph view, git-style branch history, and a session manager.
 
 ---
 

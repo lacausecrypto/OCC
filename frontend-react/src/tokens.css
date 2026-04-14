@@ -56,17 +56,21 @@
   --c-orange: #ff9f0a;
   --c-pink: #ff6482;
 
-  /* ─── Glass tokens (crenspire/glass-ui Apple standard) ─── */
+  /* ─── Glass tokens (Maestri-grade deep blur) ─── */
   --glass-bg: linear-gradient(135deg,
-    rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.06) 25%,
-    rgba(240,248,255,0.07) 50%, rgba(255,255,255,0.05) 75%,
-    rgba(230,240,255,0.06) 100%);
-  --glass-border: rgba(255, 255, 255, 0.15);
-  --glass-shadow: 0 4px 16px rgba(0,0,0,0.3), 0 1px 4px rgba(0,0,0,0.15), 0 0 0 0.5px rgba(255,255,255,0.1);
-  --glass-blur: blur(10px);
+    rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.05) 25%,
+    rgba(240,248,255,0.06) 50%, rgba(255,255,255,0.04) 75%,
+    rgba(230,240,255,0.05) 100%);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-shadow:
+    0 8px 32px rgba(0,0,0,0.35),
+    0 2px 8px rgba(0,0,0,0.2),
+    inset 0 0.5px 0 rgba(255,255,255,0.12);
+  --glass-blur: blur(24px) saturate(180%);
   --glass-tint: rgba(255, 255, 255, 0.06);
-  --glass-tint-hover: rgba(255, 255, 255, 0.1);
+  --glass-tint-hover: rgba(255, 255, 255, 0.12);
   --glass-tint-subtle: rgba(255, 255, 255, 0.03);
+  --glass-inner-glow: inset 0 1px 0 rgba(255,255,255,0.08);
 }
 
 /* Global reset */

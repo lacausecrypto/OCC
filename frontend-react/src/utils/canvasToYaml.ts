@@ -46,6 +46,8 @@ export function canvasToYaml(
   for (const nodeId of sorted) {
     const node = nodes.get(nodeId);
     if (!node) continue;
+    // Skip non-step canvas items (sticky notes, text blocks, portals, etc.)
+    if (node.kind && node.kind !== "step") continue;
 
     const stepId = sanitizeId(node.stepId || node.label || nodeId);
     const type = node.type ?? "agent";
@@ -275,6 +277,7 @@ function sanitizeId(s: string): string {
 function detectInputs(nodes: Map<string, CanvasNode>): string[] {
   const inputs = new Set<string>();
   for (const node of nodes.values()) {
+    if (node.kind && node.kind !== "step") continue;
     const matches = (node.prompt || "").matchAll(/\{input\.(\w+)\}/g);
     for (const m of matches) {
       inputs.add(m[1]);
