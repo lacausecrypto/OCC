@@ -37,6 +37,10 @@ function renderMarkdown(text: string): React.ReactElement {
       const codeParts: (string | React.ReactElement)[] = [];
       let remaining = s;
       let codeMatch: RegExpExecArray | null;
+      // \x00 sentinels mark inline-code placeholders inserted earlier so the markdown
+      // bold/italic parser above doesn't touch code contents. User input cannot
+      // contain raw \x00, so collision is impossible.
+      // eslint-disable-next-line no-control-regex
       const codeRe = /\x00CODE(\d+)\x00/g;
       let cLast = 0;
       while ((codeMatch = codeRe.exec(remaining)) !== null) {

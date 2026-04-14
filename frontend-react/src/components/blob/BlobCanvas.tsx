@@ -165,7 +165,7 @@ function BlobMetrics({ nodes, messages }: {
     const formatDur = (ms: number) => ms >= 60000 ? `${(ms / 60000).toFixed(1)}m` : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 
     return { inputTokens, outputTokens, totalTokens, branchCount, stepCount, doneSteps, errorSteps, runningSteps, forkCount, memoryNodes, totalDurationMs, formatTok, formatDur };
-  }, [nodes, messages, knowledge]);
+  }, [nodes, messages]);
 
   return (
     <div className={styles.blobMetrics}>
@@ -856,7 +856,7 @@ export function BlobCanvas() {
       }
     }
     prevNodeCountRef.current = nodes.size;
-  }, [nodes.size, executeStep]);
+  }, [nodes, executeStep]);
 
   // ─── No session selected → show session manager ───────────────
   if (!activeSessionId) {
