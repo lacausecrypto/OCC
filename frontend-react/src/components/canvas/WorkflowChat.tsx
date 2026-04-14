@@ -35,7 +35,7 @@ function renderMarkdown(text: string): React.ReactElement {
     const restoreCode = (s: string): React.ReactElement => {
       // Replace code placeholders back with styled elements
       const codeParts: (string | React.ReactElement)[] = [];
-      let remaining = s;
+      const remaining = s;
       let codeMatch: RegExpExecArray | null;
       // \x00 sentinels mark inline-code placeholders inserted earlier so the markdown
       // bold/italic parser above doesn't touch code contents. User input cannot
@@ -91,8 +91,8 @@ function renderMarkdown(text: string): React.ReactElement {
       elements.push(<div key={i} style={{ fontWeight: 700, fontSize: size, marginTop: 6, marginBottom: 2 }}>{renderInline(headingMatch[2], i)}</div>);
     }
     // Bullet lists (-, *, +)
-    else if (/^[\-*+]\s/.test(line)) {
-      elements.push(<div key={i} style={{ paddingLeft: 12, textIndent: -8 }}><span style={{ opacity: 0.5 }}>{"\u2022"} </span>{renderInline(line.replace(/^[\-*+]\s/, ""), i)}</div>);
+    else if (/^[-*+]\s/.test(line)) {
+      elements.push(<div key={i} style={{ paddingLeft: 12, textIndent: -8 }}><span style={{ opacity: 0.5 }}>{"\u2022"} </span>{renderInline(line.replace(/^[-*+]\s/, ""), i)}</div>);
     }
     // Numbered lists
     else if (/^\d+\.\s/.test(line)) {
@@ -121,7 +121,7 @@ function renderMarkdown(text: string): React.ReactElement {
     // Detect raw image URL or /images/ path
     else if (/\/images\/img_/.test(line) || /\.(png|jpg|jpeg|webp|gif)(\?|$)/i.test(line.trim())) {
       const url = line.trim();
-      elements.push(<div key={i} style={{ margin: "4px 0" }}><img src={url} alt="Generated image" style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid var(--m-border)" }} /></div>);
+      elements.push(<div key={i} style={{ margin: "4px 0" }}><img src={url} alt="Generated output" style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid var(--m-border)" }} /></div>);
     }
     // Regular text
     else {

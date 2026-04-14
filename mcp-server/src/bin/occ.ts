@@ -41,7 +41,10 @@ function parseInputArgs(args: string[]): Record<string, string> {
   return input;
 }
 
-async function fetchJSON(path: string, method = "GET", body?: unknown): Promise<any> {
+// CLI helper: returns the parsed JSON or raw text. Callers narrow locally by
+// asserting on the response shape, so `data` is intentionally polymorphic.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchJSON(path: string, method = "GET", body?: unknown): Promise<{ status: number; data: any }> {
   const url = `${BASE_URL}${path}`;
   const options: RequestInit = {
     method,
@@ -57,7 +60,7 @@ async function fetchJSON(path: string, method = "GET", body?: unknown): Promise<
     } catch {
       return { status: res.status, data: text };
     }
-  } catch (err) {
+  } catch {
     console.error(`\x1b[31mError: Cannot connect to OCC server at ${BASE_URL}\x1b[0m`);
     console.error(`\nThe server is not running. Start it with:\n`);
     console.error(`  \x1b[1mocc start\x1b[0m`);
@@ -190,7 +193,19 @@ async function streamLogs(executionId: string) {
   }
 }
 
-function formatEvent(event: any) {
+interface StreamEvent {
+  type: string;
+  chainName?: string;
+  label?: string;
+  stepId?: string;
+  status?: string;
+  durationMs?: number;
+  error?: string;
+  result?: unknown;
+  [k: string]: unknown;
+}
+
+function formatEvent(event: StreamEvent) {
   switch (event.type) {
     case "execution_started":
       console.log(`\x1b[1m[START]\x1b[0m Chain: ${event.chainName}`);
@@ -199,7 +214,7 @@ function formatEvent(event: any) {
       console.log(`  \x1b[36m[STEP]\x1b[0m ${event.label || event.stepId} ...`);
       break;
     case "step_done":
-      console.log(`  \x1b[32m[DONE]\x1b[0m ${event.stepId} (${formatDuration(event.durationMs)}${event.inputTokens ? `, ${event.inputTokens}+${event.outputTokens} tokens` : ""})`);
+      console.log(`  \x1b[32m[DONE]\x1b[0m ${event.stepId} (${formatDuration(event.durationMs ?? 0)}${event.inputTokens ? `, ${event.inputTokens}+${event.outputTokens} tokens` : ""})`);
       break;
     case "step_error":
       console.log(`  \x1b[31m[FAIL]\x1b[0m ${event.stepId}: ${event.error}`);
@@ -261,7 +276,6 @@ async function cmdValidate(targetPath: string) {
 
       const errors = issues.filter((i: { level: string }) => i.level === "error");
       const warnings = issues.filter((i: { level: string }) => i.level === "warning");
-      const infos = issues.filter((i: { level: string }) => i.level === "info");
       totalErrors += errors.length;
       totalWarnings += warnings.length;
 
@@ -377,7 +391,8 @@ async function cmdStatus(executionId: string) {
   if (data.error) console.log(`\x1b[31mError:\x1b[0m ${data.error}`);
 
   console.log(`\n\x1b[1mSteps:\x1b[0m`);
-  for (const [stepId, step] of Object.entries(data.steps) as [string, any][]) {
+  interface StepSummary { status: string; durationMs?: number; inputTokens?: number; outputTokens?: number; error?: string }
+  for (const [stepId, step] of Object.entries(data.steps) as [string, StepSummary][]) {
     const sc = step.status === "done" ? "32" : step.status === "error" ? "31" : step.status === "running" ? "36" : "2";
     const dur = step.durationMs ? ` (${formatDuration(step.durationMs)})` : "";
     const tokens = step.inputTokens ? ` [${step.inputTokens}+${step.outputTokens} tokens]` : "";
@@ -700,7 +715,6 @@ LOG_LEVEL=info
 
 function cmdInit(projectName?: string) {
   const dir = projectName ? path.resolve(projectName) : process.cwd();
-  const name = projectName || path.basename(dir);
 
   if (projectName) {
     if (fs.existsSync(dir)) {
@@ -815,7 +829,7 @@ async function cmdStart() {
 // ─── occ doctor ────────────────────────────────────────────────────────────
 
 async function cmdDoctor() {
-  const { execFileSync, execSync } = await import("node:child_process");
+  const { execFileSync } = await import("node:child_process");
 
   console.log(`\x1b[1mOCC Doctor\x1b[0m\n`);
 
@@ -845,7 +859,7 @@ async function cmdDoctor() {
 
   // Claude auth
   let authOk = false;
-  let authDetail = "Not authenticated";
+  let authDetail: string;
   let authFix: string | undefined = 'Run: claude  (opens browser)';
   if (claudeOk) {
     try {
@@ -853,8 +867,9 @@ async function cmdDoctor() {
       authOk = true;
       authDetail = "Authenticated";
       authFix = undefined;
-    } catch (e: any) {
-      authDetail = e?.stderr?.toString()?.slice(0, 80) || "Failed to verify";
+    } catch (e) {
+      const stderr = (e as { stderr?: { toString(): string } })?.stderr?.toString();
+      authDetail = stderr?.slice(0, 80) || "Failed to verify";
     }
   } else {
     authDetail = "Install Claude CLI first";
@@ -872,7 +887,7 @@ async function cmdDoctor() {
     const data = await res.json() as { models?: Array<{ name: string }> };
     const models = data.models ?? [];
     ollamaOk = true;
-    ollamaDetail = `Running, ${models.length} model(s)${models.length > 0 ? ": " + models.map((m: any) => m.name).slice(0, 3).join(", ") : ""}`;
+    ollamaDetail = `Running, ${models.length} model(s)${models.length > 0 ? ": " + models.map((m) => m.name).slice(0, 3).join(", ") : ""}`;
   } catch {}
   results.push({ label: "Ollama (optional)", ok: ollamaOk, detail: ollamaDetail, fix: ollamaOk ? undefined : "https://ollama.com/download" });
 

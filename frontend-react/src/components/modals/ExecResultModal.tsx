@@ -154,7 +154,7 @@ function StepOutputRenderer({ output, expanded }: { output: string; expanded: bo
           {imageUrls.map((url, i) => (
             <a key={i} href={url} target="_blank" rel="noopener noreferrer" style={{ display: "block" }}>
               <img
-                src={url} alt={`Generated image ${i + 1}`}
+                src={url} alt={`Generated output ${i + 1}`}
                 style={{ maxWidth: 280, maxHeight: 200, borderRadius: 6, border: "1px solid var(--m-border)", cursor: "zoom-in" }}
                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
               />
@@ -492,7 +492,7 @@ export function ExecResultModal({ executionId, onClose }: ExecResultModalProps) 
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
                             {stepImages.map((url, i) => (
                               <a key={i} href={url} target="_blank" rel="noopener noreferrer">
-                                <img src={url} alt={`${id} image ${i + 1}`}
+                                <img src={url} alt={`${id} output ${i + 1}`}
                                   style={{ maxWidth: 300, borderRadius: 6, border: "1px solid var(--m-border)" }}
                                   onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                                 />

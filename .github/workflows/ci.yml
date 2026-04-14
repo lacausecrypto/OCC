@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Opt into Node.js 24 for action runtimes ahead of the 2026-06-02 GitHub deadline.
+# This affects the JavaScript runtime of actions (checkout, setup-node, …) — not
+# the matrix.node-version below, which is the Node used to run our code.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   backend:
     name: Backend (mcp-server)
@@ -51,10 +57,6 @@ jobs:
         working-directory: mcp-server
         run: npm run build
 
-      - name: Run tests
-        working-directory: mcp-server
-        run: npm test
-
       - name: Test coverage
         working-directory: mcp-server
         run: npm run test:coverage
@@ -87,11 +89,10 @@ jobs:
       - name: Lint
         working-directory: frontend-react
         run: npm run lint
-        continue-on-error: true
 
       - name: Type check
         working-directory: frontend-react
-        run: npx tsc -b --noEmit
+        run: npx tsc -b
 
       - name: Build
         working-directory: frontend-react

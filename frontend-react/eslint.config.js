@@ -40,4 +40,15 @@ export default defineConfig([globalIgnores(['dist', 'storybook-static']), {
     ecmaVersion: 2020,
     globals: globals.browser,
   },
+}, {
+  // Test files legitimately need `any` (mocks), unused bindings (setup code),
+  // `this` aliasing (simulating event targets), and `require()` for dynamic
+  // module mocks. Relaxed to warnings so test-only dead code still surfaces.
+  files: ['tests/**/*.{ts,tsx}'],
+  rules: {
+    '@typescript-eslint/no-explicit-any': 'off',
+    '@typescript-eslint/no-unused-vars': 'warn',
+    '@typescript-eslint/no-this-alias': 'off',
+    '@typescript-eslint/no-require-imports': 'off',
+  },
 }, ...storybook.configs["flat/recommended"]])

@@ -71,6 +71,12 @@ interface Schedule {
   nextRunAt?: string;
 }
 
+interface ToolPermissions {
+  toolsEnabled?: boolean;
+  deniedTools?: string[];
+  maxIterations?: number;
+}
+
 interface LLMProvider {
   id: string;
   name: string;
@@ -81,6 +87,8 @@ interface LLMProvider {
   enabled: boolean;
   models?: string[];
   createdAt: string;
+  toolPermissions?: ToolPermissions;
+  perModelPermissions?: Record<string, ToolPermissions>;
 }
 
 interface ExecSummary {
@@ -803,7 +811,7 @@ export function Settings() {
             if (nonClaude.length === 0) return <div className={styles.sectionCard}><div className={styles.row}><div className={styles.rowBody}><div className={styles.rowDesc}>No non-Claude providers configured.</div></div></div></div>;
 
             const updateModelPerms = async (p: LLMProvider, model: string, patch: Record<string, unknown>) => {
-              const existing = (p as any).perModelPermissions ?? {};
+              const existing = p.perModelPermissions ?? {};
               const modelPerms = { ...(existing[model] ?? {}), ...patch };
               await fetch(`/providers/${p.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ perModelPermissions: { ...existing, [model]: modelPerms } }) });
               loadAll();
@@ -828,8 +836,8 @@ export function Settings() {
                   <span style={{ fontSize: 9, color: "var(--m-text2)", opacity: 0.5 }}>{(p.models ?? []).length} model{(p.models ?? []).length !== 1 ? "s" : ""}</span>
                 </div>
                 {(p.models ?? []).map((model) => {
-                  const base = (p as any).toolPermissions ?? {};
-                  const override = (p as any).perModelPermissions?.[model] ?? {};
+                  const base = p.toolPermissions ?? {};
+                  const override = p.perModelPermissions?.[model] ?? {};
                   const perms = { ...base, ...override };
                   const on = perms.toolsEnabled !== false;
                   const denied = new Set<string>(perms.deniedTools ?? []);

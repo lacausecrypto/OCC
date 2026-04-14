@@ -6,7 +6,10 @@ import { create } from "zustand";
 import { useCanvasStore } from "./canvas";
 import { useServerStore } from "./server";
 import { useAppStore } from "./app";
+import { useMonitorStore } from "./monitor";
 import type { StepAdvancedConfig } from "../types/canvas";
+import type { StepType } from "../types/chain";
+import type { ChainExecution, StepResult } from "../types/execution";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -282,20 +285,19 @@ function buildCanvasContext(): string {
 
   // Execution history (last 3)
   try {
-    const { useMonitorStore } = require("./monitor");
-    const executions = [...useMonitorStore.getState().executions.values()]
-      .filter((e: any) => e.chainName === chainName)
-      .sort((a: any, b: any) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))
+    const executions: ChainExecution[] = [...useMonitorStore.getState().executions.values()]
+      .filter((e) => e.chainName === chainName)
+      .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))
       .slice(0, 3);
 
     if (executions.length > 0) {
       parts.push("\nRecent executions:");
       for (const ex of executions) {
-        const steps = Object.entries(ex.steps ?? {});
-        const errors = steps.filter(([, s]: any) => s.status === "error");
-        const done = steps.filter(([, s]: any) => s.status === "done");
+        const steps = Object.entries(ex.steps ?? {}) as [string, StepResult][];
+        const errors = steps.filter(([, s]) => s.status === "error");
+        const done = steps.filter(([, s]) => s.status === "done");
         const dur = ex.durationMs ? `${(ex.durationMs / 1000).toFixed(1)}s` : "?";
-        parts.push(`  - ${ex.status} (${dur}) | ${done.length}/${steps.length} done${errors.length > 0 ? ` | ERRORS: ${errors.map(([id, s]: any) => `${id}: ${s.error?.slice(0, 80)}`).join("; ")}` : ""}${ex.error ? ` | ${ex.error.slice(0, 100)}` : ""}`);
+        parts.push(`  - ${ex.status} (${dur}) | ${done.length}/${steps.length} done${errors.length > 0 ? ` | ERRORS: ${errors.map(([id, s]) => `${id}: ${s.error?.slice(0, 80)}`).join("; ")}` : ""}${ex.error ? ` | ${ex.error.slice(0, 100)}` : ""}`);
       }
     }
   } catch { /* monitor not available */ }
@@ -306,12 +308,11 @@ function buildCanvasContext(): string {
 /** Build execution debug info for the last run */
 function buildDebugContext(): string {
   try {
-    const { useMonitorStore } = require("./monitor");
     const appState = useAppStore.getState();
     const chainName = appState.canvasChainName || appState.pipelineName || "";
-    const executions = [...useMonitorStore.getState().executions.values()]
-      .filter((e: any) => e.chainName === chainName)
-      .sort((a: any, b: any) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
+    const executions: ChainExecution[] = [...useMonitorStore.getState().executions.values()]
+      .filter((e) => e.chainName === chainName)
+      .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
 
     const last = executions[0];
     if (!last) return "No execution history found for this chain.";
@@ -320,9 +321,8 @@ function buildDebugContext(): string {
     parts.push(`Last execution: ${last.status} | ${last.durationMs ? (last.durationMs / 1000).toFixed(1) + "s" : "?"}`);
     if (last.error) parts.push(`Chain error: ${last.error}`);
 
-    const steps = Object.entries(last.steps ?? {});
-    for (const [stepId, step] of steps) {
-      const s = step as any;
+    const steps = Object.entries(last.steps ?? {}) as [string, StepResult][];
+    for (const [stepId, s] of steps) {
       const dur = s.durationMs ? `${(s.durationMs / 1000).toFixed(1)}s` : "";
       const tokens = s.inputTokens ? `${s.inputTokens}+${s.outputTokens} tok` : "";
       const err = s.error ? ` ERROR: ${s.error}` : "";
@@ -616,8 +616,18 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
             }
           }
 
-          // Handle modification plan (existing canvas)
-          const parsed = plan as any;
+          // Handle modification plan (existing canvas). The planner may return a
+          // superset of WFPlan (with `modifications`/`addSteps` keys for in-place
+          // edits), so we widen with an optional-field type.
+          interface ModificationPlan {
+            modifications?: Array<{
+              label: string;
+              delete?: boolean;
+              patch?: { prompt?: string; model?: string; type?: StepType; tools?: string[] };
+            }>;
+            addSteps?: WFPlan["steps"];
+          }
+          const parsed = plan as WFPlan & ModificationPlan;
           if (parsed.modifications || parsed.addSteps) {
             let modCount = 0;
             let addCount = 0;

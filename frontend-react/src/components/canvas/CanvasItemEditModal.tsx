@@ -79,7 +79,7 @@ export function CanvasItemEditModal({
         y: createPosition.y,
         w: defaultSize(kind).w,
         h: defaultSize(kind).h,
-        type: "agent" as any,
+        type: "agent",
         label,
         kind,
         preTools: [],
