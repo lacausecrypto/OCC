@@ -6,8 +6,13 @@
  * Obsidian Note / Sticky / etc. actually feeds the agent the upstream content
  * (URL, file body, markdown, etc.) instead of leaving the connection purely
  * decorative.
+ *
+ * For interactive Portal nodes (Playwright sessions running on the backend)
+ * we also fetch a LIVE DOM snapshot — that's how a Terminal Agent connected
+ * to e.g. Hyperliquid sees current prices/positions, not just the URL.
  */
 import type { CanvasNode, CanvasEdge } from "../types/canvas";
+import { getPortalSnapshot } from "../api/portal";
 
 /** Cap injected content per node so a huge file doesn't blow up the prompt. */
 const MAX_CONTENT_PER_NODE = 4000;
@@ -45,6 +50,10 @@ function trim(s: string | undefined, max = MAX_CONTENT_PER_NODE): string {
  * Render a canvas node as a textual context block the LLM can consume.
  * Returns an empty string for nodes with nothing useful to share (e.g. a
  * stale node with no content yet).
+ *
+ * Sync version — for interactive Portal nodes the live DOM snapshot is NOT
+ * fetched here; use `formatNodeForLLMAsync` (or `buildConnectedContextAsync`)
+ * if the LLM needs live page content.
  */
 export function formatNodeForLLM(n: CanvasNode): string {
   const kind = n.kind ?? "step";
@@ -107,6 +116,9 @@ export function formatNodeForLLM(n: CanvasNode): string {
  * Build the full "Connected canvas items" context block for a node.
  * Returns an empty string if the node has no useful neighbours — caller can
  * skip injecting anything in that case.
+ *
+ * Sync — interactive Portal nodes only emit URL+title. For live DOM text
+ * (current prices on a trading page, etc.) use `buildConnectedContextAsync`.
  */
 export function buildConnectedContext(
   nodeId: string,
@@ -133,6 +145,70 @@ export function buildConnectedContext(
   return [
     "── Connected canvas context ──",
     "You are connected to the following items on the canvas. Treat their content as authoritative working context for this conversation.",
+    "",
+    ...parts,
+    "",
+    "── End connected context ──",
+  ].join("\n");
+}
+
+/**
+ * Async version that, for each interactive Portal node connected to `nodeId`,
+ * fetches a live DOM snapshot from the backend Playwright session and
+ * inlines it into the agent's context. Falls back to the sync block (URL
+ * only) if no live session is running.
+ *
+ * This is the function that powers "the Terminal Agent reads the live
+ * trading page, not just its URL".
+ */
+export async function buildConnectedContextAsync(
+  nodeId: string,
+  nodes: Map<string, CanvasNode>,
+  edges: Map<string, CanvasEdge>,
+): Promise<string> {
+  const { upstream, downstream } = getConnectedCanvasNodes(nodeId, nodes, edges);
+
+  const renderBlock = async (n: CanvasNode): Promise<string> => {
+    // Interactive portal → try live snapshot. If anything fails (session
+    // missing, snapshot empty), fall through to the static URL line so the
+    // agent still gets *something* useful.
+    if ((n.kind ?? "step") === "portal" && n.portalMode === "interactive" && n.portalUrl) {
+      const persistKey = n.portalPersistKey ?? n.id;
+      const snap = await getPortalSnapshot({ persistKey });
+      if (snap && snap.text) {
+        const head = `Portal "${n.label || n.id}" — URL: ${snap.url}`;
+        const title = snap.title ? `Title: ${snap.title}` : "";
+        const trimmedFlag = snap.truncated ? "\n[…truncated]" : "";
+        return [
+          head,
+          title,
+          "Live page content (visible text, captured at message time):",
+          "```",
+          snap.text + trimmedFlag,
+          "```",
+        ].filter(Boolean).join("\n");
+      }
+    }
+    return formatNodeForLLM(n);
+  };
+
+  const upBlocks = (await Promise.all(upstream.map(renderBlock))).filter(Boolean);
+  const downBlocks = (await Promise.all(downstream.map(renderBlock))).filter(Boolean);
+
+  const parts: string[] = [];
+  if (upBlocks.length > 0) {
+    parts.push("[Upstream connected items — these feed into you]");
+    parts.push(...upBlocks.map((b) => `\n${b}`));
+  }
+  if (downBlocks.length > 0) {
+    parts.push(`\n[Downstream connected items — these consume your output]`);
+    parts.push(...downBlocks.map((b) => `\n${b}`));
+  }
+  if (parts.length === 0) return "";
+
+  return [
+    "── Connected canvas context ──",
+    "You are connected to the following items on the canvas. For Portal items, the LIVE page text is included — treat it as the up-to-date state of the page.",
     "",
     ...parts,
     "",

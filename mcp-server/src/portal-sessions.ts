@@ -98,7 +98,16 @@ async function getSharedBrowser(): Promise<Browser> {
         // no sandbox-hostile features. CDP screencast still works fine.
         "--disable-blink-features=AutomationControlled",
         "--disable-dev-shm-usage",
+        // Stealth: hide automation signals that bot-detection JS scans for.
+        // X.com / Cloudflare / hCaptcha all use a combination of these to
+        // detect Playwright. None is a silver bullet, but together they let
+        // most login flows go through.
+        "--disable-features=IsolateOrigins,site-per-process,AutomationControlled",
+        "--no-default-browser-check",
+        "--no-first-run",
+        "--disable-infobars",
       ],
+      ignoreDefaultArgs: ["--enable-automation"],
     });
     sharedBrowser = browser;
     browser.on("disconnected", () => {
@@ -169,6 +178,53 @@ export async function createPortalSession(opts: CreateSessionOptions): Promise<P
     storageState,
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     ignoreHTTPSErrors: false,
+    // Make the context look like a regular Mac Chrome with FR locale —
+    // X.com checks Accept-Language + timezone consistency against the IP.
+    locale: process.env.PORTAL_LOCALE ?? "en-US",
+    timezoneId: process.env.PORTAL_TIMEZONE ?? "America/Los_Angeles",
+    extraHTTPHeaders: {
+      // Match what real Chrome 123 sends so server-side fingerprinting
+      // doesn't immediately flag us.
+      "sec-ch-ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": '"macOS"',
+    },
+  });
+
+  // Stealth init script — runs on every new document BEFORE any page JS.
+  // The big four signals X.com (and most bot-detection libs) check are:
+  //   1. navigator.webdriver === true
+  //   2. window.chrome missing
+  //   3. navigator.plugins / mimeTypes empty
+  //   4. permissions.query for "notifications" returning a wrong shape
+  // We patch all four. This isn't bullet-proof (a determined fingerprinter
+  // can still detect us via canvas / WebGL noise patterns), but it's the
+  // 80/20 fix that gets login flows working on most sites.
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    // Spoof a non-empty plugins array (Chrome ships with at least PDF viewer).
+    Object.defineProperty(navigator, "plugins", {
+      get: () => [
+        { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", description: "Portable Document Format" },
+        { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", description: "" },
+        { name: "Native Client", filename: "internal-nacl-plugin", description: "" },
+      ],
+    });
+    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+    // window.chrome is present on real Chrome but missing in headless.
+    interface WindowWithChrome { chrome?: { runtime: Record<string, unknown> } }
+    const win = window as unknown as WindowWithChrome;
+    if (!win.chrome) {
+      win.chrome = { runtime: {} };
+    }
+    // permissions.query for notifications returns a weird shape on headless.
+    const origQuery = window.navigator.permissions?.query?.bind(window.navigator.permissions);
+    if (origQuery) {
+      window.navigator.permissions.query = ((params: PermissionDescriptor) =>
+        (params as { name: string }).name === "notifications"
+          ? Promise.resolve({ state: Notification.permission } as PermissionStatus)
+          : origQuery(params)) as typeof window.navigator.permissions.query;
+    }
   });
 
   const page = await context.newPage();
@@ -255,6 +311,71 @@ export async function navigatePortalSession(id: string, url: string): Promise<vo
   if (!/^https?:\/\//.test(url)) throw new Error("Invalid URL");
   s.lastActivityAt = Date.now();
   await s.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+}
+
+/** Find a session by either its session id or its persistKey. */
+export function findPortalSession(idOrKey: string): PortalSession | undefined {
+  // Direct id hit first.
+  const direct = sessions.get(idOrKey);
+  if (direct) return direct;
+  // Otherwise scan persistKeys (cheap — bounded by MAX_SESSIONS).
+  for (const s of sessions.values()) {
+    if (s.persistKey && s.persistKey === idOrKey) return s;
+  }
+  return undefined;
+}
+
+export interface PortalSnapshot {
+  sessionId: string;
+  url: string;
+  title: string;
+  /** Visible page text — what a sighted user would read, in DOM order. */
+  text: string;
+  /** True if `text` was truncated to fit the agent prompt budget. */
+  truncated: boolean;
+}
+
+const SNAPSHOT_MAX_CHARS = 8000;
+
+/**
+ * Take a live snapshot of a portal page so a Terminal Agent can reason on
+ * up-to-the-millisecond DOM text instead of just the URL. Uses
+ * `document.body.innerText` which returns rendered visible text — works on
+ * SPAs (Hyperliquid, X, Notion) where outerHTML would be giant + noisy.
+ */
+export async function getPortalSnapshot(idOrKey: string): Promise<PortalSnapshot | null> {
+  const s = findPortalSession(idOrKey);
+  if (!s) return null;
+  s.lastActivityAt = Date.now();
+  try {
+    const data = await s.page.evaluate(() => ({
+      title: document.title || "",
+      // innerText skips hidden elements and respects line breaks visually.
+      // We trim each line to drop pure-whitespace UI scaffolding.
+      text: (document.body?.innerText ?? "")
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .join("\n"),
+      url: window.location.href,
+    }));
+    let text = data.text;
+    let truncated = false;
+    if (text.length > SNAPSHOT_MAX_CHARS) {
+      text = text.slice(0, SNAPSHOT_MAX_CHARS);
+      truncated = true;
+    }
+    return {
+      sessionId: s.id,
+      url: data.url,
+      title: data.title,
+      text,
+      truncated,
+    };
+  } catch (err) {
+    logger.warn("portal", "snapshot eval failed", { id: s.id, error: (err as Error).message });
+    return null;
+  }
 }
 
 export async function closePortalSession(id: string): Promise<void> {

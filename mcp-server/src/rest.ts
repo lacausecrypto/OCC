@@ -335,6 +335,23 @@ app.delete("/portal/session/:id", async (req, res) => {
   }
 });
 
+// GET /portal/snapshot?persistKey=…  or  ?sessionId=…
+// Returns a live { url, title, text } snapshot of the portal page so a
+// Terminal Agent connected to it can reason on the actual DOM rather than
+// just the URL. This is what powers "agent sees the live trading page".
+app.get("/portal/snapshot", async (req, res) => {
+  const idOrKey = (req.query.persistKey as string) || (req.query.sessionId as string);
+  if (!idOrKey) return res.status(400).json({ error: "persistKey or sessionId required" });
+  try {
+    const { getPortalSnapshot } = await import("./portal-sessions.js");
+    const snap = await getPortalSnapshot(idOrKey);
+    if (!snap) return res.status(404).json({ error: "Portal session not found or not interactive" });
+    res.json(snap);
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
 // GET /portal?url=... → proxy a web page for iframe embedding on the canvas.
 // Strips X-Frame-Options and CSP frame-ancestors so the page renders in an iframe.
 // Rewrites relative URLs to absolute so assets (CSS, images) load correctly.

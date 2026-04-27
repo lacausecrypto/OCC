@@ -54,3 +54,33 @@ export function portalWsUrl(sessionId: string, channel: "screencast" | "input"):
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}/portal/${sessionId}/${channel}`;
 }
+
+export interface PortalSnapshot {
+  sessionId: string;
+  url: string;
+  title: string;
+  text: string;
+  truncated: boolean;
+}
+
+/**
+ * Take a live DOM snapshot of an interactive portal session. Returns null
+ * if no matching session is running (e.g. portal in static mode, or the
+ * user hasn't opened the canvas yet so the Playwright context isn't alive).
+ */
+export async function getPortalSnapshot(opts: {
+  persistKey?: string;
+  sessionId?: string;
+}): Promise<PortalSnapshot | null> {
+  const params = new URLSearchParams();
+  if (opts.persistKey) params.set("persistKey", opts.persistKey);
+  if (opts.sessionId) params.set("sessionId", opts.sessionId);
+  if ([...params.keys()].length === 0) return null;
+  try {
+    const res = await fetch(`/portal/snapshot?${params.toString()}`);
+    if (!res.ok) return null;
+    return (await res.json()) as PortalSnapshot;
+  } catch {
+    return null;
+  }
+}
