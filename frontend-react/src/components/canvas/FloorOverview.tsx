@@ -5,10 +5,12 @@
  */
 import { useFloorsStore } from "../../stores/floors";
 import type { FloorData } from "../../stores/floors";
+import { useFloorPalette } from "../../utils/floorColors";
 import styles from "./CanvasEditor.module.css";
 
-function FloorCard({ floor, isActive, onClick }: {
+function FloorCard({ floor, color, isActive, onClick }: {
   floor: FloorData;
+  color: string;
   isActive: boolean;
   onClick: () => void;
 }) {
@@ -19,7 +21,7 @@ function FloorCard({ floor, isActive, onClick }: {
     <div
       className={`${styles.floorCard} ${isActive ? styles.floorCardActive : ""}`}
       onClick={onClick}
-      style={{ "--floor-color": floor.color } as React.CSSProperties}
+      style={{ "--floor-color": color } as React.CSSProperties}
     >
       {/* Mini canvas preview */}
       <div className={styles.floorCardPreview}>
@@ -33,8 +35,8 @@ function FloorCard({ floor, isActive, onClick }: {
               width={Math.max(8, n.w * 0.3)}
               height={Math.max(4, n.h * 0.3)}
               rx={2}
-              fill={floor.color + "80"}
-              stroke={floor.color}
+              fill={color + "80"}
+              stroke={color}
               strokeWidth={0.5}
             />
           ))}
@@ -50,7 +52,7 @@ function FloorCard({ floor, isActive, onClick }: {
                 y1={(from.y + from.h) * 0.3}
                 x2={(to.x + to.w / 2) * 0.3}
                 y2={to.y * 0.3}
-                stroke={floor.color + "40"}
+                stroke={color + "40"}
                 strokeWidth={0.5}
               />
             );
@@ -66,7 +68,7 @@ function FloorCard({ floor, isActive, onClick }: {
       {/* Floor info */}
       <div className={styles.floorCardInfo}>
         <div className={styles.floorCardName}>
-          <span className={styles.floorDot} style={{ background: floor.color }} />
+          <span className={styles.floorDot} style={{ background: color }} />
           {floor.name}
           {isActive && <span className={styles.floorCardBadge}>Active</span>}
         </div>
@@ -84,6 +86,7 @@ export function FloorOverview() {
   const activeId = useFloorsStore((s) => s.activeFloorId);
   const switchFloor = useFloorsStore((s) => s.switchFloor);
   const setOverviewOpen = useFloorsStore((s) => s.setOverviewOpen);
+  const palette = useFloorPalette();
 
   const handleSelect = (id: string) => {
     switchFloor(id);
@@ -103,6 +106,7 @@ export function FloorOverview() {
           <FloorCard
             key={floor.id}
             floor={floor}
+            color={palette[floor.colorSlot % palette.length] ?? palette[0]}
             isActive={floor.id === activeId}
             onClick={() => handleSelect(floor.id)}
           />

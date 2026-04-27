@@ -5,6 +5,7 @@
  */
 import { useState, useRef } from "react";
 import { useFloorsStore } from "../../stores/floors";
+import { useFloorPalette } from "../../utils/floorColors";
 import styles from "./CanvasEditor.module.css";
 
 export function FloorIndicator() {
@@ -17,6 +18,7 @@ export function FloorIndicator() {
   const renameFloor = useFloorsStore((s) => s.renameFloor);
   const stackViewOpen = useFloorsStore((s) => s.stackViewOpen);
   const toggleStackView = useFloorsStore((s) => s.toggleStackView);
+  const palette = useFloorPalette();
 
   const [ctxFloorId, setCtxFloorId] = useState<string | null>(null);
   const [ctxPos, setCtxPos] = useState({ x: 0, y: 0 });
@@ -67,6 +69,7 @@ export function FloorIndicator() {
         {/* Floor tabs */}
         {floors.map((floor) => {
           const isActive = floor.id === activeId;
+          const color = palette[floor.colorSlot % palette.length] ?? palette[0];
           return (
             <button
               key={floor.id}
@@ -75,12 +78,12 @@ export function FloorIndicator() {
               onContextMenu={(e) => handleRightClick(e, floor.id)}
               title={floor.name}
               style={{
-                "--floor-color": floor.color,
+                "--floor-color": color,
               } as React.CSSProperties}
             >
-              <span className={styles.floorDot} style={{ background: floor.color }} />
+              <span className={styles.floorDot} style={{ background: color }} />
               <span className={styles.floorName}>{floor.name}</span>
-              {isActive && <span className={styles.floorActiveGlow} style={{ background: floor.color }} />}
+              {isActive && <span className={styles.floorActiveGlow} style={{ background: color }} />}
             </button>
           );
         })}

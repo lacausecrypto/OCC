@@ -42,3 +42,21 @@ export function fetchExecution(id: string): Promise<ChainExecution> {
 export function cancelExecution(id: string): Promise<void> {
   return api.delete<void>(`/executions/${encodeURIComponent(id)}`);
 }
+
+/** Time-travel checkpoint history for an execution. */
+export interface TimelineCheckpoint {
+  stepId: string;
+  status: string;
+  checkpointAt: string;            // ISO timestamp
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+export function fetchExecutionTimeline(
+  id: string,
+): Promise<TimelineCheckpoint[]> {
+  return api.get<TimelineCheckpoint[]>(
+    `/executions/${encodeURIComponent(id)}/timeline`,
+  );
+}

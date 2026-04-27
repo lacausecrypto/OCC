@@ -126,6 +126,16 @@ export const PRETOOL_FIELDS: Record<string, PretoolFieldDef[]> = {
     { k: "image_path", l: "Image Path" },
     { k: "language", l: "Language" },
   ],
+  image_generate: [
+    { k: "query", l: "Prompt", type: "textarea" },
+    { k: "image_provider", l: "Provider", type: "select", opts: ["openai", "huggingface", "stability"] },
+    { k: "image_model", l: "Model" },
+    { k: "image_size", l: "Size / Aspect" },
+    { k: "image_format", l: "Format", type: "select", opts: ["png", "jpeg", "webp"] },
+    { k: "image_quality", l: "Quality (OpenAI)", type: "select", opts: ["standard", "hd"] },
+    { k: "image_style", l: "Style (OpenAI)", type: "select", opts: ["vivid", "natural"] },
+    { k: "negative_prompt", l: "Negative prompt (HF/Stability)", type: "textarea" },
+  ],
 };
 
 export const PRETOOL_TYPES = Object.keys(PRETOOL_FIELDS);

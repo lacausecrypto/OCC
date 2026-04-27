@@ -280,6 +280,9 @@ export interface ChainDefinition {
   inputs?: ChainInput[];
   steps: ChainStep[];
   output: string;
+  /** Per-chain context budget — older variables are auto-summarized via Haiku
+   *  when total chars exceed this. 0 disables. Falls back to global default. */
+  max_context_chars?: number;
 }
 
 // ─── Pipeline (multi-chain) definition ───────────────────────────────────────
@@ -291,6 +294,11 @@ export interface PipelineChainRef {
   depends_on?: string[];
   condition?: string;
   inputs: Record<string, string>;
+  /** Auto-summarize this chain's output before passing it downstream.
+   *  - true: summarize via Haiku (default token limit)
+   *  - number: truncate to N characters
+   *  - undefined/false: pass full output */
+  summarize_output?: boolean | number;
 }
 
 export interface PipelineDefinition {

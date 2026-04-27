@@ -3,7 +3,8 @@ import { useCanvasStore } from "../../stores/canvas";
 import { useAppStore } from "../../stores/app";
 import { useChainsStore } from "../../stores/chains";
 import { saveChain } from "../../api/chains";
-import { canvasToYaml } from "../../utils/canvasToYaml";
+import { savePipeline, buildPipelineDefinition } from "../../api/pipelines";
+import { canvasToYaml, isPipelineCanvas, canvasToPipelineChains } from "../../utils/canvasToYaml";
 import { ModalOverlay } from "./ModalOverlay";
 import styles from "./Modal.module.css";
 
@@ -17,6 +18,7 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
   const [name, setName] = useState(existingName ?? "");
   const [description, setDescription] = useState("");
   const [versionMessage, setVersionMessage] = useState("");
+  const [maxContextChars, setMaxContextChars] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [yamlPreview, setYamlPreview] = useState<string | null>(null);
@@ -31,20 +33,36 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
     if (!isOverwrite) inputRef.current?.focus();
   }, [isOverwrite]);
 
+  // Detect whether the canvas represents a pipeline (only pipeline-stage nodes)
+  // vs a chain (steps). The save flow dispatches to the right endpoint.
+  const canvasNodes = useCanvasStore.getState().nodes;
+  const isPipeline = isPipelineCanvas(canvasNodes);
+
   const generateYaml = useCallback(() => {
     const { nodes, edges } = useCanvasStore.getState();
     if (nodes.size === 0) return "";
+    if (isPipeline) {
+      const stages = canvasToPipelineChains(nodes, edges);
+      const def = buildPipelineDefinition(stages, {
+        name: isOverwrite ? existingName! : (name || "untitled"),
+        description: description || undefined,
+      });
+      return JSON.stringify(def, null, 2);
+    }
     const chainName = isOverwrite ? existingName! : (name || "untitled");
-    return canvasToYaml(nodes, edges, chainName, description || undefined);
-  }, [name, description, isOverwrite, existingName]);
+    const mcc = maxContextChars.trim() ? Number(maxContextChars) : undefined;
+    return canvasToYaml(nodes, edges, chainName, description || undefined, {
+      max_context_chars: Number.isFinite(mcc as number) ? mcc : undefined,
+    });
+  }, [name, description, isOverwrite, existingName, isPipeline, maxContextChars]);
 
   const handlePreview = useCallback(() => {
     setYamlPreview(generateYaml());
   }, [generateYaml]);
 
   const doSave = useCallback(async (targetName: string) => {
-    const yaml = generateYaml();
-    if (!yaml) {
+    const { nodes, edges } = useCanvasStore.getState();
+    if (nodes.size === 0) {
       setError("Canvas is empty -- add some steps first");
       return;
     }
@@ -52,9 +70,27 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
     setSaving(true);
     setError(null);
     try {
-      const result = await saveChain(targetName, yaml, versionMessage || undefined);
-      if (result.ok) {
-        // Update the tracked chain name
+      let ok = false;
+      if (isPipeline) {
+        const stages = canvasToPipelineChains(nodes, edges);
+        if (stages.length === 0) throw new Error("No pipeline stages detected");
+        const def = buildPipelineDefinition(stages, {
+          name: targetName,
+          description: description || undefined,
+        });
+        const result = await savePipeline(targetName, def, versionMessage || undefined);
+        ok = result.ok;
+      } else {
+        const mcc = maxContextChars.trim() ? Number(maxContextChars) : undefined;
+        const yaml = canvasToYaml(nodes, edges, targetName, description || undefined, {
+          max_context_chars: Number.isFinite(mcc as number) ? mcc : undefined,
+        });
+        if (!yaml) throw new Error("Canvas is empty");
+        const result = await saveChain(targetName, yaml, versionMessage || undefined);
+        ok = result.ok;
+      }
+
+      if (ok) {
         useAppStore.setState({ canvasChainName: targetName });
         void useChainsStore.getState().fetchChains();
         onSaved?.(targetName);
@@ -63,11 +99,11 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
         setError("Server returned an error");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save chain");
+      setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setSaving(false);
     }
-  }, [generateYaml, onClose, onSaved]);
+  }, [isPipeline, description, versionMessage, maxContextChars, onClose, onSaved]);
 
   const handleSave = useCallback(async () => {
     if (isOverwrite) {
@@ -104,7 +140,9 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
       <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div className={styles.header}>
           <div className={styles.headerTitle}>
-            {isOverwrite ? `Save "${existingName}"` : "Save Chain"}
+            {isOverwrite
+              ? `Save "${existingName}"`
+              : (isPipeline ? "Save Pipeline" : "Save Chain")}
           </div>
           <button className={styles.closeBtn} onClick={onClose}>&times;</button>
         </div>
@@ -133,7 +171,7 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
           {/* Name field — only when save-as-new or no existing chain */}
           {!isOverwrite && (
             <div className={styles.field}>
-              <div className={styles.fieldLabel}>Chain Name <span className={styles.required}>*</span></div>
+              <div className={styles.fieldLabel}>{isPipeline ? "Pipeline Name" : "Chain Name"} <span className={styles.required}>*</span></div>
               <input
                 ref={inputRef}
                 className={`${styles.input} ${error ? styles.inputError : ""}`}
@@ -170,13 +208,34 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
             />
           </div>
 
+          {!isPipeline && (
+            <div className={styles.field}>
+              <div className={styles.fieldLabel}>
+                Context Budget <span className={styles.optional}>(optional)</span>
+              </div>
+              <input
+                className={styles.input}
+                type="number"
+                min={0}
+                value={maxContextChars}
+                onChange={(e) => setMaxContextChars(e.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder="50000 (default) — 0 disables — overrides global"
+                disabled={saving}
+              />
+              <div style={{ fontSize: "var(--s-xs)", color: "var(--m-text2)", marginTop: 4 }}>
+                Max characters across step variables before older outputs are auto-summarized.
+              </div>
+            </div>
+          )}
+
           {error && (
             <div style={{ color: "var(--c-error)", fontSize: "var(--s-xs)", padding: "4px 0" }}>{error}</div>
           )}
 
           {yamlPreview && (
             <div className={styles.field}>
-              <div className={styles.fieldLabel}>YAML Preview</div>
+              <div className={styles.fieldLabel}>{isPipeline ? "JSON Preview" : "YAML Preview"}</div>
               <pre className={styles.dryRunResult} style={{ maxHeight: 300 }}>{yamlPreview}</pre>
             </div>
           )}
@@ -188,7 +247,7 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
             onClick={handlePreview}
             disabled={saving}
           >
-            Preview YAML
+            {isPipeline ? "Preview JSON" : "Preview YAML"}
           </button>
           <div className={styles.footerInfo}>
             {nodeCount} steps, {edgeCount} connections
@@ -201,7 +260,11 @@ export function SaveChainModal({ onClose, onSaved }: SaveChainModalProps) {
             onClick={() => void handleSave()}
             disabled={saving || (!isOverwrite && !name.trim())}
           >
-            {saving ? "Saving..." : isOverwrite ? `Overwrite "${existingName}"` : "Save Chain"}
+            {saving
+              ? "Saving..."
+              : isOverwrite
+                ? `Overwrite "${existingName}"`
+                : (isPipeline ? "Save Pipeline" : "Save Chain")}
           </button>
         </div>
       </div>

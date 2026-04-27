@@ -1,8 +1,49 @@
 // ─── Pipeline API functions ──────────────────────────────────────────────────
 
 import { api } from "./client";
-import type { PipelineDefinition } from "../types/chain";
+import type { PipelineDefinition, PipelineChainRef } from "../types/chain";
 import type { PipelineExecution } from "../types/execution";
+
+/** Save (create or update) a pipeline definition.
+ *  Backend accepts either `{ yaml: string, versionMessage?: string }` or
+ *  the raw PipelineDefinition object. We send the JSON form. */
+export function savePipeline(
+  name: string,
+  pipeline: Omit<PipelineDefinition, "name"> & { name?: string },
+  versionMessage?: string,
+): Promise<{ ok: boolean }> {
+  const body: Record<string, unknown> = { ...pipeline, name };
+  if (versionMessage) body.versionMessage = versionMessage;
+  return api.post<{ ok: boolean }>(
+    `/pipelines/${encodeURIComponent(name)}`,
+    body,
+  );
+}
+
+/** Build a PipelineDefinition from canvas pipeline-stage nodes + edges.
+ *  Each pipeline-stage subchain node represents a chain reference.
+ *  The prompt field holds "Chain: <chainName>" and outputVar holds the stage id. */
+export interface PipelineSerializeOpts {
+  name: string;
+  description?: string;
+  version?: string;
+  output?: string;            // template for final output, e.g. "{stage_2}"
+  inputs?: PipelineDefinition["inputs"];
+}
+
+export function buildPipelineDefinition(
+  stages: PipelineChainRef[],
+  opts: PipelineSerializeOpts,
+): PipelineDefinition {
+  return {
+    name: opts.name,
+    description: opts.description,
+    version: opts.version,
+    inputs: opts.inputs,
+    chains: stages,
+    output: opts.output ?? (stages.length > 0 ? `{${stages[stages.length - 1].id}}` : ""),
+  };
+}
 
 export interface PipelineListItem {
   name: string;

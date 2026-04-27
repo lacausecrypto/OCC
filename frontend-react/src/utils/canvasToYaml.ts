@@ -1,7 +1,83 @@
 // ─── Convert canvas state to chain YAML ──────────────────────────────────────
 
 import type { CanvasNode, CanvasEdge } from "../types/canvas";
-import type { ChainInputType } from "../types/chain";
+import type { ChainInputType, PipelineChainRef } from "../types/chain";
+
+/** True if the canvas was loaded from a pipeline (each subchain node has model="pipeline-stage"). */
+export function isPipelineCanvas(nodes: Map<string, CanvasNode>): boolean {
+  if (nodes.size === 0) return false;
+  let pipelineCount = 0;
+  let stepCount = 0;
+  for (const n of nodes.values()) {
+    if ((n.kind ?? "step") !== "step") continue;
+    if (n.model === "pipeline-stage" && n.type === "subchain") pipelineCount++;
+    else stepCount++;
+  }
+  return pipelineCount > 0 && stepCount === 0;
+}
+
+/** Extract pipeline chain refs from canvas pipeline-stage nodes + edges. */
+export function canvasToPipelineChains(
+  nodes: Map<string, CanvasNode>,
+  edges: Map<string, CanvasEdge>,
+): PipelineChainRef[] {
+  // Build deps map: stageId → upstream stage IDs
+  const stageById = new Map<string, CanvasNode>();
+  for (const n of nodes.values()) {
+    if (n.model !== "pipeline-stage") continue;
+    stageById.set(n.id, n);
+  }
+  const depsMap = new Map<string, string[]>();
+  for (const edge of edges.values()) {
+    const fromStage = stageById.get(edge.from);
+    const toStage = stageById.get(edge.to);
+    if (!fromStage || !toStage) continue;
+    const list = depsMap.get(toStage.id) ?? [];
+    list.push(fromStage.outputVar || fromStage.id);
+    depsMap.set(toStage.id, list);
+  }
+
+  // Topological order (parents-first)
+  const sorted: CanvasNode[] = [];
+  const visited = new Set<string>();
+  const visit = (n: CanvasNode) => {
+    if (visited.has(n.id)) return;
+    visited.add(n.id);
+    const deps = (depsMap.get(n.id) ?? [])
+      .map((stageId) => [...stageById.values()].find(s => (s.outputVar || s.id) === stageId))
+      .filter((x): x is CanvasNode => !!x);
+    for (const dep of deps) visit(dep);
+    sorted.push(n);
+  };
+  for (const n of stageById.values()) visit(n);
+
+  // Build chain refs
+  return sorted.map((stage) => {
+    const stageId = stage.outputVar || stage.id;
+    // "Chain: <name>" extracted from the prompt
+    const chainName = (stage.prompt ?? "").replace(/^Chain:\s*/i, "").trim() || stage.label;
+    const ref: PipelineChainRef = {
+      id: stageId,
+      chain: chainName,
+      label: stage.label,
+      inputs: {},
+    };
+    const deps = depsMap.get(stage.id);
+    if (deps && deps.length > 0) ref.depends_on = [...new Set(deps)];
+    if (stage.advanced && typeof stage.advanced === "object") {
+      // Pull pipeline-specific fields stashed in advanced
+      const adv = stage.advanced as Record<string, unknown>;
+      if (typeof adv.summarize_output === "boolean" || typeof adv.summarize_output === "number") {
+        ref.summarize_output = adv.summarize_output as boolean | number;
+      }
+      if (typeof adv.condition === "string" && adv.condition) ref.condition = adv.condition;
+      if (adv.inputs && typeof adv.inputs === "object" && !Array.isArray(adv.inputs)) {
+        ref.inputs = adv.inputs as Record<string, string>;
+      }
+    }
+    return ref;
+  });
+}
 
 export interface DetectedInput {
   name: string;
@@ -13,11 +89,17 @@ export interface DetectedInput {
  * Serialize canvas nodes + edges back into a YAML chain definition string.
  * Produces output compatible with the OCC chain format.
  */
+export interface ChainSerializeOpts {
+  /** Per-chain context budget override (0 disables, undefined falls back to global) */
+  max_context_chars?: number;
+}
+
 export function canvasToYaml(
   nodes: Map<string, CanvasNode>,
   edges: Map<string, CanvasEdge>,
   chainName: string,
   description?: string,
+  opts?: ChainSerializeOpts,
 ): string {
   if (nodes.size === 0) return "";
 
@@ -36,6 +118,9 @@ export function canvasToYaml(
   lines.push(`name: ${yamlStr(chainName)}`);
   if (description) lines.push(`description: ${yamlStr(description)}`);
   lines.push("version: '1.0'");
+  if (opts?.max_context_chars !== undefined && opts.max_context_chars >= 0) {
+    lines.push(`max_context_chars: ${opts.max_context_chars}`);
+  }
 
   // Detect inputs from {input.*} / {input} patterns in prompts.
   // Each input carries an inferred type + description so the RunModal

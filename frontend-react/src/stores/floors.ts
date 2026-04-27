@@ -13,13 +13,22 @@ import type { CanvasNode, CanvasEdge, Camera } from "../types/canvas";
 import type { Annotation } from "./annotations";
 import { useCanvasStore } from "./canvas";
 import { useAnnotationStore } from "./annotations";
+import { FLOOR_SLOT_COUNT, inferSlotFromHex } from "../utils/floorColors";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
 export interface FloorData {
   id: string;
   name: string;
-  color: string;
+  /**
+   * Index into the design-space-derived floor palette (0..6).
+   * Replaces the old hardcoded `color` hex. The hex is resolved at render
+   * time via `resolveFloorColor(colorSlot)` so floors stay in sync with
+   * the design space (theme, accent, dark/light).
+   */
+  colorSlot: number;
+  /** @deprecated kept on disk for backwards compat — read colorSlot instead */
+  color?: string;
   /** Snapshot of canvas state when floor was last active */
   nodes: Map<string, CanvasNode>;
   edges: Map<string, CanvasEdge>;
@@ -67,24 +76,17 @@ interface FloorsState {
   getFloorList: () => FloorData[];
 }
 
-// ─── Default floor colors (rotating) ────────────────────────────────────
+// ─── Color slot rotation ────────────────────────────────────────────────
+// Slots map into the design-space palette (see utils/floorColors.ts).
+// We keep the running index seeded from the largest slot in storage so a
+// hot reload doesn't reuse the same slot for a brand-new floor.
 
-const FLOOR_COLORS = [
-  "#0a84ff", // blue
-  "#30d158", // green
-  "#ff9f0a", // orange
-  "#bf5af2", // purple
-  "#ff375f", // red
-  "#64d2ff", // cyan
-  "#ffd60a", // yellow
-  "#ff6482", // pink
-];
+let floorSlotIdx = 0;
 
-let floorColorIdx = 0;
-function nextFloorColor(): string {
-  const c = FLOOR_COLORS[floorColorIdx % FLOOR_COLORS.length];
-  floorColorIdx++;
-  return c;
+function nextFloorSlot(): number {
+  const slot = floorSlotIdx % FLOOR_SLOT_COUNT;
+  floorSlotIdx++;
+  return slot;
 }
 
 // ─── Persistence ────────────────────────────────────────────────────────
@@ -104,11 +106,20 @@ function deserializeFloors(json: string): Map<string, FloorData> {
   try {
     const arr = JSON.parse(json) as Array<Record<string, unknown>>;
     const map = new Map<string, FloorData>();
+    let maxSlot = -1;
     for (const raw of arr) {
+      // Migrate legacy `color: "#hex"` records to a slot index. New records
+      // already carry `colorSlot`; for those we keep it as-is.
+      const persistedSlot = typeof raw.colorSlot === "number" ? raw.colorSlot : null;
+      const slot = persistedSlot != null
+        ? persistedSlot
+        : inferSlotFromHex(typeof raw.color === "string" ? raw.color : "#0a84ff");
+      maxSlot = Math.max(maxSlot, slot);
       const f: FloorData = {
         id: raw.id as string,
         name: raw.name as string,
-        color: raw.color as string,
+        colorSlot: slot,
+        color: typeof raw.color === "string" ? raw.color : undefined,
         nodes: new Map(raw.nodes as Array<[string, CanvasNode]>),
         edges: new Map(raw.edges as Array<[string, CanvasEdge]>),
         camera: raw.camera as Camera,
@@ -117,6 +128,9 @@ function deserializeFloors(json: string): Map<string, FloorData> {
       };
       map.set(f.id, f);
     }
+    // Seed rotation past the highest persisted slot so a freshly created
+    // floor doesn't collide with an existing one.
+    floorSlotIdx = (maxSlot + 1 + FLOOR_SLOT_COUNT) % FLOOR_SLOT_COUNT;
     return map;
   } catch {
     return new Map();
@@ -140,10 +154,14 @@ function saveToStorage(floors: Map<string, FloorData>): void {
 // ─── Create default "Main" floor ────────────────────────────────────────
 
 function createDefaultFloor(): FloorData {
+  // Main always starts on slot 0 (the design accent). After this call, the
+  // next floor will be created on slot 1. We bump the rotation index so the
+  // very first user-created floor uses a different hue.
+  floorSlotIdx = 1;
   return {
     id: "main",
     name: "Main",
-    color: FLOOR_COLORS[0],
+    colorSlot: 0,
     nodes: new Map(),
     edges: new Map(),
     camera: { x: 0, y: 0, zoom: 1 },
@@ -174,7 +192,7 @@ export const useFloorsStore = create<FloorsState>((set, get) => ({
     const floor: FloorData = {
       id,
       name: name ?? `Floor ${get().floors.size + 1}`,
-      color: nextFloorColor(),
+      colorSlot: nextFloorSlot(),
       nodes: new Map(),
       edges: new Map(),
       camera: { x: 0, y: 0, zoom: 1 },
