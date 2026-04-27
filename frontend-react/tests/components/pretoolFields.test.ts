@@ -106,19 +106,14 @@ describe("pretoolFields", () => {
   });
 
   describe("STEP_TYPES", () => {
-    it("has all 11 step types", () => {
-      expect(STEP_TYPES).toHaveLength(11);
-      expect(STEP_TYPES).toContain("agent");
-      expect(STEP_TYPES).toContain("router");
-      expect(STEP_TYPES).toContain("evaluator");
-      expect(STEP_TYPES).toContain("gate");
-      expect(STEP_TYPES).toContain("transform");
-      expect(STEP_TYPES).toContain("loop");
-      expect(STEP_TYPES).toContain("merge");
-      expect(STEP_TYPES).toContain("webhook");
-      expect(STEP_TYPES).toContain("subchain");
-      expect(STEP_TYPES).toContain("debate");
-      expect(STEP_TYPES).toContain("browser");
+    it("contains every documented step type", () => {
+      const expected = [
+        "agent", "router", "evaluator", "gate", "transform",
+        "loop", "merge", "webhook", "subchain", "debate", "browser",
+        "image_gen",
+      ];
+      for (const t of expected) expect(STEP_TYPES).toContain(t);
+      expect(STEP_TYPES).toHaveLength(expected.length);
     });
   });
 
@@ -136,6 +131,126 @@ describe("pretoolFields", () => {
       const colors = getTypeColors();
       for (const type of STEP_TYPES) {
         expect(colors).toHaveProperty(type);
+      }
+    });
+  });
+
+  // ─── Schema integrity ─────────────────────────────────────────────────
+  describe("PRETOOL_FIELDS schema integrity", () => {
+    const VALID_TYPES = new Set(["select", "bool", "num", "textarea"]);
+
+    it("every field uses a known type or none (plain text)", () => {
+      for (const [tool, fields] of Object.entries(PRETOOL_FIELDS)) {
+        for (const f of fields) {
+          if (f.type !== undefined) {
+            expect(VALID_TYPES.has(f.type), `${tool}.${f.k} has unknown type "${f.type}"`).toBe(true);
+          }
+        }
+      }
+    });
+
+    it("every select field declares non-empty opts", () => {
+      for (const [tool, fields] of Object.entries(PRETOOL_FIELDS)) {
+        for (const f of fields) {
+          if (f.type === "select") {
+            expect(Array.isArray(f.opts), `${tool}.${f.k} select has no opts`).toBe(true);
+            expect((f.opts ?? []).length, `${tool}.${f.k} select has empty opts`).toBeGreaterThan(0);
+            for (const o of f.opts ?? []) {
+              expect(typeof o).toBe("string");
+              expect(o.length).toBeGreaterThan(0);
+            }
+          }
+        }
+      }
+    });
+
+    it("non-select fields do not declare opts", () => {
+      for (const [tool, fields] of Object.entries(PRETOOL_FIELDS)) {
+        for (const f of fields) {
+          if (f.type !== "select") {
+            expect(f.opts, `${tool}.${f.k} non-select has stray opts`).toBeUndefined();
+          }
+        }
+      }
+    });
+
+    it("field keys are unique within each pre-tool definition", () => {
+      for (const [tool, fields] of Object.entries(PRETOOL_FIELDS)) {
+        const keys = fields.map((f) => f.k);
+        const dupes = keys.filter((k, i) => keys.indexOf(k) !== i);
+        expect(dupes, `${tool} has duplicate keys: ${dupes.join(", ")}`).toEqual([]);
+      }
+    });
+
+    it("every pre-tool defines at least one field", () => {
+      for (const [tool, fields] of Object.entries(PRETOOL_FIELDS)) {
+        expect(fields.length, `${tool} has no fields`).toBeGreaterThan(0);
+      }
+    });
+
+    it("notify channel select includes the documented providers", () => {
+      const ch = PRETOOL_FIELDS.notify.find((f) => f.k === "channel");
+      expect(ch?.opts).toEqual(expect.arrayContaining(["slack", "discord", "telegram", "webhook"]));
+    });
+
+    it("cost_gate action select limits to known actions", () => {
+      const action = PRETOOL_FIELDS.cost_gate.find((f) => f.k === "action");
+      expect(action?.opts).toEqual(["warn", "skip", "downgrade"]);
+    });
+
+    it("current_datetime format select limits to known formats", () => {
+      const fmt = PRETOOL_FIELDS.current_datetime.find((f) => f.k === "format");
+      expect(fmt?.opts).toEqual(["iso", "locale", "unix"]);
+    });
+
+    it("textarea fields are reserved for multi-line content", () => {
+      // Sanity: only fields whose intent is clearly multi-line use `textarea`.
+      const textareaKeys: string[] = [];
+      for (const fields of Object.values(PRETOOL_FIELDS)) {
+        for (const f of fields) if (f.type === "textarea") textareaKeys.push(f.k);
+      }
+      // We don't enforce an exact list, but each textarea key should look multi-line-ish.
+      for (const k of textareaKeys) {
+        expect(k).toMatch(/^(urls|template|html|content|body|message|description)$/);
+      }
+    });
+  });
+
+  describe("TOOL_LIST integrity", () => {
+    it("entries are unique non-empty strings", () => {
+      for (const t of TOOL_LIST) {
+        expect(typeof t).toBe("string");
+        expect(t.length).toBeGreaterThan(0);
+      }
+      const set = new Set(TOOL_LIST);
+      expect(set.size).toBe(TOOL_LIST.length);
+    });
+
+    it("uses PascalCase identifiers (matches Claude Code tool names)", () => {
+      for (const t of TOOL_LIST) {
+        expect(t, `tool "${t}" should start with an uppercase letter`).toMatch(/^[A-Z]/);
+      }
+    });
+  });
+
+  describe("MODELS integrity", () => {
+    it("entries follow the claude-{family}-{major}-{minor} shape", () => {
+      for (const m of MODELS) {
+        expect(m).toMatch(/^claude-[a-z]+-\d+-\d+$/);
+      }
+    });
+
+    it("entries are unique", () => {
+      expect(new Set(MODELS).size).toBe(MODELS.length);
+    });
+  });
+
+  describe("STEP_TYPES integrity", () => {
+    it("entries are unique non-empty lowercase identifiers", () => {
+      const set = new Set(STEP_TYPES);
+      expect(set.size).toBe(STEP_TYPES.length);
+      for (const t of STEP_TYPES) {
+        expect(t).toMatch(/^[a-z_]+$/);
       }
     });
   });

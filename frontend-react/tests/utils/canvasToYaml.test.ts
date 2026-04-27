@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canvasToYaml } from "../../src/utils/canvasToYaml";
+import { canvasToYaml, detectInputs } from "../../src/utils/canvasToYaml";
 import type { CanvasNode, CanvasEdge } from "../../src/types/canvas";
 
 function makeNode(id: string, overrides: Partial<CanvasNode> = {}): CanvasNode {
@@ -166,5 +166,287 @@ describe("canvasToYaml", () => {
     const yaml = canvasToYaml(nodes, new Map(), "test");
     // Should be quoted
     expect(yaml).toContain('"');
+  });
+});
+
+describe("detectInputs", () => {
+  it("returns empty list when no {input} references exist", () => {
+    const nodes = new Map([["n1", makeNode("n1", { prompt: "do the thing" })]]);
+    expect(detectInputs(nodes)).toEqual([]);
+  });
+
+  it("extracts named inputs from {input.X} patterns", () => {
+    const nodes = new Map([
+      ["n1", makeNode("n1", { prompt: "Research {input.topic} on {input.source}" })],
+    ]);
+    const out = detectInputs(nodes);
+    expect(out.map((i) => i.name).sort()).toEqual(["source", "topic"]);
+  });
+
+  it("dedupes inputs across multiple steps", () => {
+    const nodes = new Map([
+      ["a", makeNode("a", { prompt: "use {input.topic}" })],
+      ["b", makeNode("b", { prompt: "summarize {input.topic} please" })],
+    ]);
+    const out = detectInputs(nodes);
+    expect(out.length).toBe(1);
+    expect(out[0].name).toBe("topic");
+  });
+
+  it("returns inputs sorted alphabetically", () => {
+    const nodes = new Map([
+      ["n1", makeNode("n1", { prompt: "{input.zebra} {input.apple} {input.mango}" })],
+    ]);
+    const out = detectInputs(nodes);
+    expect(out.map((i) => i.name)).toEqual(["apple", "mango", "zebra"]);
+  });
+
+  it("treats bare {input} as a single text-typed field named 'input'", () => {
+    const nodes = new Map([["n1", makeNode("n1", { prompt: "Process this: {input}" })]]);
+    const out = detectInputs(nodes);
+    expect(out).toHaveLength(1);
+    expect(out[0].name).toBe("input");
+    expect(out[0].type).toBe("text");
+    expect(out[0].description).toMatch(/free-form/i);
+  });
+
+  it("ignores bare {input} when named {input.X} is also present", () => {
+    const nodes = new Map([
+      ["n1", makeNode("n1", { prompt: "{input.topic} and {input}" })],
+    ]);
+    const out = detectInputs(nodes);
+    // Only the named one is preserved; bare {input} is the fallback for the
+    // case where NO named refs exist at all.
+    expect(out.map((i) => i.name)).toEqual(["topic"]);
+  });
+
+  it("ignores non-step canvas items (sticky/portal/etc)", () => {
+    const nodes = new Map([
+      ["s", makeNode("s", { kind: "sticky", stickyText: "{input.shouldNotMatter}" })],
+      ["t", makeNode("t", { prompt: "{input.real}" })],
+    ]);
+    const out = detectInputs(nodes);
+    expect(out.map((i) => i.name)).toEqual(["real"]);
+  });
+
+  it.each([
+    ["image", "image"],
+    ["photo", "image"],
+    ["screenshot", "image"],
+    ["file", "file"],
+    ["document", "file"],
+    ["pdf", "file"],
+    ["url", "url"],
+    ["link", "url"],
+    ["website", "url"],
+    ["code", "text"],
+    ["snippet", "text"],
+    ["json", "json"],
+    ["payload", "json"],
+    ["count", "number"],
+    ["depth", "number"],
+    ["limit", "number"],
+    ["enabled", "boolean"],
+    ["verbose", "boolean"],
+    ["topic", "string"],
+    ["query", "string"],
+    ["prompt", "text"],
+    ["description", "text"],
+    ["body", "text"],
+  ])("infers type for {input.%s} as %s", (name, expectedType) => {
+    const nodes = new Map([["n1", makeNode("n1", { prompt: `Use {input.${name}} now` })]]);
+    const out = detectInputs(nodes);
+    expect(out[0].type).toBe(expectedType);
+  });
+
+  it("falls back to type 'string' for unknown names", () => {
+    const nodes = new Map([["n1", makeNode("n1", { prompt: "{input.foobar}" })]]);
+    const out = detectInputs(nodes);
+    expect(out[0].type).toBe("string");
+  });
+});
+
+describe("canvasToYaml inputs section", () => {
+  it("emits inputs with name, description and type when non-string", () => {
+    const nodes = new Map([
+      ["n1", makeNode("n1", { prompt: "fetch {input.url} and process {input.topic}" })],
+    ]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).toContain("inputs:");
+    expect(yaml).toContain("name: topic");
+    expect(yaml).toContain("name: url");
+    // url is non-string → type emitted
+    expect(yaml).toMatch(/name: url[\s\S]*type: url/);
+    // topic is string → type omitted (default)
+    const topicBlock = yaml.match(/name: topic[\s\S]*?(?=- name:|steps:|$)/)?.[0] ?? "";
+    expect(topicBlock).not.toMatch(/type:/);
+  });
+
+  it("emits a synthetic 'input' field for chains using bare {input}", () => {
+    const nodes = new Map([["n1", makeNode("n1", { prompt: "Analyze: {input}" })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).toContain("inputs:");
+    expect(yaml).toContain("name: input");
+    expect(yaml).toMatch(/name: input[\s\S]*type: text/);
+  });
+
+  it("does not emit inputs section when no {input} references exist", () => {
+    const nodes = new Map([["n1", makeNode("n1", { prompt: "no placeholders here" })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).not.toContain("inputs:");
+  });
+});
+
+describe("canvasToYaml — tools serialization", () => {
+  it("omits tools section entirely when array is empty", () => {
+    const nodes = new Map([["n1", makeNode("n1", { tools: [] })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).not.toContain("tools:");
+  });
+
+  it("emits a single tool inline", () => {
+    const nodes = new Map([["n1", makeNode("n1", { tools: ["Read"] })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).toContain("tools: [Read]");
+  });
+
+  it("preserves tool order across many tools", () => {
+    const tools = ["WebSearch", "Read", "Bash", "Glob", "Grep", "Edit"];
+    const nodes = new Map([["n1", makeNode("n1", { tools })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).toContain(`tools: [${tools.join(", ")}]`);
+  });
+
+  it("does not collapse duplicate tools (mirrors user intent — fixing dupes is the editor's job)", () => {
+    const nodes = new Map([["n1", makeNode("n1", { tools: ["Read", "Read"] })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).toContain("tools: [Read, Read]");
+  });
+});
+
+describe("canvasToYaml — pre-tools serialization", () => {
+  it("omits pre_tools when array is empty", () => {
+    const nodes = new Map([["n1", makeNode("n1", { preTools: [] })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).not.toContain("pre_tools:");
+  });
+
+  it("emits a minimal web_search pre-tool", () => {
+    const nodes = new Map([["n1", makeNode("n1", {
+      preTools: [{ type: "web_search", inject_as: "results", query: "claude code" }],
+    })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).toContain("pre_tools:");
+    expect(yaml).toContain("- type: web_search");
+    expect(yaml).toContain("inject_as: results");
+    expect(yaml).toContain("query: ");
+    expect(yaml).toContain("claude code");
+  });
+
+  it("emits an http_fetch with method/headers/body via the generic field loop", () => {
+    const nodes = new Map([["n1", makeNode("n1", {
+      preTools: [{
+        type: "http_fetch", inject_as: "page",
+        url: "https://example.com",
+        method: "POST",
+        body: '{"x":1}',
+      }],
+    })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).toContain("- type: http_fetch");
+    expect(yaml).toContain("inject_as: page");
+    expect(yaml).toMatch(/url:\s*"?https:\/\/example\.com"?/);
+    expect(yaml).toContain("method: POST");
+    expect(yaml).toContain("body:");
+  });
+
+  it("emits resilience knobs (timeout_ms, retry, cache_ttl_minutes, on_error, parallel)", () => {
+    const nodes = new Map([["n1", makeNode("n1", {
+      preTools: [{
+        type: "web_search",
+        inject_as: "r",
+        query: "x",
+        timeout_ms: 8000,
+        retry: 3,
+        cache_ttl_minutes: 15,
+        on_error: "skip",
+        parallel: true,
+      }],
+    })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).toContain("timeout_ms: 8000");
+    expect(yaml).toContain("retry: 3");
+    expect(yaml).toContain("cache_ttl_minutes: 15");
+    expect(yaml).toContain("on_error: skip");
+    expect(yaml).toContain("parallel: true");
+  });
+
+  it("does not emit parallel when it is false", () => {
+    const nodes = new Map([["n1", makeNode("n1", {
+      preTools: [{ type: "web_search", inject_as: "r", query: "x", parallel: false }],
+    })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).not.toContain("parallel:");
+  });
+
+  it("skips empty / null / undefined / object-typed param values silently", () => {
+    const nodes = new Map([["n1", makeNode("n1", {
+      preTools: [{
+        type: "http_fetch",
+        inject_as: "page",
+        url: "https://example.com",
+        body: "",                                   // empty → skip
+        json_path: undefined,                       // undefined → skip
+        // @ts-expect-error — testing runtime guard for null values
+        method: null,
+        // Object-typed params (headers) are not flattened by the generic loop.
+        headers: { "x-foo": "bar" },
+      }],
+    })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).not.toContain("body:");
+    expect(yaml).not.toContain("json_path:");
+    expect(yaml).not.toContain("method:");
+    expect(yaml).not.toContain("x-foo");
+  });
+
+  it("emits multiple pre-tools in declared order", () => {
+    const nodes = new Map([["n1", makeNode("n1", {
+      preTools: [
+        { type: "web_search", inject_as: "a", query: "first" },
+        { type: "http_fetch", inject_as: "b", url: "https://x" },
+        { type: "bash", inject_as: "c", command: "ls" },
+      ],
+    })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    const aPos = yaml.indexOf("inject_as: a");
+    const bPos = yaml.indexOf("inject_as: b");
+    const cPos = yaml.indexOf("inject_as: c");
+    expect(aPos).toBeGreaterThan(0);
+    expect(bPos).toBeGreaterThan(aPos);
+    expect(cPos).toBeGreaterThan(bPos);
+  });
+
+  it("quotes inject_as values containing yaml special chars", () => {
+    const nodes = new Map([["n1", makeNode("n1", {
+      preTools: [{ type: "web_search", inject_as: "with: colon", query: "x" }],
+    })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    // yamlStr will quote-wrap the colon-containing inject_as
+    expect(yaml).toMatch(/inject_as:\s*"with: colon"/);
+  });
+
+  it("co-exists with tools in the same step", () => {
+    const nodes = new Map([["n1", makeNode("n1", {
+      tools: ["WebFetch"],
+      preTools: [{ type: "web_search", inject_as: "q", query: "x" }],
+    })]]);
+    const yaml = canvasToYaml(nodes, new Map(), "test");
+    expect(yaml).toContain("tools: [WebFetch]");
+    expect(yaml).toContain("- type: web_search");
+    // Tools always come before pre_tools in the emitted block
+    const toolsPos = yaml.indexOf("tools: [WebFetch]");
+    const preToolsPos = yaml.indexOf("pre_tools:");
+    expect(toolsPos).toBeLessThan(preToolsPos);
   });
 });
