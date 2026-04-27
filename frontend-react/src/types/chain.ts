@@ -278,11 +278,37 @@ export interface ChainDefinition {
   description?: string;
   version?: string;
   inputs?: ChainInput[];
+  /** Steps may be empty for canvas-only workspaces (portal/sticky/etc.). */
   steps: ChainStep[];
+  /** Optional when there are no steps — required by the executor otherwise. */
   output: string;
   /** Per-chain context budget — older variables are auto-summarized via Haiku
    *  when total chars exceed this. 0 disables. Falls back to global default. */
   max_context_chars?: number;
+  /**
+   * Side-car for non-step canvas items (Portal nodes, sticky notes, terminals,
+   * file viewers, link bookmarks, free text, obsidian links, annotations).
+   * Backend treats this as opaque — it's only round-tripped through save +
+   * loadChainToCanvas. Schema kept permissive on purpose so the frontend can
+   * evolve the canvas shape without lockstep backend changes.
+   */
+  canvas_items?: CanvasItemSerialized[];
+}
+
+/**
+ * Serialized form of a non-step CanvasNode. Kept very loose: any extra
+ * field on the canvas node is preserved on disk via spread, so a future
+ * canvas feature won't need a backend release.
+ */
+export interface CanvasItemSerialized {
+  id: string;
+  kind: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label?: string;
+  [extra: string]: unknown;
 }
 
 // ─── Pipeline (multi-chain) definition ───────────────────────────────────────

@@ -210,6 +210,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const edges = new Map<string, CanvasEdge>();
     const spacing = 250;
 
+    // Restore canvas-only items (portals, sticky notes, terminals, file
+    // viewers, link bookmarks, free text, obsidian links). These were written
+    // by canvasToYaml under `canvas_items:` — we trust the persisted geometry
+    // and field set. Items load BEFORE steps so step nodes don't end up
+    // stacked on top of restored portals.
+    const canvasItems = (def as { canvas_items?: Array<Record<string, unknown>> }).canvas_items;
+    if (Array.isArray(canvasItems)) {
+      for (const raw of canvasItems) {
+        if (!raw || typeof raw !== "object") continue;
+        const id = typeof raw.id === "string" ? raw.id : null;
+        if (!id) continue;
+        // Spread blindly — CanvasNode is a wide union, and any future field
+        // the canvas adds will round-trip without us touching this code.
+        nodes.set(id, raw as unknown as CanvasNode);
+      }
+    }
+
     def.steps.forEach((step, idx) => {
       const node: CanvasNode = {
         id: step.id,

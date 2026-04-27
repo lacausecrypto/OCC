@@ -140,13 +140,22 @@ export function canvasToYaml(
   }
 
   lines.push("");
-  lines.push("steps:");
+  // `steps:` is followed by either an empty list `[]` (canvas-only chain) or
+  // a YAML sequence. We emit `[]` first then RE-WRITE the line below if we
+  // produce at least one step — js-yaml requires a valid value here, an
+  // empty `steps:` parses as null which breaks the loader's Zod schema.
+  const stepsHeaderIdx = lines.length;
+  lines.push("steps: []");
 
+  let stepEmitted = 0;
   for (const nodeId of sorted) {
     const node = nodes.get(nodeId);
     if (!node) continue;
-    // Skip non-step canvas items (sticky notes, text blocks, portals, etc.)
+    // Skip non-step canvas items (sticky notes, text blocks, portals, etc.).
+    // They are written separately under `canvas_items:` so the canvas can
+    // round-trip even without any executable step.
     if (node.kind && node.kind !== "step") continue;
+    stepEmitted++;
 
     const stepId = sanitizeId(node.stepId || node.label || nodeId);
     const type = node.type ?? "agent";
@@ -346,12 +355,85 @@ export function canvasToYaml(
     lines.push("");
   }
 
-  // Output: last step's output_var
-  const lastNode = nodes.get(sorted[sorted.length - 1]);
-  const outputVar = lastNode?.outputVar || "final_output";
-  lines.push(`output: ${yamlStr(outputVar)}`);
+  // Promote the placeholder header to a real sequence header now that we
+  // know we emitted at least one step block.
+  if (stepEmitted > 0) lines[stepsHeaderIdx] = "steps:";
+
+  // Output: last step's output_var. Only required when there is at least one
+  // step. A canvas-only workspace (e.g. just a Portal node) gets no output:
+  // the backend Zod schema makes it optional and the executor refuses to run
+  // chains without steps with a clear error.
+  if (stepEmitted > 0) {
+    let outputNodeId: string | undefined = undefined;
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const n = nodes.get(sorted[i]);
+      if (n && (!n.kind || n.kind === "step")) { outputNodeId = sorted[i]; break; }
+    }
+    const lastNode = outputNodeId ? nodes.get(outputNodeId) : undefined;
+    const outputVar = lastNode?.outputVar || "final_output";
+    lines.push(`output: ${yamlStr(outputVar)}`);
+  }
+
+  // canvas_items: side-car for non-step canvas content (portals, sticky notes,
+  // terminals, file viewers, link bookmarks, free text, obsidian links).
+  // Serialized as JSON-flavor YAML inline objects to keep the file compact and
+  // forward-compatible — backend treats this as opaque round-trip data.
+  const canvasItems: CanvasNode[] = [];
+  for (const node of nodes.values()) {
+    if (node.kind && node.kind !== "step") canvasItems.push(node);
+  }
+  if (canvasItems.length > 0) {
+    lines.push("");
+    lines.push("canvas_items:");
+    for (const node of canvasItems) {
+      const obj = serializeCanvasItem(node);
+      lines.push(`  - ${jsonInline(obj)}`);
+    }
+  }
 
   return lines.join("\n");
+}
+
+/**
+ * Strip undefined fields and JS-runtime-only refs (e.g. terminalMessages)
+ * from a CanvasNode so the on-disk YAML stays small and replayable.
+ *
+ * We preserve every persistable field — anything the user has authored on
+ * the node (URL, sticky text, file path, portal mode, etc.) round-trips.
+ */
+function serializeCanvasItem(node: CanvasNode): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (v === undefined || v === null) continue;
+    // Drop transient runtime state — terminalMessages can grow huge and
+    // belongs in the live session, not on disk.
+    if (k === "terminalMessages") continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Render a small JS object as a single-line YAML/JSON. Strings get quoted
+ * with our YAML escape rules; booleans, numbers and arrays/objects fall
+ * through to JSON.stringify which YAML can parse unchanged.
+ */
+function jsonInline(obj: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(obj)) {
+    parts.push(`${jsonKey(k)}: ${jsonValue(v)}`);
+  }
+  return `{ ${parts.join(", ")} }`;
+}
+function jsonKey(k: string): string {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k) ? k : JSON.stringify(k);
+}
+function jsonValue(v: unknown): string {
+  if (typeof v === "string") return JSON.stringify(v);
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (v === null) return "null";
+  // Arrays + nested objects: JSON serializes cleanly; YAML accepts JSON inline.
+  return JSON.stringify(v);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

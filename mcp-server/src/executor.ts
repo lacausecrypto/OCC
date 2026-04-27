@@ -1632,6 +1632,20 @@ export async function executeChain(
   const executionId = externalId ?? crypto.randomBytes(8).toString("hex");
   const startedAt = new Date().toISOString();
 
+  // Canvas-only chains (only Portal/Sticky/Terminal/etc., zero steps) are
+  // saveable but not executable. Reject early with a clear message instead
+  // of crashing inside buildDependencyGraph.
+  if (!chain.steps || chain.steps.length === 0) {
+    throw new Error(
+      `Chain "${chain.name}" has no executable steps. ` +
+      `It looks like a canvas-only workspace (portal/sticky/etc.). ` +
+      `Open it in the canvas editor to use it.`,
+    );
+  }
+  if (!chain.output) {
+    throw new Error(`Chain "${chain.name}" is missing the "output" field`);
+  }
+
   // Apply defaults + validate inputs
   for (const inputDef of chain.inputs ?? []) {
     // Apply default if not provided

@@ -225,6 +225,21 @@ const StepSchema = z.object({
   })).optional(),
 });
 
+// canvas_items is the side-car that lets a canvas survive save+reload even
+// when it carries non-runnable items (portals, sticky notes, terminals,
+// file viewers, link bookmarks, free text). The schema is permissive so the
+// frontend can evolve the shape without backend changes — the backend treats
+// these as opaque blobs and never tries to execute them.
+const CanvasItemSchema = z.object({
+  id: z.string(),
+  kind: z.string(),                // "portal" | "sticky" | "terminal" | ...
+  x: z.number(),
+  y: z.number(),
+  w: z.number(),
+  h: z.number(),
+  label: z.string().optional(),
+}).passthrough();                  // tolerate forward-compatible extras
+
 const ChainSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -252,9 +267,14 @@ const ChainSchema = z.object({
     )
     .optional()
     .default([]),
-  steps: z.array(StepSchema).min(1),
-  output: z.string().min(1),
+  // Steps are optional now: a chain with zero steps and a non-empty
+  // canvas_items list is a "scratchpad" workspace (e.g. a single Portal node
+  // for an embedded site). Such chains are saveable + reloadable but the
+  // executor refuses to run them — see executeChain in executor.ts.
+  steps: z.array(StepSchema).optional().default([]),
+  output: z.string().optional().default(""),
   max_context_chars: z.number().optional(),
+  canvas_items: z.array(CanvasItemSchema).optional().default([]),
 });
 
 // ─── Loader ───────────────────────────────────────────────────────────────────

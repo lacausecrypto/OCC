@@ -193,10 +193,23 @@ output: result
   });
 
   it("loadChain validates chain structure", async () => {
-    const invalidYaml = "name: bad\n"; // missing steps and output
+    // A truly malformed YAML (e.g. missing required `name`) is still rejected.
+    // The previous test fixture (`name: bad` only) is now valid as a
+    // canvas-only chain — the strict rejection moved to executeChain.
+    const invalidYaml = "version: '1.0'\nsteps: []\n"; // missing required `name`
     fs.writeFileSync(path.join(tmpDir, "invalid.yaml"), invalidYaml);
     const loader = await getLoader();
     expect(() => loader.loadChain("invalid")).toThrow(/invalid chain/i);
+  });
+
+  it("loadChain accepts canvas-only chains (zero steps)", async () => {
+    // Portal-only / sticky-only canvases save as chains with empty steps.
+    fs.writeFileSync(path.join(tmpDir, "canvas-only.yaml"),
+      "name: scratchpad\nsteps: []\ncanvas_items:\n  - { id: p1, kind: portal, x: 0, y: 0, w: 400, h: 300, portalUrl: \"https://x.com\" }\n");
+    const loader = await getLoader();
+    const chain = loader.loadChain("canvas-only");
+    expect(chain.name).toBe("scratchpad");
+    expect(chain.steps).toEqual([]);
   });
 
   it("loadChain supports .yml extension", async () => {

@@ -189,14 +189,19 @@ describe("Schema Validation", () => {
       expect(() => loadChain("noname")).toThrow(/Invalid chain/);
     });
 
-    it("rejects missing steps", () => {
-      writeYaml("nosteps.yaml", { name: "bad", output: "o" });
-      expect(() => loadChain("nosteps")).toThrow(/Invalid chain/);
+    it("loads chains with no steps as canvas-only workspaces", () => {
+      // Canvas-only chains (e.g. just a Portal node) are saveable + loadable;
+      // execution is rejected later by executor.ts with a clear message.
+      writeYaml("nosteps.yaml", { name: "bad" });
+      const chain = loadChain("nosteps");
+      expect(chain.steps).toEqual([]);
+      expect(chain.output).toBe("");
     });
 
-    it("rejects empty steps array", () => {
-      writeYaml("empty.yaml", { name: "bad", steps: [], output: "o" });
-      expect(() => loadChain("empty")).toThrow(/Invalid chain/);
+    it("loads chains with empty steps array", () => {
+      writeYaml("empty.yaml", { name: "bad", steps: [], output: "" });
+      const chain = loadChain("empty");
+      expect(chain.steps).toEqual([]);
     });
 
     it("rejects step missing id", () => {
