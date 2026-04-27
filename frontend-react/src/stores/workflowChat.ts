@@ -7,6 +7,9 @@ import { useCanvasStore } from "./canvas";
 import { useServerStore } from "./server";
 import { useAppStore } from "./app";
 import { useMonitorStore } from "./monitor";
+import { useFloorsStore } from "./floors";
+import { detectInputs } from "../utils/canvasToYaml";
+import { fetchChainJson } from "../api/chains";
 import type { StepAdvancedConfig } from "../types/canvas";
 import type { StepType } from "../types/chain";
 import type { ChainExecution, StepResult } from "../types/execution";
@@ -96,7 +99,7 @@ const DEFAULT_CHAT_PROMPT = `You are an Agentic Workflow AI — you BUILD, RUN, 
 You have the following ACTIONS available. Include the exact tag at the end of your response to trigger them:
 
 [READY_TO_BUILD] — Build/modify steps on the canvas from your plan
-[ACTION:RUN] — Execute the current chain on the canvas
+[ACTION:RUN] — Execute the current chain on the canvas (see RUN INPUTS below)
 [ACTION:STOP] — Stop the running execution
 [ACTION:ANALYZE] — Analyze the current chain structure (dependencies, bottlenecks, issues)
 [ACTION:DEBUG] — Debug the last execution (inspect errors, step outputs, timing)
@@ -117,19 +120,41 @@ RULES:
 12. If an execution is running and has errors visible in the debug info, STOP it first then propose fixes with [ACTION:MODIFY].
 13. If "debug" is asked and execution is running → show live status. If errors are visible → suggest stopping + fixing.
 
+RUN INPUTS:
+The canvas context includes an "Inputs (fill these on RUN)" section listing each declared input with its type and description. When you emit [ACTION:RUN], ALWAYS fill them by appending a \`\`\`json block with the values — the action handler validates required inputs against the chain schema and aborts if any are missing.
+\`\`\`
+[ACTION:RUN]
+\`\`\`json
+{"topic": "Intelligence Artificielle 2026", "depth": 5, "enabled": true}
+\`\`\`
+\`\`\`
+Rules:
+- Pick values from the conversation (e.g. the theme/url/text the user agreed on, or a sensible default tied to their stated intent).
+- Fill EVERY non-optional input of type string / text / number / boolean / url / json / enum.
+- For type "image" or "file": DO NOT fabricate a value. Ask the user to use the RUN modal (the chain's run button) to upload it, then stop — don't emit [ACTION:RUN].
+- Do NOT emit [ACTION:RUN] and [ACTION:MODIFY] with conflicting JSON blocks in the same response. If you need to change steps before running, use [ACTION:MODIFY] first, wait for the user to confirm, then RUN in a follow-up message.
+
 MODIFY EXISTING STEPS:
-When the user wants to modify existing steps (change prompt, model, tools, pre-tools, etc.),
+When the user wants to modify existing steps (change prompt, model, tools, pre-tools, advanced config, or rewire dependencies),
 respond with your explanation then use [ACTION:MODIFY] followed by a JSON block:
 \`\`\`json
 {"modifications": [
   {"stepLabel": "Step Name", "patch": {"prompt": "new prompt", "model": "claude-haiku-4-5"}},
-  {"stepLabel": "Another Step", "patch": {"tools": ["WebSearch", "Read"], "preTools": [{"type": "web_search", "inject_as": "results", "query": "..."}]}},
+  {"stepLabel": "Another Step", "patch": {
+    "tools": ["WebSearch", "Read"],
+    "preTools": [{"type": "web_search", "inject_as": "results", "query": "..."}],
+    "advanced": {"cache": {"enabled": true, "ttl_minutes": 60}, "output_schema": "json"},
+    "depends_on": ["Upstream Step"]
+  }},
   {"stepLabel": "Old Step", "delete": true}
 ]}
 \`\`\`
-Valid patch fields: prompt, model, type, tools (array), outputVar, preTools (array of pre-tool objects).
+Valid patch fields: prompt, model, type, tools, outputVar, preTools, advanced, depends_on.
+- depends_on REPLACES the node's incoming edges — use it to rewire.
+- advanced accepts: cache, retry, fallback_models, timeout_ms, output_schema, routes, criteria, items_var, gate_actions, subchain, browser_url, webhook_url, etc.
 Set "delete": true to remove a step entirely.
 Use the EXACT step label as shown in the canvas context.
+CRITICAL: when the user asks to "improve / divide / add more steps" and the canvas is non-empty, emit [READY_TO_BUILD] (which triggers the planner's modification path) instead of dumping a new chain. NEVER propose a fresh "steps" array for an already-populated canvas.
 
 CONTEXT: You can see the current canvas state (steps, connections, models) and execution history. Use this context to give precise answers about the chain.
 
@@ -142,18 +167,34 @@ NEVER:
 const DEFAULT_PLANNER_PROMPT = `You are a chain planner. Given a conversation and the current canvas state, produce a JSON plan.
 
 IMPORTANT — Check the canvas context:
-- If the canvas ALREADY HAS steps → use [ACTION:MODIFY] to FIX/UPDATE existing steps. Do NOT recreate the chain.
-- If the canvas is EMPTY → create new steps.
+- If the canvas ALREADY HAS steps → DO NOT start over. Return a MODIFY plan with "modifications" and/or "addSteps". Never return a "steps" array in this case — it would recreate the chain as a disconnected parallel subgraph.
+- If the canvas is EMPTY → return a "steps" array to create the chain from scratch.
 - If the user asks to debug/fix → only modify the broken steps, keep working ones intact.
+- If the user asks to "divide / break down / améliorer", split existing steps into smaller ones: delete the coarse step, addSteps for the finer ones, and use depends_on to reconnect the chain edge-to-edge.
 
 Rules:
 - Output ONLY valid JSON, no markdown fences, no commentary
 - Each step needs: type, label, prompt, outputVar
 - Valid types: agent, router, evaluator, gate, transform, loop, merge, webhook, subchain, debate, browser
-- Use depends_on to wire steps together (array of step labels used as IDs)
+- Use depends_on to wire steps together (array of step labels used as IDs) — labels can reference BOTH existing steps on canvas AND steps in the same plan
 - Tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch
 - Keep prompts ACTIONABLE and SPECIFIC — include {variable} references
-- For pre_tools, use: web_search, http_fetch, bash, read_file, write_file, state_save, state_load, notify, email, db_query
+- CHAIN INPUTS: always use NAMED references like {input.topic}, {input.image}, {input.url}, {input.code}, {input.file}, {input.text} — NEVER bare {input}. The name drives the RUN modal widget:
+    * {input.image} / {input.photo} → image uploader
+    * {input.file} / {input.document} / {input.pdf} → file picker
+    * {input.url} / {input.link} → URL field
+    * {input.code} / {input.snippet} → code textarea
+    * {input.topic} / {input.subject} / {input.query} → short text
+    * {input.prompt} / {input.description} / {input.body} → long textarea
+    * {input.count} / {input.depth} → number
+  Pick the name that matches what the user will actually provide at run time.
+- preTools (executed before the step's LLM call) — types: web_search, http_fetch, bash, read_file, write_file, state_save, state_load, notify, email, db_query
+- advanced (per-step config) — useful keys:
+    * cache: { enabled: true, ttl_minutes: 60 }
+    * retry: { max_attempts, backoff_ms } and fallback_models: ["claude-haiku-4-5"]
+    * timeout_ms, early_exit_if, condition
+    * output_schema: "json" | "markdown" | "text", output_must_contain, output_max_length
+    * type-specific: routes (router), criteria+eval_threshold (evaluator), items_var+max_parallel (loop), gate_actions (gate), subchain (subchain), browser_url+browser_task (browser), webhook_url+webhook_method (webhook)
 
 When CREATING new steps (empty canvas), output:
 {
@@ -168,6 +209,7 @@ When CREATING new steps (empty canvas), output:
       "model": "claude-sonnet-4-6",
       "tools": ["WebSearch"],
       "preTools": [{"type": "web_search", "inject_as": "results", "query": "{input.topic}"}],
+      "advanced": { "cache": { "enabled": true, "ttl_minutes": 30 }, "output_schema": "json" },
       "depends_on": []
     }
   ]
@@ -176,13 +218,37 @@ When CREATING new steps (empty canvas), output:
 When MODIFYING existing steps (non-empty canvas), output:
 {
   "modifications": [
-    { "label": "Existing Step Name", "patch": { "prompt": "new prompt...", "model": "new-model", "tools": ["Bash"] } },
-    { "label": "Broken Step", "delete": true }
+    {
+      "label": "Existing Step Name",
+      "patch": {
+        "prompt": "new prompt...",
+        "model": "claude-sonnet-4-6",
+        "tools": ["Bash", "Read"],
+        "preTools": [{"type": "web_search", "inject_as": "ctx", "query": "{input.topic}"}],
+        "advanced": { "cache": { "enabled": true, "ttl_minutes": 60 }, "output_schema": "json" },
+        "depends_on": ["Upstream Step"]
+      }
+    },
+    { "label": "Step To Remove", "delete": true }
   ],
   "addSteps": [
-    { "type": "agent", "label": "New Step", "prompt": "...", "outputVar": "new_out", "depends_on": ["Existing Step Name"] }
+    {
+      "type": "agent",
+      "label": "New Finer Step",
+      "prompt": "...",
+      "outputVar": "new_out",
+      "preTools": [{"type": "http_fetch", "inject_as": "data", "url": "..."}],
+      "advanced": { "timeout_ms": 60000 },
+      "depends_on": ["Existing Step Name"]
+    }
   ]
-}`;
+}
+
+MODIFY MODE INVARIANTS (read carefully):
+- depends_on inside a modification's "patch" REPLACES the node's incoming edges entirely. Use it to rewire.
+- depends_on inside an addSteps entry can reference existing step labels — the new step will be wired into the existing chain automatically.
+- If you split a coarse step "X" into finer steps X1, X2, X3: delete "X", addSteps X1, X2, X3, and patch whatever used to depend on "X" so it now depends on "X3".
+- Always return explicit depends_on for every added step. Omitting it attaches the step to the tail of the existing chain (best-effort fallback).`;
 
 // ─── Multi-session persistence ──────────────────────────────────────────────
 // Storage layout:
@@ -260,13 +326,53 @@ function buildCanvasContext(): string {
 
   const parts: string[] = [];
 
+  // Floor (workspace) — the canvas store always reflects the active floor,
+  // so "empty canvas" can mean "current floor is empty" while another floor
+  // still has the chain. Surface this to avoid ghost-"canvas is empty" bugs.
+  let floorSuffix = "";
+  try {
+    const floors = useFloorsStore.getState();
+    const active = floors.floors.get(floors.activeFloorId);
+    const total = floors.floors.size;
+    if (active && total > 1) {
+      floorSuffix = ` | floor:"${active.name}" (${total} floors total)`;
+    } else if (active) {
+      floorSuffix = ` | floor:"${active.name}"`;
+    }
+  } catch { /* floors store may not be initialized yet */ }
+
   // Chain info
   const chainName = appState.canvasChainName || appState.pipelineName || "untitled";
-  parts.push(`Chain: "${chainName}" | ${nodes.length} steps | ${edges.length} connections`);
+  parts.push(`Chain: "${chainName}" | ${nodes.length} steps | ${edges.length} connections${floorSuffix}`);
 
   if (nodes.length === 0) {
+    try {
+      const floors = useFloorsStore.getState();
+      const populated = [...floors.floors.values()].filter((f) => f.id !== floors.activeFloorId && f.nodes.size > 0);
+      if (populated.length > 0) {
+        parts.push(`Canvas is empty on this floor — other floor(s) have steps: ${populated.map((f) => `"${f.name}" (${f.nodes.size})`).join(", ")}.`);
+        return parts.join("\n");
+      }
+    } catch { /* floors store may not be initialized yet */ }
     parts.push("Canvas is empty — no steps exist yet.");
     return parts.join("\n");
+  }
+
+  // Inputs schema — the LLM needs this to auto-fill values on [ACTION:RUN].
+  // Reuses the same detection the YAML emitter uses, so what the LLM sees
+  // matches what the RunModal + backend validate.
+  const detected = detectInputs(canvasState.nodes);
+  if (detected.length > 0) {
+    parts.push("\nInputs (fill these on RUN):");
+    for (const inp of detected) {
+      const uploadable = inp.type === "image" || inp.type === "file";
+      const hint = uploadable
+        ? " — REQUIRES USER UPLOAD (LLM cannot fill). Ask user to use the RUN modal."
+        : inp.description
+          ? ` — ${inp.description}`
+          : "";
+      parts.push(`  - ${inp.name} (${inp.type})${hint}`);
+    }
   }
 
   // Step details
@@ -623,7 +729,16 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
             modifications?: Array<{
               label: string;
               delete?: boolean;
-              patch?: { prompt?: string; model?: string; type?: StepType; tools?: string[] };
+              patch?: {
+                prompt?: string;
+                model?: string;
+                type?: StepType;
+                tools?: string[];
+                outputVar?: string;
+                preTools?: Record<string, unknown>[];
+                advanced?: Partial<StepAdvancedConfig>;
+                depends_on?: string[];
+              };
             }>;
             addSteps?: WFPlan["steps"];
           }
@@ -635,19 +750,48 @@ export const useWorkflowChatStore = create<WorkflowChatState>((set, get) => ({
 
             // Apply modifications to existing nodes
             if (Array.isArray(parsed.modifications)) {
+              // Snapshot label→id BEFORE any deletion so depends_on rewires resolve
+              // even when the planner also deletes/renames targets.
+              const labelToId = new Map<string, string>();
+              for (const n of canvasState.nodes.values()) labelToId.set(n.label, n.id);
+
               for (const mod of parsed.modifications) {
-                const node = [...canvasState.nodes.values()].find(n => n.label === mod.label);
-                if (!node) continue;
+                const nodeId = labelToId.get(mod.label)
+                  ?? [...canvasState.nodes.values()].find(n => n.label.toLowerCase() === mod.label.toLowerCase())?.id;
+                if (!nodeId) continue;
                 if (mod.delete) {
-                  canvasState.removeNode(node.id);
+                  canvasState.removeNode(nodeId);
                   modCount++;
-                } else if (mod.patch) {
-                  canvasState.updateNode(node.id, {
+                  continue;
+                }
+                if (mod.patch) {
+                  canvasState.updateNode(nodeId, {
                     ...(mod.patch.prompt != null ? { prompt: mod.patch.prompt } : {}),
                     ...(mod.patch.model != null ? { model: mod.patch.model } : {}),
                     ...(mod.patch.type != null ? { type: mod.patch.type } : {}),
                     ...(mod.patch.tools != null ? { tools: mod.patch.tools } : {}),
+                    ...(mod.patch.outputVar != null ? { outputVar: mod.patch.outputVar } : {}),
+                    ...(mod.patch.preTools != null ? { preTools: mod.patch.preTools as never[] } : {}),
+                    ...(mod.patch.advanced != null ? { advanced: mod.patch.advanced } : {}),
                   });
+
+                  // Rewire incoming edges: drop existing then add depends_on refs.
+                  if (Array.isArray(mod.patch.depends_on)) {
+                    const incoming = [...canvasState.edges.values()].filter(e => e.to === nodeId);
+                    for (const e of incoming) canvasState.removeEdge(e.id);
+                    let edgeSeq = 0;
+                    for (const depLabel of mod.patch.depends_on) {
+                      const fromId = labelToId.get(depLabel)
+                        ?? [...canvasState.nodes.values()].find(n => n.label.toLowerCase() === depLabel.toLowerCase())?.id;
+                      if (fromId && fromId !== nodeId) {
+                        canvasState.addEdge({
+                          id: `wfe_${Date.now()}_rw_${edgeSeq++}`,
+                          from: fromId,
+                          to: nodeId,
+                        });
+                      }
+                    }
+                  }
                   modCount++;
                 }
               }
@@ -799,13 +943,57 @@ async function executeDetectedActions(
           }
         } catch { /* proceed anyway */ }
 
+        // Extract the LLM-provided inputs block: ```json { ... } ```.
+        // The same message may also contain a MODIFY block, so we skip any
+        // block whose parse yields a modifications/steps plan.
+        const inputs: Record<string, unknown> = {};
+        let suppliedKeys: string[] = [];
+        for (const m of fullText.matchAll(/```json\s*([\s\S]*?)```/g)) {
+          try {
+            const parsed = JSON.parse(m[1].trim());
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)
+                && !("modifications" in parsed) && !("steps" in parsed) && !("addSteps" in parsed)) {
+              for (const [k, v] of Object.entries(parsed)) inputs[k] = v;
+              suppliedKeys = Object.keys(inputs);
+              break;
+            }
+          } catch { /* not JSON, skip */ }
+        }
+
+        // Validate against the chain's declared inputs: fetch schema, identify
+        // required fields the LLM didn't fill, and surface file/image types that
+        // require a user upload (LLM can't provide binary content).
+        try {
+          const occServerUrl = useServerStore.getState().occServerUrl;
+          const schema = await fetchChainJson(chainName, occServerUrl);
+          {
+            const declared = schema.inputs ?? [];
+            const missingRequired = declared.filter((d) =>
+              !d.optional
+              && !(d.name in inputs)
+              && (d.default === undefined || d.default === "")
+            );
+            const needUpload = missingRequired.filter((d) => d.type === "image" || d.type === "file");
+            const missingText = missingRequired.filter((d) => d.type !== "image" && d.type !== "file");
+            if (missingText.length > 0) {
+              sysMsg.content = `Cannot start "${chainName}" — missing required input(s): ${missingText.map((m) => `"${m.name}" (${m.type ?? "string"})`).join(", ")}. Re-prompt with values, e.g. emit [ACTION:RUN] followed by a \`\`\`json block with {"${missingText[0].name}": "..."}.`;
+              break;
+            }
+            if (needUpload.length > 0) {
+              sysMsg.content = `Cannot auto-run "${chainName}" — requires ${needUpload.length === 1 ? "a" : ""} file/image upload(s): ${needUpload.map((m) => `"${m.name}" (${m.type})`).join(", ")}. Use the RUN modal on the canvas toolbar to provide ${needUpload.length === 1 ? "it" : "them"}.`;
+              break;
+            }
+          }
+        } catch { /* schema fetch failed — fall through, backend will validate */ }
+
         try {
           const res = await fetch(`/execute/${encodeURIComponent(chainName)}`, {
-            method: "POST", headers, body: JSON.stringify({ input: {} }),
+            method: "POST", headers, body: JSON.stringify({ input: inputs }),
           });
           const data = await res.json() as { executionId?: string; error?: string };
           if (data.executionId) {
-            sysMsg.content = `Chain "${chainName}" started \u2014 execution ${data.executionId.slice(0, 12)}`;
+            const suffix = suppliedKeys.length > 0 ? ` with inputs: ${suppliedKeys.join(", ")}` : "";
+            sysMsg.content = `Chain "${chainName}" started \u2014 execution ${data.executionId.slice(0, 12)}${suffix}`;
             appState.startExecution(data.executionId, chainName, "chain");
           } else {
             sysMsg.content = `Failed to start: ${data.error ?? "unknown error"}`;
@@ -1038,7 +1226,16 @@ async function executeDetectedActions(
           const plan = JSON.parse(raw) as {
             modifications: Array<{
               stepLabel: string;
-              patch?: { prompt?: string; model?: string; type?: string; tools?: string[]; outputVar?: string; preTools?: Record<string, unknown>[] };
+              patch?: {
+                prompt?: string;
+                model?: string;
+                type?: string;
+                tools?: string[];
+                outputVar?: string;
+                preTools?: Record<string, unknown>[];
+                advanced?: Partial<StepAdvancedConfig>;
+                depends_on?: string[];
+              };
               delete?: boolean;
             }>;
           };
@@ -1051,6 +1248,8 @@ async function executeDetectedActions(
           const canvas = useCanvasStore.getState();
           canvas.pushUndo();
           const nodes = [...canvas.nodes.values()];
+          const labelToId = new Map<string, string>();
+          for (const n of nodes) labelToId.set(n.label.toLowerCase(), n.id);
           let modified = 0;
           let deleted = 0;
           const notFound: string[] = [];
@@ -1076,10 +1275,33 @@ async function executeDetectedActions(
               if (mod.patch.tools !== undefined) patch.tools = mod.patch.tools;
               if (mod.patch.outputVar !== undefined) patch.outputVar = mod.patch.outputVar;
               if (mod.patch.preTools !== undefined) patch.preTools = mod.patch.preTools;
+              if (mod.patch.advanced !== undefined) patch.advanced = mod.patch.advanced;
+
+              let changed = false;
               if (Object.keys(patch).length > 0) {
                 canvas.updateNode(node.id, patch);
-                modified++;
+                changed = true;
               }
+
+              // Rewire incoming edges when depends_on is specified.
+              if (Array.isArray(mod.patch.depends_on)) {
+                const incoming = [...canvas.edges.values()].filter(e => e.to === node.id);
+                for (const e of incoming) canvas.removeEdge(e.id);
+                let edgeSeq = 0;
+                for (const depLabel of mod.patch.depends_on) {
+                  const fromId = labelToId.get(depLabel.toLowerCase());
+                  if (fromId && fromId !== node.id) {
+                    canvas.addEdge({
+                      id: `wfe_${Date.now()}_mrw_${edgeSeq++}`,
+                      from: fromId,
+                      to: node.id,
+                    });
+                  }
+                }
+                changed = true;
+              }
+
+              if (changed) modified++;
             }
           }
 
@@ -1113,12 +1335,24 @@ function applyPlanToCanvas(plan: WFPlan): string[] {
   const createdIds: string[] = [];
   const labelToId = new Map<string, string>();
 
+  // Seed labelToId with EXISTING nodes so new steps can resolve
+  // depends_on references pointing at steps already on the canvas.
+  // This is what lets addSteps wire into the existing chain instead of
+  // floating off as a disconnected parallel subgraph.
+  const existingNodes = [...canvas.nodes.values()];
+  for (const n of existingNodes) {
+    labelToId.set(n.label, n.id);
+  }
+  // Remember which labels were preexisting so we can distinguish them
+  // when deciding default wiring (sequential fallback, leaf attachment).
+  const preexistingLabels = new Set(labelToId.keys());
+
   // Find max Y to place new nodes below existing ones
   let maxY = 0;
-  for (const node of canvas.nodes.values()) {
+  for (const node of existingNodes) {
     if (node.y + node.h > maxY) maxY = node.y + node.h;
   }
-  const startY = maxY + 80;
+  const startY = existingNodes.length > 0 ? maxY + 80 : 80;
 
   const STEP_W = 240;
   const STEP_H = 80;
@@ -1148,18 +1382,21 @@ function applyPlanToCanvas(plan: WFPlan): string[] {
       advanced: step.advanced ?? {},
     });
 
+    // New steps overwrite any preexisting label collision — the planner
+    // is adding a node, not reusing an existing one. depends_on references
+    // to the collided label will now point at the new node.
     labelToId.set(step.label, id);
     createdIds.push(id);
   });
 
-  // Wire edges from depends_on
+  // Wire edges from depends_on (can now target either new or existing nodes)
   let edgeCounter = 0;
   plan.steps.forEach((step) => {
     const toId = labelToId.get(step.label);
     if (!toId || !step.depends_on) return;
     for (const depLabel of step.depends_on) {
       const fromId = labelToId.get(depLabel);
-      if (fromId) {
+      if (fromId && fromId !== toId) {
         canvas.addEdge({
           id: `wfe_${Date.now()}_${edgeCounter++}`,
           from: fromId,
@@ -1169,9 +1406,26 @@ function applyPlanToCanvas(plan: WFPlan): string[] {
     }
   });
 
-  // If no explicit depends_on anywhere, wire sequentially
+  // Sequential fallback. If the planner omitted depends_on entirely:
+  //   - fresh canvas: chain the new steps head-to-tail
+  //   - existing canvas: attach the first new step to the existing leaf
+  //     (node with no outgoing edge), then chain the rest sequentially,
+  //     so addSteps never produces a floating disconnected subgraph.
   const hasAnyDeps = plan.steps.some((s) => s.depends_on && s.depends_on.length > 0);
-  if (!hasAnyDeps && createdIds.length > 1) {
+  if (!hasAnyDeps && createdIds.length > 0) {
+    // Refresh edges snapshot after addEdge calls above (none happen in this branch).
+    const edges = [...canvas.edges.values()];
+    if (preexistingLabels.size > 0) {
+      const hasOutgoing = new Set(edges.map((e) => e.from));
+      const leaf = existingNodes.find((n) => !hasOutgoing.has(n.id));
+      if (leaf) {
+        canvas.addEdge({
+          id: `wfe_${Date.now()}_${edgeCounter++}`,
+          from: leaf.id,
+          to: createdIds[0],
+        });
+      }
+    }
     for (let i = 1; i < createdIds.length; i++) {
       canvas.addEdge({
         id: `wfe_${Date.now()}_${edgeCounter++}`,

@@ -1,6 +1,13 @@
 // ─── Convert canvas state to chain YAML ──────────────────────────────────────
 
 import type { CanvasNode, CanvasEdge } from "../types/canvas";
+import type { ChainInputType } from "../types/chain";
+
+export interface DetectedInput {
+  name: string;
+  type: ChainInputType;
+  description: string;
+}
 
 /**
  * Serialize canvas nodes + edges back into a YAML chain definition string.
@@ -30,13 +37,20 @@ export function canvasToYaml(
   if (description) lines.push(`description: ${yamlStr(description)}`);
   lines.push("version: '1.0'");
 
-  // Detect inputs from {input.*} patterns in prompts
+  // Detect inputs from {input.*} / {input} patterns in prompts.
+  // Each input carries an inferred type + description so the RunModal
+  // can render the right widget (file picker, image uploader, url field…)
+  // instead of defaulting to a plain string. Without this, canvas-built
+  // chains end up with "No inputs required" even when they read {input}.
   const inputs = detectInputs(nodes);
   if (inputs.length > 0) {
     lines.push("inputs:");
     for (const inp of inputs) {
-      lines.push(`  - name: ${yamlStr(inp)}`);
-      lines.push(`    description: ""`);
+      lines.push(`  - name: ${yamlStr(inp.name)}`);
+      lines.push(`    description: ${yamlStr(inp.description)}`);
+      if (inp.type !== "string") {
+        lines.push(`    type: ${inp.type}`);
+      }
     }
   }
 
@@ -274,16 +288,60 @@ function sanitizeId(s: string): string {
     .replace(/^_|_$/g, "");
 }
 
-function detectInputs(nodes: Map<string, CanvasNode>): string[] {
-  const inputs = new Set<string>();
+/**
+ * Guess the input type + a helpful description from the field name.
+ * Keeps the RunModal's resolveInputType heuristics in sync (see
+ * RunModal.tsx `resolveInputType`) so every widget is chosen correctly.
+ */
+function inferInputMeta(name: string): { type: ChainInputType; description: string } {
+  const n = name.toLowerCase();
+  if (/(^|[_-])(image|img|photo|picture|screenshot|avatar|logo)s?$/.test(n))
+    return { type: "image", description: "Image file (PNG, JPG, WebP)" };
+  if (/(^|[_-])(file|document|attachment|upload|pdf)s?$/.test(n) || n.endsWith("_path") || n === "path")
+    return { type: "file", description: "File upload" };
+  if (/(^|[_-])(url|link|website|webpage|endpoint|api_url)s?$/.test(n))
+    return { type: "url", description: "URL to fetch or target" };
+  if (/(^|[_-])(code|snippet|script|source)s?$/.test(n))
+    return { type: "text", description: "Source code / script" };
+  if (/(^|[_-])(json|payload|schema|config)s?$/.test(n))
+    return { type: "json", description: "JSON payload" };
+  if (/(^|[_-])(count|limit|depth|max|min|num|number|size|threshold)s?$/.test(n))
+    return { type: "number", description: "Numeric value" };
+  if (/(^|[_-])(enabled|verbose|dry_run|debug|is_[a-z]+|has_[a-z]+)$/.test(n))
+    return { type: "boolean", description: "true / false" };
+  if (/(^|[_-])(prompt|description|content|body|text|message|notes)s?$/.test(n))
+    return { type: "text", description: "Free-form text" };
+  if (n === "input")
+    return { type: "text", description: "Free-form input for this chain" };
+  if (/(^|[_-])(topic|subject|title|name|keyword|query|question)s?$/.test(n))
+    return { type: "string", description: "Short text" };
+  return { type: "string", description: "" };
+}
+
+export function detectInputs(nodes: Map<string, CanvasNode>): DetectedInput[] {
+  const names = new Set<string>();
+  let sawBareInput = false;
   for (const node of nodes.values()) {
     if (node.kind && node.kind !== "step") continue;
-    const matches = (node.prompt || "").matchAll(/\{input\.(\w+)\}/g);
-    for (const m of matches) {
-      inputs.add(m[1]);
+    const prompt = node.prompt || "";
+    for (const m of prompt.matchAll(/\{input\.(\w+)\}/g)) {
+      names.add(m[1]);
     }
+    // Bare {input} (not followed by a dot) — treat as a single free-form field.
+    if (/\{input\}/.test(prompt)) sawBareInput = true;
   }
-  return [...inputs].sort();
+
+  // If the planner emitted bare {input}, surface it as a named field so the
+  // RunModal renders a textarea. The OCC engine accepts either {input} (whole
+  // object) or {input.name} (single field); emitting a named "input" makes
+  // both cases work: {name:"input", value:"..."} stringified in the prompt.
+  if (sawBareInput && names.size === 0) names.add("input");
+
+  const sorted = [...names].sort();
+  return sorted.map((n) => {
+    const meta = inferInputMeta(n);
+    return { name: n, ...meta };
+  });
 }
 
 function topoSort(
