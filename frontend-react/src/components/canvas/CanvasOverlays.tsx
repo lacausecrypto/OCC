@@ -1,42 +1,38 @@
 /**
  * HTML overlay system for canvas portal nodes.
- * Positions iframes over the canvas in sync with the camera.
  *
- * Uses the backend /portal proxy endpoint to serve pages without
- * X-Frame-Options / CSP restrictions that would block direct embedding.
- * Falls back to a "blocked" UI with an "Open in browser" button.
+ * Two render paths:
+ *   - "static"      — backend /portal proxy renders the page once (no JS,
+ *                     no cookies). Cheap, anonymous, breaks on SPAs.
+ *   - "interactive" — backend Playwright session streams JPEG frames over
+ *                     WebSocket; mouse/keyboard events go back over a second
+ *                     WebSocket. Real session, supports login.
+ *
+ * Coordinate system: the canvas overlay sits at native pixel size and is
+ * `transform: scale(camera.zoom)`-ed. Pointer events arrive in canvas-overlay
+ * coordinates; we normalize to 0..1 of viewport before sending to the
+ * backend so the Playwright viewport size is the single source of truth.
  */
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useCanvasStore } from "../../stores/canvas";
 import type { CanvasNode } from "../../types/canvas";
+import { createPortalSession, closePortalSession, navigatePortalSession, portalWsUrl } from "../../api/portal";
 import styles from "./CanvasEditor.module.css";
 
 const MIN_ZOOM_FOR_OVERLAY = 0.4;
 
-function PortalOverlayItem({ node, camera }: { node: CanvasNode; camera: { x: number; y: number; zoom: number } }) {
+// ─── Static mode (existing iframe + /portal proxy) ────────────────────────
+
+function StaticPortalOverlayItem({ node, camera }: { node: CanvasNode; camera: { x: number; y: number; zoom: number } }) {
   const [loadError, setLoadError] = useState(false);
   const url = node.portalUrl ?? "";
-
-  // Proxied URL that strips X-Frame-Options
   const proxyUrl = url ? `/portal?url=${encodeURIComponent(url)}` : "";
 
   const handleOpenExternal = useCallback(() => {
     window.open(url, "_blank", "noopener,noreferrer");
   }, [url]);
+  const handleRetry = useCallback(() => setLoadError(false), []);
 
-  const handleRetry = useCallback(() => {
-    setLoadError(false);
-  }, []);
-
-  // Screen positioning — body area below header bar.
-  // Outer wrapper sits at the on-screen rectangle (zoom-clipped).
-  // The iframe inside is rendered at the node's NATIVE pixel size and then
-  // transform-scaled to match canvas zoom — otherwise sites with responsive
-  // layouts (e.g. GitHub) reflow into a mobile view when the iframe shrinks
-  // at low zoom, which is what the user reported as "weird zoom on canvas
-  // items": the terminal overlay scales its font with zoom, but the portal
-  // iframe was sized at 100% of the wrapper so its content kept native size
-  // and reflowed instead of zooming together with the rest of the canvas.
   const headerH = 28 * camera.zoom;
   const screenX = node.x * camera.zoom + camera.x;
   const screenY = node.y * camera.zoom + camera.y + headerH;
@@ -65,15 +61,15 @@ function PortalOverlayItem({ node, camera }: { node: CanvasNode; camera: { x: nu
           style={{ pointerEvents: "auto" }}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div className={styles.portalFallbackIcon}>{"\uD83D\uDEAB"}</div>
+          <div className={styles.portalFallbackIcon}>{"🚫"}</div>
           <div className={styles.portalFallbackText}>Failed to load page</div>
           <div className={styles.portalFallbackUrl}>{url}</div>
           <div style={{ display: "flex", gap: 6 }}>
             <button className={styles.portalFallbackBtn} onClick={handleRetry}>
-              Retry {"\u21BB"}
+              Retry {"↻"}
             </button>
             <button className={styles.portalFallbackBtn} onClick={handleOpenExternal}>
-              Open in browser {"\u2197"}
+              Open in browser {"↗"}
             </button>
           </div>
         </div>
@@ -96,6 +92,380 @@ function PortalOverlayItem({ node, camera }: { node: CanvasNode; camera: { x: nu
       )}
     </div>
   );
+}
+
+// ─── Interactive mode (Playwright + screencast) ───────────────────────────
+
+interface FrameMessage {
+  type: "frame";
+  data: string;          // base64 JPEG
+  viewport: { w: number; h: number };
+}
+interface UrlMessage {
+  type: "url";
+  url: string;
+}
+interface ErrorMessage {
+  type: "error";
+  error: string;
+}
+type ServerMessage = FrameMessage | UrlMessage | ErrorMessage;
+
+/**
+ * Translate a DOM-level keyboard event to the key name Playwright expects.
+ * Most printable keys are passed through as-is; named keys (Enter, Backspace,
+ * arrows, modifiers) match Playwright's vocabulary directly.
+ */
+function toPlaywrightKey(e: KeyboardEvent): string {
+  return e.key;
+}
+
+function InteractivePortalOverlayItem({ node, camera }: { node: CanvasNode; camera: { x: number; y: number; zoom: number } }) {
+  const url = node.portalUrl ?? "";
+  const persistKey = node.portalPersistKey ?? node.id;
+  const updateNode = useCanvasStore((s) => s.updateNode);
+
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [status, setStatus] = useState<"idle" | "starting" | "live" | "error" | "closed">("idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [addressDraft, setAddressDraft] = useState<string>(url);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const screencastRef = useRef<WebSocket | null>(null);
+  const inputRef = useRef<WebSocket | null>(null);
+  const viewportRef = useRef({ w: 1280, h: 720 });
+  const focusedRef = useRef(false);
+
+  const HEADER_H = 28;
+  const TOOLBAR_H = 32;
+  const nativeW = node.w;
+  const nativeH = node.h - HEADER_H - TOOLBAR_H;
+
+  // ── Lifecycle: create session → open both WS, close on unmount/url change ──
+  useEffect(() => {
+    if (!url) return;
+    let cancelled = false;
+    setStatus("starting");
+    setErrorMsg(null);
+
+    (async () => {
+      try {
+        const info = await createPortalSession({
+          url,
+          persistKey,
+          viewport: { width: nativeW, height: Math.max(360, nativeH) },
+        });
+        if (cancelled) {
+          // The component unmounted while we were creating — clean up.
+          await closePortalSession(info.sessionId);
+          return;
+        }
+        setSessionId(info.sessionId);
+        setAddressDraft(info.url);
+        viewportRef.current = { w: info.viewport.width, h: info.viewport.height };
+
+        // Screencast WS
+        const sc = new WebSocket(portalWsUrl(info.sessionId, "screencast"));
+        screencastRef.current = sc;
+        sc.onopen = () => setStatus("live");
+        sc.onmessage = (ev) => {
+          let msg: ServerMessage;
+          try { msg = JSON.parse(ev.data) as ServerMessage; } catch { return; }
+          if (msg.type === "frame") {
+            viewportRef.current = { w: msg.viewport.w, h: msg.viewport.h };
+            const cv = canvasRef.current;
+            if (!cv) return;
+            const img = new Image();
+            img.onload = () => {
+              if (cv.width !== msg.viewport.w || cv.height !== msg.viewport.h) {
+                cv.width = msg.viewport.w;
+                cv.height = msg.viewport.h;
+              }
+              const ctx = cv.getContext("2d");
+              if (ctx) ctx.drawImage(img, 0, 0);
+            };
+            img.src = `data:image/jpeg;base64,${msg.data}`;
+          } else if (msg.type === "url") {
+            setAddressDraft(msg.url);
+            updateNode(node.id, { portalUrl: msg.url });
+          } else if (msg.type === "error") {
+            setStatus("error");
+            setErrorMsg(msg.error);
+          }
+        };
+        sc.onclose = () => setStatus((s) => (s === "live" ? "closed" : s));
+        sc.onerror = () => { setStatus("error"); setErrorMsg("Screencast connection failed"); };
+
+        // Input WS
+        const ic = new WebSocket(portalWsUrl(info.sessionId, "input"));
+        inputRef.current = ic;
+      } catch (err) {
+        if (!cancelled) {
+          setStatus("error");
+          setErrorMsg((err as Error).message);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      try { screencastRef.current?.close(); } catch { /* ignore */ }
+      try { inputRef.current?.close(); } catch { /* ignore */ }
+      // Closing the session triggers storageState persistence on the backend.
+      if (sessionId) void closePortalSession(sessionId);
+    };
+    // We deliberately key the effect on the URL & persistKey only — resizing
+    // the node should NOT recreate the session (the viewport persists).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, persistKey]);
+
+  // ── Pointer + key forwarding ──────────────────────────────────────────────
+
+  const send = useCallback((msg: object) => {
+    const ws = inputRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify(msg)); } catch { /* ignore */ }
+    }
+  }, []);
+
+  const normCoords = useCallback((e: React.PointerEvent | React.MouseEvent | React.WheelEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    return { x, y };
+  }, []);
+
+  const buttonName = (n: number): "left" | "middle" | "right" => (n === 1 ? "middle" : n === 2 ? "right" : "left");
+
+  // Keyboard listener — only active while the canvas is "focused" (clicked into).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!focusedRef.current) return;
+      // Don't swallow browser shortcuts that the user expects to keep working
+      // on the OCC frontend itself (Cmd+R, Cmd+T). Forward only when modifiers
+      // are NOT cmd/ctrl, OR the key is a printable character.
+      e.preventDefault();
+      send({ type: "keydown", key: toPlaywrightKey(e) });
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (!focusedRef.current) return;
+      e.preventDefault();
+      send({ type: "keyup", key: toPlaywrightKey(e) });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [send]);
+
+  // ── Address bar / nav bar handlers ───────────────────────────────────────
+
+  const submitAddress = useCallback(async () => {
+    let target = addressDraft.trim();
+    if (!target) return;
+    if (!/^https?:\/\//.test(target)) target = "https://" + target;
+    if (!sessionId) return;
+    try {
+      await navigatePortalSession(sessionId, target);
+      updateNode(node.id, { portalUrl: target });
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    }
+  }, [addressDraft, sessionId, node.id, updateNode]);
+
+  // ── Layout ────────────────────────────────────────────────────────────────
+
+  const screenX = node.x * camera.zoom + camera.x;
+  const screenY = node.y * camera.zoom + camera.y + HEADER_H * camera.zoom;
+  const screenW = node.w * camera.zoom;
+  const screenH = (node.h - HEADER_H) * camera.zoom;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: screenX,
+        top: screenY,
+        width: screenW,
+        height: screenH,
+        overflow: "hidden",
+        borderRadius: `0 0 ${10 * camera.zoom}px ${10 * camera.zoom}px`,
+        pointerEvents: "none",
+        willChange: "transform",
+      }}
+    >
+      {/* Native-sized inner stack, scaled up to match the canvas zoom */}
+      <div
+        style={{
+          width: node.w,
+          height: node.h - HEADER_H,
+          transform: `scale(${camera.zoom})`,
+          transformOrigin: "0 0",
+          background: "#1a1a1e",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Toolbar — back / forward / reload + address bar */}
+        <div
+          style={{
+            height: TOOLBAR_H,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "0 8px",
+            background: "rgba(0,0,0,0.4)",
+            borderBottom: "1px solid rgba(255,255,255,0.06)",
+            pointerEvents: "auto",
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => send({ type: "back" })}
+            title="Back"
+            style={navBtn}
+          >{"←"}</button>
+          <button
+            type="button"
+            onClick={() => send({ type: "forward" })}
+            title="Forward"
+            style={navBtn}
+          >{"→"}</button>
+          <button
+            type="button"
+            onClick={() => send({ type: "reload" })}
+            title="Reload"
+            style={navBtn}
+          >{"↻"}</button>
+          <input
+            type="text"
+            value={addressDraft}
+            onChange={(e) => setAddressDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                void submitAddress();
+              }
+            }}
+            spellCheck={false}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 11,
+              padding: "3px 8px",
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 4,
+              color: "#fff",
+              outline: "none",
+              fontFamily: "var(--m-font-mono, monospace)",
+            }}
+          />
+          <span
+            style={{
+              fontSize: 9,
+              color: status === "live" ? "#30d158" : status === "error" ? "#ff375f" : "#86868b",
+              padding: "2px 6px",
+              borderRadius: 3,
+              background: "rgba(255,255,255,0.06)",
+              fontWeight: 600,
+              textTransform: "uppercase",
+            }}
+            title={errorMsg ?? status}
+          >
+            {status === "starting" ? "..." : status === "live" ? "live" : status === "error" ? "err" : status}
+          </span>
+        </div>
+
+        {/* Live canvas — pointer events forwarded as input messages */}
+        {status === "error" ? (
+          <div
+            className={styles.portalFallback}
+            style={{ pointerEvents: "auto", flex: 1 }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div className={styles.portalFallbackIcon}>{"🚫"}</div>
+            <div className={styles.portalFallbackText}>{errorMsg ?? "Session failed"}</div>
+            <div className={styles.portalFallbackUrl}>{url}</div>
+            <button
+              className={styles.portalFallbackBtn}
+              onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+            >
+              Open in browser {"↗"}
+            </button>
+          </div>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            tabIndex={0}
+            style={{
+              flex: 1,
+              width: "100%",
+              height: "100%",
+              display: "block",
+              pointerEvents: "auto",
+              cursor: focusedRef.current ? "default" : "pointer",
+            }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              (e.currentTarget as HTMLCanvasElement).focus();
+              focusedRef.current = true;
+              const { x, y } = normCoords(e);
+              send({ type: "mousedown", x, y, button: buttonName(e.button) });
+            }}
+            onPointerUp={(e) => {
+              e.stopPropagation();
+              const { x, y } = normCoords(e);
+              send({ type: "mouseup", x, y, button: buttonName(e.button) });
+            }}
+            onPointerMove={(e) => {
+              if (e.buttons === 0 && !focusedRef.current) return; // skip hover-only when not focused
+              const { x, y } = normCoords(e);
+              send({ type: "mousemove", x, y });
+            }}
+            onWheel={(e) => {
+              // We don't preventDefault here — the canvas should still be
+              // scroll-isolated by the parent's overflow:hidden.
+              const { x, y } = normCoords(e);
+              send({ type: "wheel", x, y, deltaX: e.deltaX, deltaY: e.deltaY });
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const { x, y } = normCoords(e);
+              send({ type: "click", x, y, button: "right" });
+            }}
+            onBlur={() => { focusedRef.current = false; }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+const navBtn: React.CSSProperties = {
+  width: 22, height: 22,
+  display: "flex", alignItems: "center", justifyContent: "center",
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: 4,
+  color: "#fff",
+  fontSize: 12,
+  cursor: "pointer",
+  flexShrink: 0,
+};
+
+// ─── Wrapper that picks the right mode ─────────────────────────────────────
+
+function PortalOverlayItem({ node, camera }: { node: CanvasNode; camera: { x: number; y: number; zoom: number } }) {
+  const mode = node.portalMode ?? "static";
+  if (mode === "interactive") {
+    return <InteractivePortalOverlayItem node={node} camera={camera} />;
+  }
+  return <StaticPortalOverlayItem node={node} camera={camera} />;
 }
 
 export function CanvasOverlays() {

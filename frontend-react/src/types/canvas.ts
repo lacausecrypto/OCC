@@ -61,6 +61,10 @@ export interface StepAdvancedConfig {
   browser_viewport?: { width: number; height: number };
   browser_wait_ms?: number;
   browser_output_format?: "text" | "markdown" | "json" | "screenshot";
+  browser_port?: number;                    // Chrome debug port (auto-discovery)
+  browser_page_name?: string;               // Persistent page name across steps
+  browser_scroll_strategy?: "auto" | "full" | "none";
+  browser_cookies_domain?: string;          // Filter cookies to this domain
   // Subchain
   subchain?: string;
   subchain_input_map?: Record<string, string>;
@@ -123,6 +127,19 @@ export interface CanvasNode {
   portalDescription?: string;
   portalFavicon?: string;
   portalStatus?: "loading" | "loaded" | "error";
+  /**
+   * "static"      — current default: server-side fetch + iframe (read-only)
+   * "interactive" — Playwright session streamed over WebSocket: real cookies,
+   *                 real JS, real WebSockets. Use this for sites that require
+   *                 login (X, Gmail, banks).
+   */
+  portalMode?: "static" | "interactive";
+  /**
+   * Stable id used by the backend to load/save cookies for this portal.
+   * Defaults to the node id when interactive mode is enabled — that way the
+   * same canvas node keeps the same login between sessions.
+   */
+  portalPersistKey?: string;
   // ─── File viewer fields ─────────────────────────────────────────
   filePath?: string;
   fileContent?: string;
