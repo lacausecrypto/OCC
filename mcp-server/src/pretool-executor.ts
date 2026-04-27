@@ -347,7 +347,9 @@ export async function executeSinglePreTool(
     }
 
     case "bash": {
-      const rawCmd = tool.command ?? "";
+      // Accept "query" as fallback for older/canvas-authored chains using
+      // the generic key. Prefer "command" when both are present.
+      const rawCmd = tool.command ?? tool.query ?? "";
       // Security: sanitize ALL variable values before shell interpolation
       const sanitizedVars = { ...vars };
       for (const key of Object.keys(sanitizedVars)) {

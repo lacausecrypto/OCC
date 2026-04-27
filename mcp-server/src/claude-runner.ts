@@ -12,6 +12,7 @@ import { z } from "zod";
 import type { ChainStep } from "./types.js";
 import { resolveVariables } from "./utils.js";
 import { resolveProvider, runLLMHTTP } from "./providers.js";
+import { runCodex } from "./codex-runner.js";
 
 // ─── Claude CLI version check ──────────────────────────────────────────────
 
@@ -514,11 +515,22 @@ export async function runStepWithRetry(
         }
 
         // ─── Multi-provider routing ─────────────────────────────
-        // Check if this model should be routed to an HTTP provider
-        // instead of the Claude CLI.
+        // Codex CLI provider → spawn `codex` binary (similar to Claude CLI).
+        // Other non-Claude providers → HTTP adapter.
         const resolved = resolveProvider(stepWithModel.model ?? "", (stepWithModel as unknown as Record<string, unknown>).provider as string | undefined);
+        if (resolved && resolved.provider.type === "codex") {
+          onLog(`Using provider: ${resolved.provider.name} (codex CLI, ${resolved.model})`, "info");
+          return await runCodex(
+            resolvedPrompt,
+            { ...stepWithModel, model: resolved.model },
+            onChunk,
+            executionId,
+            step.timeout_ms,
+            processTracker,
+          );
+        }
         if (resolved && resolved.provider.type !== "claude" && (resolved.provider.apiKey || resolved.provider.type === "ollama")) {
-          // Non-Claude provider → use HTTP adapter
+          // Non-Claude HTTP provider
           onLog(`Using provider: ${resolved.provider.name} (${resolved.model})`, "info");
           const result = await runLLMHTTP(
             {

@@ -7,6 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { logger } from "./logger.js";
+import { getSystemPrompt } from "./system-prompts.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -432,7 +433,7 @@ export function buildPlanningPrompt(req: BlobPlanRequest, mcpServers?: string[])
     ? allKnowledge.map((k) => k.concept).join(", ")
     : "(none)";
 
-  return `You are the BLOB Orchestrator — an intelligent system that grows organic workflow graphs from conversations.
+  return `${getSystemPrompt("blobOrchestrator")}
 
 ## Context
 User message: "${req.userMessage}"

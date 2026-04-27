@@ -21,7 +21,7 @@ export interface ToolPermissions {
 export interface LLMProvider {
   id: string;
   name: string;
-  type: "claude" | "openrouter" | "openai" | "ollama" | "huggingface" | "custom";
+  type: "claude" | "codex" | "openrouter" | "openai" | "ollama" | "huggingface" | "custom";
   apiKey: string;
   baseUrl: string;
   defaultModel?: string;
@@ -718,10 +718,28 @@ async function streamOpenAIResponse(
 export async function testProvider(id: string): Promise<{ ok: boolean; error?: string; models?: string[] }> {
   const provider = providers.get(id);
   if (!provider) return { ok: false, error: "Provider not found" };
-  if (provider.type !== "ollama" && provider.type !== "huggingface" && !provider.apiKey) return { ok: false, error: "No API key configured" };
+  // Codex CLI handles its own auth (codex login / OAuth), Ollama is local,
+  // HuggingFace can run anonymously — none of these need an OCC-stored key.
+  if (provider.type !== "ollama" && provider.type !== "huggingface" && provider.type !== "codex" && !provider.apiKey) {
+    return { ok: false, error: "No API key configured" };
+  }
 
   if (provider.type === "claude") {
     return { ok: true, models: provider.models };
+  }
+
+  // Codex CLI is a local subprocess. We can't test connectivity via HTTP —
+  // we just verify the binary is on PATH. Models list comes from provider config.
+  if (provider.type === "codex") {
+    try {
+      const { isCodexAvailable, validateCodexBinary } = await import("./codex-runner.js");
+      if (!isCodexAvailable()) validateCodexBinary();
+      return isCodexAvailable()
+        ? { ok: true, models: provider.models }
+        : { ok: false, error: "Codex CLI not found in PATH. Install via 'npm install -g @openai/codex' or set CODEX_CLI env var." };
+    } catch (err) {
+      return { ok: false, error: `Codex check failed: ${(err as Error).message}` };
+    }
   }
 
   // Ollama: use /api/tags to discover models

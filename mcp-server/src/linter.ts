@@ -150,7 +150,7 @@ export function lintChain(chain: ChainDefinition): LintIssue[] {
       if (pt.type === "read_file" && !pt.path) {
         issues.push({ level: "error", stepId: step.id, message: `Pre-tool read_file missing "path"` });
       }
-      if (pt.type === "bash" && !pt.command) {
+      if (pt.type === "bash" && !pt.command && !pt.query) {
         issues.push({ level: "error", stepId: step.id, message: `Pre-tool bash missing "command"` });
       }
       if (pt.type === "env_var" && !pt.var_name) {

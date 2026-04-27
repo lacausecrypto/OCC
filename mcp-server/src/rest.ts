@@ -22,8 +22,9 @@ import {
   sanitizeName,
 } from "./loader.js";
 import { executeChain, getExecution, getAllExecutions, cancelExecution, loadPersistedExecutions, resumeExecution, approveGate, getPendingApprovals, validateClaudeBinary, canStartExecution, getRunningExecutionCount, getExecutionTimeline } from "./executor.js";
-import { getChainStats, createVersion, listVersions, getVersion, deleteVersion as deleteVersionFromDb, countVersions, saveExecution, checkpointStep } from "./storage.js";
+import { getChainStats, createVersion, listVersions, getVersion, deleteVersion as deleteVersionFromDb, countVersions, saveExecution, checkpointStep, listExecutions as listExecutionsFromDb } from "./storage.js";
 import { loadMcpServers, discoverTools, getConfiguredServers, getMcpConfig, saveMcpConfig, closeMcpClients } from "./mcp-client.js";
+import { getSystemPrompt, getSystemPrompts, saveSystemPrompts, resetSystemPrompts, DEFAULT_PROMPTS, type SystemPromptKey } from "./system-prompts.js";
 import { closeStorage } from "./storage.js";
 import { initQueue, enqueue, getQueueJob, listQueueJobs, listQueueByStatus, cancelQueueJob, getQueueStats, purgeOldJobs, closeQueue } from "./queue.js";
 import {
@@ -268,6 +269,69 @@ app.get("/proxy", async (req, res) => {
     res.send(buf);
   } catch (err) {
     res.status(502).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// ─── Interactive portal sessions (Playwright + WebSocket screencast) ────────
+// Companion to the static /portal proxy below. These endpoints power the
+// "interactive" mode of canvas Portal nodes: a real Chromium running on the
+// backend, streamed to the frontend over WebSocket. Use this for sites that
+// need a real session (login, SPAs that call cross-origin APIs, etc.).
+//
+// Lifecycle:
+//   POST   /portal/session              → create session
+//   GET    /portal/sessions             → list active sessions
+//   POST   /portal/session/:id/navigate → change url inside an existing session
+//   DELETE /portal/session/:id          → close session (persists storageState)
+// WebSocket channels are mounted on the same server (see portal-ws.ts).
+
+app.post("/portal/session", async (req, res) => {
+  try {
+    const { url, persistKey, viewport } = req.body as {
+      url: string;
+      persistKey?: string;
+      viewport?: { width: number; height: number };
+    };
+    if (!url) return res.status(400).json({ error: "url required" });
+    await checkSSRF(url);
+    const { createPortalSession } = await import("./portal-sessions.js");
+    const session = await createPortalSession({ url, persistKey, viewport });
+    res.json({
+      sessionId: session.id,
+      url: session.currentUrl,
+      viewport: session.viewport,
+      persistKey: session.persistKey,
+    });
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+app.get("/portal/sessions", async (_req, res) => {
+  const { listPortalSessions } = await import("./portal-sessions.js");
+  res.json(listPortalSessions());
+});
+
+app.post("/portal/session/:id/navigate", async (req, res) => {
+  try {
+    const { url } = req.body as { url: string };
+    if (!url) return res.status(400).json({ error: "url required" });
+    await checkSSRF(url);
+    const { navigatePortalSession } = await import("./portal-sessions.js");
+    await navigatePortalSession(req.params.id, url);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+app.delete("/portal/session/:id", async (req, res) => {
+  try {
+    const { closePortalSession } = await import("./portal-sessions.js");
+    await closePortalSession(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -629,7 +693,10 @@ app.get("/executions/token-usage-detailed", async (req, res) => {
   cutoff.setDate(cutoff.getDate() - days);
   const cutoffStr = cutoff.toISOString();
 
-  const all = getAllExecutions();
+  // Read from SQLite — source of truth. The in-memory map (getAllExecutions)
+  // is a runtime cache populated only by chain/pipeline runs, so blob-chat,
+  // agent-chat and workflow-chat token rows would be missed if we read it.
+  const all = listExecutionsFromDb(1000, 0);
 
   // Per-day, per-source breakdown
   const dayMap = new Map<string, {
@@ -637,6 +704,7 @@ app.get("/executions/token-usage-detailed", async (req, res) => {
     pipelines: { input: number; output: number; count: number };
     blob: { input: number; output: number; count: number };
     workflowChat: { input: number; output: number; count: number };
+    agentChat: { input: number; output: number; count: number };
   }>();
   // Per-chain totals
   const chainTotals = new Map<string, { input: number; output: number; count: number }>();
@@ -651,6 +719,7 @@ app.get("/executions/token-usage-detailed", async (req, res) => {
       pipelines: { input: 0, output: 0, count: 0 },
       blob: { input: 0, output: 0, count: 0 },
       workflowChat: { input: 0, output: 0, count: 0 },
+      agentChat: { input: 0, output: 0, count: 0 },
     };
 
     let stepInput = 0, stepOutput = 0;
@@ -664,12 +733,17 @@ app.get("/executions/token-usage-detailed", async (req, res) => {
 
     // Classify source
     const isWorkflowChat = exec.id.startsWith("wfc_") || exec.chainName === "_workflow_chat";
+    const isAgentChat = exec.id.startsWith("agent_chat_") || exec.chainName === "_agent_chat";
     const isBlob = exec.id.startsWith("blob_") || exec.chainName.startsWith("blob_");
     const isPipeline = exec.chainName.includes("|") || exec.id.includes("pipeline_");
     if (isWorkflowChat) {
       entry.workflowChat.input += stepInput;
       entry.workflowChat.output += stepOutput;
       entry.workflowChat.count++;
+    } else if (isAgentChat) {
+      entry.agentChat.input += stepInput;
+      entry.agentChat.output += stepOutput;
+      entry.agentChat.count++;
     } else if (isBlob) {
       entry.blob.input += stepInput;
       entry.blob.output += stepOutput;
@@ -708,6 +782,7 @@ app.get("/executions/token-usage-detailed", async (req, res) => {
               pipelines: { input: 0, output: 0, count: 0 },
               blob: { input: 0, output: 0, count: 0 },
               workflowChat: { input: 0, output: 0, count: 0 },
+              agentChat: { input: 0, output: 0, count: 0 },
             };
             const inp = node.data.inputTokens ?? 0;
             const out = node.data.outputTokens ?? 0;
@@ -1617,6 +1692,41 @@ app.get("/providers", (_req, res) => res.json(listProviders()));
 // GET /providers/models → all models across all enabled providers
 app.get("/providers/models", (_req, res) => res.json(getAllModels()));
 
+// ─── System prompts (configurable per agent context) ─────────────────────
+// GET /system-prompts → current prompts (with built-in defaults visible)
+app.get("/system-prompts", (_req, res) => {
+  res.json({
+    current: getSystemPrompts(),
+    defaults: DEFAULT_PROMPTS,
+  });
+});
+
+// PUT /system-prompts → save patch (only fields present in body are updated)
+app.put("/system-prompts", (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    // Validate: only accept known keys with string values
+    const ALLOWED: SystemPromptKey[] = [
+      "blobChat", "blobOrchestrator", "terminalAgent",
+      "workflowChat", "workflowPlan", "stepDefault",
+    ];
+    const patch: Partial<Record<SystemPromptKey, string>> = {};
+    for (const k of ALLOWED) {
+      if (typeof body[k] === "string") patch[k] = body[k] as string;
+    }
+    const next = saveSystemPrompts(patch);
+    res.json({ ok: true, current: next });
+  } catch (err) {
+    res.status(400).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// POST /system-prompts/reset → revert to built-in defaults
+app.post("/system-prompts/reset", (_req, res) => {
+  const next = resetSystemPrompts();
+  res.json({ ok: true, current: next });
+});
+
 // GET /providers/:id → single provider detail
 app.get("/providers/:id", (req, res) => {
   const p = getProvider(req.params.id);
@@ -2178,8 +2288,14 @@ app.post("/blobs/:id/chat", async (req, res) => {
       }
     } catch { /* knowledge may not exist */ }
 
-    const defaultPrompt = `You are the BLOB — an organic AI assistant that lives on an infinite canvas. You help users by growing branches of workflows, research chains, and knowledge graphs. Be concise and helpful. When the user's request requires real work (research, code, analysis), tell them what you'll build. For simple questions, answer directly.${mcpSection}${knowledgeSection}`;
-    const systemPrompt = customSystemPrompt ? `${defaultPrompt}\n\n## Custom Instructions\n${customSystemPrompt}` : defaultPrompt;
+    // Read the configurable BLOB persona; append MCP/knowledge sections.
+    const blobPersona = `${getSystemPrompt("blobChat")}${mcpSection}${knowledgeSection}`;
+    // The persona is ALWAYS used here (this endpoint is BLOB-specific).
+    // Any client-provided customSystemPrompt is appended as additional
+    // instructions, never replacing the persona.
+    const systemPrompt = customSystemPrompt
+      ? `${blobPersona}\n\n## Custom Instructions\n${customSystemPrompt}`
+      : blobPersona;
 
     // Build conversation context with budget limit
     const maxChatCtx = parseInt(process.env.MAX_CHAT_CONTEXT_CHARS ?? "8000", 10);
@@ -2222,9 +2338,105 @@ app.post("/blobs/:id/chat", async (req, res) => {
       durationMs: result.durationMs ?? 0,
     });
 
+    // Persist to SQLite so the token-usage dashboard sees BLOB chat traffic.
+    // Each turn gets its own execution row keyed by timestamp — the dashboard
+    // groups by chainName ("blob_<id>") so they aggregate per session.
+    try {
+      const turnExecId = `${blobExecId}_${startTime}`;
+      saveExecution({ id: turnExecId, chainName: blobExecId, status: "done", input: {}, steps: {}, startedAt: new Date(startTime).toISOString(), finishedAt: new Date().toISOString(), durationMs: Date.now() - startTime });
+      checkpointStep(turnExecId, { stepId: "chat", status: "done", inputTokens: result.inputTokens ?? 0, outputTokens: result.outputTokens ?? 0 });
+    } catch { /* non-critical */ }
+
     emitSSE(blobExecId, { type: "execution_done", executionId: blobExecId, result: "Chat complete", durationMs: Date.now() - startTime, timestamp: new Date().toISOString() });
   } catch (err) {
     emitSSE(blobExecId, { type: "step_error", executionId: blobExecId, stepId: "chat", error: (err as Error).message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+// POST /agent-chat — generic agent chat (no BLOB persona, no knowledge graph,
+// multi-provider routing via runStepWithRetry). Used by canvas Terminal Agent
+// nodes and any other free-form LLM agent that should NOT impersonate the BLOB.
+//
+// Body:
+//   { message: string,
+//     context?: Array<{ role, content }>,    // prior conversation turns
+//     systemPrompt?: string,                  // override the default terminalAgent prompt
+//     model?: string,                         // e.g. "gpt-5.4", "claude-sonnet-4-6"
+//     provider?: string }                     // explicit provider id (optional)
+// Returns:
+//   { text, inputTokens, outputTokens, durationMs }
+app.post("/agent-chat", async (req, res) => {
+  const { message, context, systemPrompt, model, provider } = req.body as {
+    message: string;
+    context?: Array<{ role: string; content: string }>;
+    systemPrompt?: string;
+    model?: string;
+    provider?: string;
+  };
+  if (!message) return res.status(400).json({ error: "message required" });
+
+  const startTime = Date.now();
+  const execId = `agent_chat_${startTime}`;
+  try {
+    const { runStepWithRetry } = await import("./claude-runner.js");
+
+    // Use the configurable terminalAgent prompt as default; client override wins.
+    const sys = systemPrompt && systemPrompt.trim().length > 0
+      ? systemPrompt
+      : getSystemPrompt("terminalAgent");
+
+    // Trim context to a reasonable budget
+    const maxCtx = parseInt(process.env.AGENT_CHAT_CONTEXT_CHARS ?? "12000", 10);
+    let ctxMsgs = context ?? [];
+    if (maxCtx > 0 && ctxMsgs.length > 0) {
+      let total = ctxMsgs.reduce((s, m) => s + m.role.length + m.content.length + 3, 0);
+      while (total > maxCtx && ctxMsgs.length > 1) {
+        const removed = ctxMsgs[0];
+        total -= removed.role.length + removed.content.length + 3;
+        ctxMsgs = ctxMsgs.slice(1);
+      }
+    }
+    const ctxStr = ctxMsgs.map((m) => `${m.role}: ${m.content}`).join("\n");
+    const fullPrompt = ctxStr
+      ? `${sys}\n\nConversation:\n${ctxStr}\nuser: ${message}\nassistant:`
+      : `${sys}\n\nuser: ${message}\nassistant:`;
+
+    let text = "";
+    const stepShim = {
+      id: "agent-chat",
+      type: "agent" as const,
+      model: model ?? "claude-sonnet-4-6",
+      prompt: "",
+      tools: [],
+      output_var: "_chat",
+      pre_tools: [],
+      provider, // consumed by resolveProvider in runStepWithRetry
+    };
+
+    const result = await runStepWithRetry(
+      stepShim as Parameters<typeof runStepWithRetry>[0],
+      fullPrompt,
+      (chunk) => { text += chunk; },
+      execId,
+      (msg, level) => logger[level]("agent-chat", msg),
+    );
+
+    res.json({
+      text,
+      inputTokens: result.inputTokens ?? 0,
+      outputTokens: result.outputTokens ?? 0,
+      durationMs: result.durationMs ?? 0,
+    });
+
+    // Persist to SQLite so the token-usage dashboard sees Terminal Agent traffic.
+    // chainName "_agent_chat" lets the dashboard classify these the same way it
+    // classifies "_workflow_chat".
+    try {
+      saveExecution({ id: execId, chainName: "_agent_chat", status: "done", input: {}, steps: {}, startedAt: new Date(startTime).toISOString(), finishedAt: new Date().toISOString(), durationMs: Date.now() - startTime });
+      checkpointStep(execId, { stepId: "chat", status: "done", inputTokens: result.inputTokens ?? 0, outputTokens: result.outputTokens ?? 0 });
+    } catch { /* non-critical */ }
+  } catch (err) {
     res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
@@ -2552,10 +2764,7 @@ app.post("/workflow-chat", async (req: Request, res: Response) => {
 
   const sysPrompt = systemPrompt
     ? `${systemPrompt}\n\nRespond based on the conversation above.`
-    : (stage === "chat"
-      ? "You are a helpful workflow architect AI. Help the user design their chain."
-      : "You are a chain planner. Output ONLY valid JSON."
-    );
+    : getSystemPrompt(stage === "chat" ? "workflowChat" : "workflowPlan");
 
   const step = {
     id: `_wf_${stage}`,
@@ -3129,7 +3338,14 @@ if (HOST === "0.0.0.0" && !API_KEY) {
 
 const server = app.listen(PORT, HOST, () => {
   logger.info("occ-rest", `Listening on http://${HOST}:${PORT}`, { host: HOST, port: PORT, auth: !!API_KEY, cors: CORS_ORIGIN });
+
+  // Mount portal WebSocket handlers on the same server so the upgrade event
+  // routes screencast + input traffic to the Playwright session manager.
+  void import("./portal-ws.js").then((m) => m.attachPortalWebSockets(server));
   validateClaudeBinary();
+  // Optional: codex CLI is only required if a codex provider is configured.
+  // Validation logs INFO if missing (not WARNING), provider just won't work.
+  void import("./codex-runner.js").then((m) => m.validateCodexBinary());
   loadMcpServers();
   loadPersistedExecutions();
   startAutonomousEngine();
@@ -3192,6 +3408,11 @@ async function shutdown() {
   try { await closeMcpClients(); } catch {}
   try { closeStorage(); } catch {}
   try { const { closeExtraDbs } = await import("./pretool-extras.js"); closeExtraDbs(); } catch {}
+  // 4b. Close all interactive portal sessions (persists storageState first)
+  try {
+    const { closeAllPortalSessions } = await import("./portal-sessions.js");
+    await closeAllPortalSessions();
+  } catch {}
   // 5. Allow 3s for in-flight requests to finish, then exit
   if (!process.env.VITEST) {
     setTimeout(() => process.exit(0), 3000);

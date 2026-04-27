@@ -140,6 +140,7 @@ function buildMocks() {
     countVersions: vi.fn(() => 3),
     saveExecution: vi.fn(),
     checkpointStep: vi.fn(),
+    listExecutions: vi.fn(() => [...executions.values()]),
     closeStorage: vi.fn(),
     db: { exec: vi.fn() },
   };
