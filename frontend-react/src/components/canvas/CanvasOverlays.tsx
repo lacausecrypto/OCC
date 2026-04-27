@@ -121,18 +121,28 @@ function toPlaywrightKey(e: KeyboardEvent): string {
 }
 
 function InteractivePortalOverlayItem({ node, camera }: { node: CanvasNode; camera: { x: number; y: number; zoom: number } }) {
-  const url = node.portalUrl ?? "";
   const persistKey = node.portalPersistKey ?? node.id;
   const updateNode = useCanvasStore((s) => s.updateNode);
 
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  // The URL the session is BOUND to — captured once on mount. We do NOT
+  // recreate the session when the page navigates (which is what was killing
+  // the X.com login flow: every redirect inside the auth funnel was reported
+  // as a new url, the node.portalUrl was updated, the effect re-ran, and the
+  // session was torn down with the half-typed input).
+  // The component is keyed by `node.id` in the parent, so a fresh node always
+  // remounts. To re-bind to a new URL, the user navigates via the address
+  // bar (uses navigatePortalSession on the existing session, no remount).
+  const initialUrl = useRef(node.portalUrl ?? "").current;
+
   const [status, setStatus] = useState<"idle" | "starting" | "live" | "error" | "closed">("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [addressDraft, setAddressDraft] = useState<string>(url);
+  const [addressDraft, setAddressDraft] = useState<string>(initialUrl);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const screencastRef = useRef<WebSocket | null>(null);
   const inputRef = useRef<WebSocket | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const lastUrlRef = useRef<string>(initialUrl);
   const viewportRef = useRef({ w: 1280, h: 720 });
   const focusedRef = useRef(false);
 
@@ -141,9 +151,9 @@ function InteractivePortalOverlayItem({ node, camera }: { node: CanvasNode; came
   const nativeW = node.w;
   const nativeH = node.h - HEADER_H - TOOLBAR_H;
 
-  // ── Lifecycle: create session → open both WS, close on unmount/url change ──
+  // ── Lifecycle: create session ONCE per node, close on unmount ─────────────
   useEffect(() => {
-    if (!url) return;
+    if (!initialUrl) return;
     let cancelled = false;
     setStatus("starting");
     setErrorMsg(null);
@@ -151,7 +161,7 @@ function InteractivePortalOverlayItem({ node, camera }: { node: CanvasNode; came
     (async () => {
       try {
         const info = await createPortalSession({
-          url,
+          url: initialUrl,
           persistKey,
           viewport: { width: nativeW, height: Math.max(360, nativeH) },
         });
@@ -160,8 +170,9 @@ function InteractivePortalOverlayItem({ node, camera }: { node: CanvasNode; came
           await closePortalSession(info.sessionId);
           return;
         }
-        setSessionId(info.sessionId);
+        sessionIdRef.current = info.sessionId;
         setAddressDraft(info.url);
+        lastUrlRef.current = info.url;
         viewportRef.current = { w: info.viewport.width, h: info.viewport.height };
 
         // Screencast WS
@@ -186,8 +197,12 @@ function InteractivePortalOverlayItem({ node, camera }: { node: CanvasNode; came
             };
             img.src = `data:image/jpeg;base64,${msg.data}`;
           } else if (msg.type === "url") {
+            // Display-only update — do NOT write back to node.portalUrl
+            // (that would change the effect's dep and tear down the session).
+            // The latest URL is captured in lastUrlRef and persisted to the
+            // node only at unmount, so it survives reload as a bookmark.
             setAddressDraft(msg.url);
-            updateNode(node.id, { portalUrl: msg.url });
+            lastUrlRef.current = msg.url;
           } else if (msg.type === "error") {
             setStatus("error");
             setErrorMsg(msg.error);
@@ -211,13 +226,21 @@ function InteractivePortalOverlayItem({ node, camera }: { node: CanvasNode; came
       cancelled = true;
       try { screencastRef.current?.close(); } catch { /* ignore */ }
       try { inputRef.current?.close(); } catch { /* ignore */ }
-      // Closing the session triggers storageState persistence on the backend.
-      if (sessionId) void closePortalSession(sessionId);
+      const sid = sessionIdRef.current;
+      if (sid) void closePortalSession(sid);
+      // Save the last visited URL as the node's bookmark so a reload reopens
+      // where the user left off. Avoid clobbering a user-intentional URL with
+      // login-flow detours: only persist if it's still on the same origin.
+      const last = lastUrlRef.current;
+      if (last && last !== initialUrl) {
+        try {
+          const sameOrigin = new URL(last).origin === new URL(initialUrl).origin;
+          if (sameOrigin) updateNode(node.id, { portalUrl: last });
+        } catch { /* invalid URL — ignore */ }
+      }
     };
-    // We deliberately key the effect on the URL & persistKey only — resizing
-    // the node should NOT recreate the session (the viewport persists).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, persistKey]);
+  }, []); // mount-only — see initialUrl comment above
 
   // ── Pointer + key forwarding ──────────────────────────────────────────────
 
@@ -266,14 +289,16 @@ function InteractivePortalOverlayItem({ node, camera }: { node: CanvasNode; came
     let target = addressDraft.trim();
     if (!target) return;
     if (!/^https?:\/\//.test(target)) target = "https://" + target;
-    if (!sessionId) return;
+    const sid = sessionIdRef.current;
+    if (!sid) return;
     try {
-      await navigatePortalSession(sessionId, target);
+      await navigatePortalSession(sid, target);
+      // The user explicitly typed this URL — safe to bookmark on the node.
       updateNode(node.id, { portalUrl: target });
     } catch (err) {
       setErrorMsg((err as Error).message);
     }
-  }, [addressDraft, sessionId, node.id, updateNode]);
+  }, [addressDraft, node.id, updateNode]);
 
   // ── Layout ────────────────────────────────────────────────────────────────
 
