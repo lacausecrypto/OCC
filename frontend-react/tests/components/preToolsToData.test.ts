@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { preToolsToData } from "../../src/components/canvas/StepEditModal";
+import { preToolsToData } from "../../src/components/canvas/preToolsToData";
 import type { PreTool } from "../../src/types/chain";
 
 // `preToolsToData` adapts the canonical PreTool shape (saved on a CanvasNode

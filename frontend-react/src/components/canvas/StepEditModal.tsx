@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useCanvasStore } from "../../stores/canvas";
 import { ModalOverlay } from "../modals/ModalOverlay";
 import { PreToolCard, type PreToolData } from "./PreToolCard";
+import { preToolsToData } from "./preToolsToData";
 import {
   STEP_TYPES,
   MODELS as DEFAULT_MODELS,
@@ -16,20 +17,6 @@ import modalStyles from "../modals/Modal.module.css";
 interface StepEditModalProps {
   nodeId: string;
   onClose: () => void;
-}
-
-/** Convert PreTool[] (string | object) to PreToolData[] for editing */
-export function preToolsToData(preTools: PreTool[]): PreToolData[] {
-  return preTools.map((pt) => {
-    if (typeof pt === "string") {
-      return { tool: pt, inject_as: pt + "_data" };
-    }
-    return {
-      ...pt,
-      tool: pt.tool,
-      inject_as: pt.inject_as ?? pt.tool + "_data",
-    } as PreToolData;
-  });
 }
 
 interface ProviderModel {
