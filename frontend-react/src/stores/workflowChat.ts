@@ -903,7 +903,7 @@ useWorkflowChatStore.subscribe((state) => {
 
 // ─── Action executor ────────────────────────────────────────────────────────
 
-async function executeDetectedActions(
+export async function executeDetectedActions(
   fullText: string,
   get: () => WorkflowChatState,
   set: (partial: Partial<WorkflowChatState> | ((s: WorkflowChatState) => Partial<WorkflowChatState>)) => void,
