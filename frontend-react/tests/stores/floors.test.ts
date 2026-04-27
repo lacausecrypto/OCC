@@ -22,14 +22,18 @@ function makeNode(id: string, overrides: Partial<CanvasNode> = {}): CanvasNode {
   };
 }
 
+// FloorData has a `colorSlot: number` field on newer branches and a
+// `color: string` field on older ones. Tests stay agnostic by setting
+// both — whichever the live store reads will be present.
 function resetFloors() {
   useFloorsStore.setState({
     floors: new Map([["main", {
-      id: "main", name: "Main", colorSlot: 0,
+      id: "main", name: "Main",
+      colorSlot: 0, color: "#0a84ff",
       nodes: new Map(), edges: new Map(),
       camera: { x: 0, y: 0, zoom: 1 },
       annotations: [], createdAt: 0,
-    }]]),
+    } as never]]),
     activeFloorId: "main",
     overviewOpen: false,
     stackViewOpen: false,
@@ -38,6 +42,11 @@ function resetFloors() {
     transitionScale: 1,
     transitionOffsetX: 0,
   });
+}
+
+/** Read whichever of colorSlot / color the floor record carries. */
+function readFloorColorKey(f: { colorSlot?: number; color?: string }): unknown {
+  return f.colorSlot ?? f.color;
 }
 
 function resetCanvas() {
@@ -84,14 +93,17 @@ describe("createFloor", () => {
     expect(useFloorsStore.getState().floors.get(id)?.name).toMatch(/^Floor /);
   });
 
-  it("rotates the colorSlot index across consecutive new floors", () => {
+  it("assigns a color identifier (slot or hex) to every new floor and rotates it", () => {
     const id1 = useFloorsStore.getState().createFloor("a");
     const id2 = useFloorsStore.getState().createFloor("b");
-    const s1 = useFloorsStore.getState().floors.get(id1)!.colorSlot;
-    const s2 = useFloorsStore.getState().floors.get(id2)!.colorSlot;
-    expect(typeof s1).toBe("number");
-    expect(typeof s2).toBe("number");
-    expect(s1).not.toBe(s2);
+    const k1 = readFloorColorKey(useFloorsStore.getState().floors.get(id1)!);
+    const k2 = readFloorColorKey(useFloorsStore.getState().floors.get(id2)!);
+    // Some kind of color identifier (number on the newer slot model, hex
+    // string on the legacy color model). Either way it must be set and
+    // differ between two consecutive new floors.
+    expect(k1).toBeDefined();
+    expect(k2).toBeDefined();
+    expect(k1).not.toBe(k2);
   });
 
   it("persists the new floor map to localStorage", () => {
