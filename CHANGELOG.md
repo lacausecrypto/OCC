@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.2.0] - 2026-04-27
+
+### Added
+- **Interactive Portal canvas item (Playwright + WebSocket screencast)** — companion to the existing static `/portal?url=…` proxy. Lazy-launches a shared Chromium and creates one `BrowserContext` per session (cookie jar + storageState persisted per `persistKey` so logins survive). Two WebSocket channels per session: `/portal/:id/screencast` streams JPEG frames + url notifications, `/portal/:id/input` accepts mouse / keyboard / wheel events normalized to 0..1 viewport coords. New REST endpoints: `POST /portal/session`, `GET /portal/sessions`, `POST /portal/session/:id/navigate`, `DELETE /portal/session/:id`. Frontend `CanvasOverlays` now picks between `StaticPortalOverlayItem` (iframe) and `InteractivePortalOverlayItem` based on `node.portalMode`.
+- **Codex CLI runner** (`mcp-server/src/codex-runner.ts`) — mirrors `claude-runner.ts`. Spawns `codex exec --json -m <model> -- <prompt>`, streams JSON-line events, captures token usage. Plumbed into `providers.ts` as a new `"codex"` provider type — auth handled by the CLI itself (`codex login` / OAuth) so OCC stores no API key.
+- **Customizable system prompts** (`mcp-server/src/system-prompts.ts`) — JSON-backed prompts file with hot-reload. Six contexts: `blobChat`, `blobOrchestrator`, `agentChat`, `workflowChatChat`, `workflowChatPlanner`, `terminalAgent`. New REST endpoints: `GET /system-prompts`, `PUT /system-prompts`, `POST /system-prompts/reset`. Frontend `Settings/SystemPromptsSection.tsx` lets the user edit each prompt with live diff against built-in defaults and a per-prompt reset button.
+- **Generic `/agent-chat` endpoint** — multi-provider chat without the BLOB persona / knowledge graph. The canvas Terminal Agent now uses this endpoint so each terminal can pick its own provider+model independent of the BLOB chat stack.
+- **Execution time-travel** — `GET /executions/:id/timeline` returns per-step checkpoint history (status, durations, token counts). Frontend `ExecResultModal` gains a Replay tab driven by `fetchExecutionTimeline`.
+- **Pipelines from a single canvas** — `canvasToPipelineChains` decomposes a multi-stage canvas (pipeline-stage subchain references) into `PipelineChainRef[]`; `SaveChainModal` detects pipeline canvases via `isPipelineCanvas` and routes the save through `savePipeline` + `buildPipelineDefinition`. New `summarize_output` field on `PipelineChainRef` (true / N / undefined) controls how a stage's output flows downstream.
+- **Floor color slot palette** — replaces the hardcoded `color: "#hex"` field on `FloorData` with a `colorSlot: 0..6` index into a design-space-derived palette (`utils/floorColors.ts`). Slot resolves to a real hex via `getComputedStyle` at render time, so floor colors stay in sync with the active theme / accent / dark mode. Persistence layer auto-migrates legacy hex records via `inferSlotFromHex`.
+- **Collapsible Settings sections** (`Collapsible.tsx` + `collapse-state.ts`) — animated foldable wrapper with state persisted in localStorage so panels stay collapsed across reloads.
+- **Per-chain context budget** (`max_context_chars`) — older variables auto-summarized via Haiku above the threshold. Falls back to a global default.
+- **Browser step advanced fields** — `browser_port`, `browser_page_name`, `browser_scroll_strategy`, `browser_cookies_domain` on `StepAdvancedConfig` (companion to the Playwright-based browser step).
+- **`image_gen` step type + `image_generate` pre-tool** — provider/model/size/format/quality/style/negative_prompt fields in `pretoolFields.ts`, OpenAI / HuggingFace / Stability dispatch routes. New step type icon (picture frame with mountain + sun) in `nodeIcons.ts`.
+- **Canvas-only chains** — chains with zero steps and one or more non-step canvas items (Portal / Sticky / Terminal / File Viewer / Link Bookmark / Free Text / Obsidian) save and reload exactly. New `canvas_items?: CanvasItemSerialized[]` side-car on `ChainDefinition`. The loader's Zod schema accepts empty `steps`, the executor refuses to run them with a clear "open in canvas editor" error.
+
+### Changed
+- **`canvasToYaml` emits `steps: []` placeholder** that's promoted to a real sequence header only when at least one step block is emitted (empty `steps:` parses as null and broke the loader). `output:` is now only emitted when there are steps. Non-step nodes flow into the new `canvas_items:` block.
+- **`stores/canvas.ts loadChainToCanvas`** restores `canvas_items` BEFORE steps so reloaded portals/stickies/etc. don't end up under a re-laid-out step grid.
+- **`mcp-server/src/loader.ts ChainSchema`** — `steps` and `output` are now optional with defaults; new `CanvasItemSchema` is `passthrough` to tolerate forward-compatible extras.
+- **`Settings.tsx` SOURCES** — `agentChat` added to the TokenDashboard chart sources.
+- **`TerminalOverlay.tsx`** — calls `/agent-chat` instead of `/blobs/:id/chat` so each terminal is provider-pickable, independent of the BLOB chat stack.
+- **+50 tests in Phase 2** (1233 total): `physarumSim` (16), `blobRenderer` (15), `workflowChat-actions` (19) covering `[ACTION:ANALYZE/MODIFY/RUN]`. Frontend coverage bumped from 43.9% → 49.4% statements.
+- **+108 tests in Phase 1** (1183 total): `floors` (29), `workflowChat-sessions` (29), `useCanvasInteractions-extra` (29), `canvasRenderer-render` (21). Frontend coverage went from 34.7% → 43.9% statements.
+- **+82 tests in Phase 1 quick-wins** (1075 total): `canvasContext` (25), `connectionHit` (15), `useCanvasInteractions` (18), `workflowChat-applyPlan` (17), `Settings.test.tsx` mock fix.
+
+### Fixed
+- **Interactive Portal: session no longer torn down on every redirect inside a multi-step auth funnel** (X.com login etc.). The lifecycle effect now binds to the URL captured once via `useRef` on mount instead of the live `node.portalUrl`. The address bar still triggers `navigatePortalSession` on the existing session without a remount; a fresh URL only requires opening a new node.
+- **`SaveChainModal` versionMessage was dropped** by a stale-closure bug in `doSave` — the typed-in note now reaches `saveChain`/`savePipeline` correctly.
+- **`executeChain` no longer crashes on zero-step chains** — early-rejected with a clear error pointing back to the canvas editor.
+
 ## [2.1.0] - 2026-04-27
 
 ### Added
