@@ -16,6 +16,8 @@ output/
 blobs/
 knowledge.json
 llm-providers.json
+system-prompts.json
+mcp-server/portal-sessions/
 
 # Local config (contains absolute paths)
 .mcp.json
