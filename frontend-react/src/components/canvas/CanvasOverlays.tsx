@@ -415,10 +415,10 @@ function InteractivePortalOverlayItem({ node, camera }: { node: CanvasNode; came
           >
             <div className={styles.portalFallbackIcon}>{"🚫"}</div>
             <div className={styles.portalFallbackText}>{errorMsg ?? "Session failed"}</div>
-            <div className={styles.portalFallbackUrl}>{url}</div>
+            <div className={styles.portalFallbackUrl}>{addressDraft || initialUrl}</div>
             <button
               className={styles.portalFallbackBtn}
-              onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+              onClick={() => window.open(addressDraft || initialUrl, "_blank", "noopener,noreferrer")}
             >
               Open in browser {"↗"}
             </button>
