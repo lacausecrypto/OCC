@@ -276,7 +276,7 @@ export function HuggingFaceSection() {
         ))}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 3 }}>
-        <span style={{ fontSize: 9, color: "var(--m-text2)", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 9, color: "var(--m-text2)", fontFamily: "var(--m-font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {m.id.split("/")[0]}
         </span>
         <button onClick={() => toggleModel(m.id)}

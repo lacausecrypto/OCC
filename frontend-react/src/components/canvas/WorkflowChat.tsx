@@ -12,8 +12,8 @@ function renderMarkdown(text: string): React.ReactElement {
   const elements: React.ReactElement[] = [];
   let inCodeBlock = false;
   let codeBuffer: string[] = [];
-  const codeStyle = { background: "var(--glass-tint)", padding: "1px 5px", borderRadius: 3, fontSize: "0.88em", fontFamily: "monospace" } as const;
-  const preStyle = { background: "var(--glass-tint)", padding: "6px 8px", borderRadius: 6, fontSize: 10, overflowX: "auto" as const, margin: "4px 0", whiteSpace: "pre-wrap" as const, fontFamily: "monospace" };
+  const codeStyle = { background: "var(--glass-tint)", padding: "1px 5px", borderRadius: 3, fontSize: "0.88em", fontFamily: "var(--m-font-mono)" } as const;
+  const preStyle = { background: "var(--glass-tint)", padding: "6px 8px", borderRadius: 6, fontSize: 10, overflowX: "auto" as const, margin: "4px 0", whiteSpace: "pre-wrap" as const, fontFamily: "var(--m-font-mono)" };
 
   /** Parse inline markdown: code first (to protect content), then bold, italic, links */
   const renderInline = (line: string, key: number): React.ReactElement => {
@@ -332,7 +332,7 @@ function ConfigPanel() {
               style={{
                 width: "100%", padding: 8, fontSize: 11, lineHeight: 1.5,
                 background: "var(--m-surface)", border: "1px solid var(--m-border)",
-                borderRadius: 6, color: "var(--m-text)", resize: "vertical", fontFamily: "monospace",
+                borderRadius: 6, color: "var(--m-text)", resize: "vertical", fontFamily: "var(--m-font-mono)",
               }} />
           </>
         ) : (
@@ -359,7 +359,7 @@ function ConfigPanel() {
               style={{
                 width: "100%", padding: 8, fontSize: 11, lineHeight: 1.5,
                 background: "var(--m-surface)", border: "1px solid var(--m-border)",
-                borderRadius: 6, color: "var(--m-text)", resize: "vertical", fontFamily: "monospace",
+                borderRadius: 6, color: "var(--m-text)", resize: "vertical", fontFamily: "var(--m-font-mono)",
               }} />
           </>
         )}

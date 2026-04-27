@@ -36,10 +36,16 @@
   --m-gap: 16px;
   --m-padding: 20px;
   --m-border-width: 1px;
+  /* System font + emoji/symbol fallbacks. Without the symbol fonts at the
+     tail, glyphs like ⏸ ⚡ ↺ ▶ render as missing-glyph "tofu" boxes when the
+     primary monospace font lacks them (Fira Code, SF Mono partial coverage). */
   --m-font: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui,
-    sans-serif;
-  --m-font-mono: "SF Mono", "Fira Code", "JetBrains Mono", "Consolas",
-    monospace;
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji";
+  --m-font-mono: ui-monospace, "SF Mono", "Fira Code", "JetBrains Mono",
+    "Consolas", "Liberation Mono", monospace, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Apple Symbols", "Symbola",
+    "Noto Color Emoji";
 
   /* Semantic size scale */
   --s-xs: calc(var(--m-body-size) * 0.7);

@@ -435,7 +435,7 @@ export function RunModal({ name, type, onClose, onExecuted }: RunModalProps) {
               value={val}
               onChange={(e) => setValue(inp.name, e.target.value)}
               placeholder={placeholder || '{"key": "value"}'}
-              style={{ fontFamily: "monospace", fontSize: 11 }}
+              style={{ fontFamily: "var(--m-font-mono)", fontSize: 11 }}
             />
             {errorMsg && <div className={styles.fieldError}>{errorMsg}</div>}
           </>

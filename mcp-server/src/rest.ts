@@ -52,7 +52,19 @@ const reactDistDir = process.env.FRONTEND_DIST ?? path.join(process.cwd(), "..",
 const canvasDistDir = process.env.CANVAS_DIST ?? path.join(process.cwd(), "..", "canvas", "dist");
 const frontendDir = fs.existsSync(reactDistDir) ? reactDistDir : canvasDistDir;
 if (fs.existsSync(frontendDir)) {
-  app.use(express.static(frontendDir));
+  app.use(express.static(frontendDir, {
+    setHeaders: (res, filePath) => {
+      // index.html (and any .html) must NEVER be cached — it references
+      // hashed asset bundles that change every rebuild. A stale index.html
+      // sends browsers to removed asset hashes, they fall back to SPA
+      // index.html, and crash with "'text/html' is not a valid JS MIME type".
+      if (filePath.endsWith(".html")) {
+        res.setHeader("Cache-Control", "no-store, must-revalidate");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
+      }
+    },
+  }));
 }
 
 // ─── Rate limiting — protect execution + generation endpoints ────────────────
@@ -3073,7 +3085,19 @@ if (HOST === "0.0.0.0" && !API_KEY) {
     }
   }
   if (frontendDir) {
-    app.use(express.static(frontendDir));
+    app.use(express.static(frontendDir, {
+      setHeaders: (res, filePath) => {
+        // index.html (and any html) must NEVER be cached — it references
+        // hashed asset bundles that change every rebuild. A stale index.html
+        // causes the browser to request removed asset hashes, hit the SPA
+        // fallback, and crash with "'text/html' is not a valid JS MIME type".
+        if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "no-store, must-revalidate");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+        }
+      },
+    }));
     // SPA fallback: any route that isn't an API endpoint serves index.html
     app.get("*", (req, res, next) => {
       // Skip API-like paths (they'll 404 naturally)
@@ -3094,6 +3118,9 @@ if (HOST === "0.0.0.0" && !API_KEY) {
           req.path.startsWith("/pipeline-executions")) {
         return next();
       }
+      res.setHeader("Cache-Control", "no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       res.sendFile(path.join(frontendDir!, "index.html"));
     });
     logger.info("occ-rest", `Serving frontend from ${frontendDir}`);
