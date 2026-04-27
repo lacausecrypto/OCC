@@ -318,7 +318,7 @@ function stripBuildTag(text: string): string {
 }
 
 /** Build a rich text summary of current canvas + execution state */
-function buildCanvasContext(): string {
+export function buildCanvasContext(): string {
   const canvasState = useCanvasStore.getState();
   const appState = useAppStore.getState();
   const nodes = [...canvasState.nodes.values()];
@@ -1328,7 +1328,7 @@ async function executeDetectedActions(
 
 // ─── Apply plan to canvas ───────────────────────────────────────────────────
 
-function applyPlanToCanvas(plan: WFPlan): string[] {
+export function applyPlanToCanvas(plan: WFPlan): string[] {
   const canvas = useCanvasStore.getState();
   canvas.pushUndo();
 

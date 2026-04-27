@@ -193,6 +193,9 @@ const mockTokenUsage = {
       pipelines: { input: 1000, output: 500, count: 1 },
       blob: { input: 500, output: 200, count: 1 },
       workflowChat: { input: 300, output: 100, count: 1 },
+      // Settings.SOURCES now includes "agentChat" — TokenDashboard reads
+      // d[src].input/output for every source, so missing keys crash the chart.
+      agentChat: { input: 200, output: 50, count: 1 },
     },
   ],
   topChains: [
