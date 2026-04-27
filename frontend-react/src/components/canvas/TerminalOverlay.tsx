@@ -9,6 +9,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useCanvasStore } from "../../stores/canvas";
 import type { CanvasNode } from "../../types/canvas";
+import { buildConnectedContext } from "../../utils/canvasContext";
 import styles from "./CanvasEditor.module.css";
 
 const MIN_ZOOM_FOR_OVERLAY = 0.4;
@@ -45,13 +46,23 @@ function TerminalOverlayItem({ node, camera }: TerminalOverlayItemProps) {
         .filter((m) => m.role !== "system")
         .map((m) => ({ role: m.role, content: m.content }));
 
+      // Inject content from canvas items connected to this terminal so the
+      // agent can actually act on a Portal / File / Obsidian / Sticky etc.
+      // Read the LIVE store state (not the captured `node` closure) so edits
+      // made between messages are reflected.
+      const live = useCanvasStore.getState();
+      const connected = buildConnectedContext(node.id, live.nodes, live.edges);
+      const baseSystem = node.terminalSystemPrompt
+        || `You are ${node.terminalName ?? "an AI assistant"}. Be concise and helpful.`;
+      const systemPrompt = connected ? `${connected}\n\n${baseSystem}` : baseSystem;
+
       const res = await fetch(`/blobs/${encodeURIComponent(node.id)}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMsg,
           context: context.slice(0, -1), // exclude the just-added user message (it's in 'message')
-          systemPrompt: node.terminalSystemPrompt || `You are ${node.terminalName ?? "an AI assistant"}. Be concise and helpful.`,
+          systemPrompt,
         }),
       });
 
@@ -83,12 +94,16 @@ function TerminalOverlayItem({ node, camera }: TerminalOverlayItemProps) {
     }
   };
 
-  // Screen positioning
-  const headerH = 32;
+  // Screen positioning. We keep the terminal rendered at its NATIVE pixel
+  // size (so font, padding, header height are constants) and apply a single
+  // CSS transform: scale(zoom) at the wrapper. That way every internal
+  // dimension scales perfectly together — same approach as PortalOverlay,
+  // and avoids the per-element "* camera.zoom" mistakes that left buttons,
+  // gaps and borders drifting at different zoom levels.
   const screenX = node.x * camera.zoom + camera.x;
   const screenY = node.y * camera.zoom + camera.y;
-  const screenW = node.w * camera.zoom;
-  const screenH = node.h * camera.zoom;
+  const nativeW = node.w;
+  const nativeH = node.h;
 
   return (
     <div
@@ -96,19 +111,21 @@ function TerminalOverlayItem({ node, camera }: TerminalOverlayItemProps) {
       style={{
         left: screenX,
         top: screenY,
-        width: screenW,
-        height: screenH,
-        borderRadius: 10 * camera.zoom,
-        fontSize: Math.max(9, 12 * camera.zoom),
+        width: nativeW,
+        height: nativeH,
+        borderRadius: 10,
+        fontSize: 12,
         pointerEvents: "none",
+        transform: `scale(${camera.zoom})`,
+        transformOrigin: "0 0",
       }}
     >
       {/* Header bar — transparent to pointer events so canvas can drag the node */}
-      <div className={styles.terminalHeader} style={{ height: headerH * camera.zoom, pointerEvents: "none" }}>
-        <div className={styles.terminalTrafficLights} style={{ gap: 5 * camera.zoom }}>
-          <span style={{ width: 8 * camera.zoom, height: 8 * camera.zoom, background: "#ff5f57", borderRadius: "50%" }} />
-          <span style={{ width: 8 * camera.zoom, height: 8 * camera.zoom, background: "#febc2e", borderRadius: "50%" }} />
-          <span style={{ width: 8 * camera.zoom, height: 8 * camera.zoom, background: "#28c840", borderRadius: "50%" }} />
+      <div className={styles.terminalHeader} style={{ pointerEvents: "none" }}>
+        <div className={styles.terminalTrafficLights}>
+          <span style={{ width: 8, height: 8, background: "#ff5f57", borderRadius: "50%" }} />
+          <span style={{ width: 8, height: 8, background: "#febc2e", borderRadius: "50%" }} />
+          <span style={{ width: 8, height: 8, background: "#28c840", borderRadius: "50%" }} />
         </div>
         <span className={styles.terminalTitle}>
           {node.terminalName ?? node.terminalModel ?? "Agent"}

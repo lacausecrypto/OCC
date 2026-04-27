@@ -60,6 +60,37 @@ export function CanvasItemEditModal({
   const [terminalName, setTerminalName] = useState(existingNode?.terminalName ?? "");
   const [terminalSystemPrompt, setTerminalSystemPrompt] = useState(existingNode?.terminalSystemPrompt ?? "");
 
+  // Obsidian
+  const [obsidianVault, setObsidianVault] = useState(existingNode?.obsidianVault ?? "");
+  const [obsidianNotePath, setObsidianNotePath] = useState(existingNode?.obsidianNotePath ?? "");
+  const [obsidianContent, setObsidianContent] = useState(existingNode?.obsidianContent ?? "");
+
+  // Read a picked file via FileReader and write its name+content to local
+  // state. Works for both File Viewer and Obsidian sections — both store
+  // text content directly in the canvas node, no backend roundtrip.
+  const readFileToState = (file: File, setName: (s: string) => void, setContent: (s: string) => void) => {
+    setName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => setContent(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => setContent(`// Failed to read ${file.name}: ${reader.error?.message ?? "unknown error"}`);
+    reader.readAsText(file);
+  };
+
+  // Models discovered from the backend (`/providers/models`). Used to populate
+  // the model combobox so the user can pick instead of typing — keeps the
+  // free-form input as fallback for providers we don't enumerate (e.g.
+  // OpenRouter / OpenAI when no API key is configured locally).
+  const [providerModels, setProviderModels] = useState<{ provider: string; model: string }[]>([]);
+  useEffect(() => {
+    fetch("/providers/models")
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => { if (Array.isArray(data)) setProviderModels(data); })
+      .catch(() => { /* leave empty — input stays free-form */ });
+  }, []);
+  const modelsForProvider = providerModels
+    .filter((m) => m.provider === terminalProvider)
+    .map((m) => m.model);
+
   // Focus first input
   const firstInputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -114,6 +145,14 @@ export function CanvasItemEditModal({
           terminalName: terminalName || (terminalModel.split("/").pop() ?? "Agent"),
           terminalSystemPrompt: terminalSystemPrompt || undefined,
           terminalMessages: existingNode?.terminalMessages ?? [],
+        };
+      case "obsidian":
+        return {
+          obsidianVault: obsidianVault || undefined,
+          obsidianNotePath,
+          obsidianContent,
+          // Use the note filename as the canvas label so it's recognizable.
+          label: obsidianNotePath.split("/").pop()?.replace(/\.md$/i, "") || label,
         };
       default:
         return {};
@@ -247,14 +286,25 @@ export function CanvasItemEditModal({
           {kind === "file" && (
             <>
               <div className={styles.itemModalField}>
-                <label className={styles.itemModalLabel}>File path</label>
-                <input
-                  ref={firstInputRef as React.RefObject<HTMLInputElement>}
-                  className={styles.itemModalInput}
-                  value={filePath}
-                  onChange={(e) => setFilePath(e.target.value)}
-                  placeholder="src/index.ts"
-                />
+                <label className={styles.itemModalLabel}>File</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="file"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) readFileToState(f, setFilePath, setFileContent);
+                    }}
+                    style={{ flex: "0 0 auto" }}
+                  />
+                  <input
+                    ref={firstInputRef as React.RefObject<HTMLInputElement>}
+                    className={styles.itemModalInput}
+                    value={filePath}
+                    onChange={(e) => setFilePath(e.target.value)}
+                    placeholder="src/index.ts"
+                    style={{ flex: 1 }}
+                  />
+                </div>
               </div>
               <div className={styles.itemModalField}>
                 <label className={styles.itemModalLabel}>Content preview</label>
@@ -262,8 +312,54 @@ export function CanvasItemEditModal({
                   className={`${styles.itemModalTextarea} ${styles.itemModalMono}`}
                   value={fileContent}
                   onChange={(e) => setFileContent(e.target.value)}
-                  placeholder="// Paste file content here..."
+                  placeholder="// Paste file content or pick a file above..."
                   rows={6}
+                />
+              </div>
+            </>
+          )}
+
+          {kind === "obsidian" && (
+            <>
+              <div className={styles.itemModalField}>
+                <label className={styles.itemModalLabel}>Vault name (optional)</label>
+                <input
+                  className={styles.itemModalInput}
+                  value={obsidianVault}
+                  onChange={(e) => setObsidianVault(e.target.value)}
+                  placeholder="MyVault"
+                />
+              </div>
+              <div className={styles.itemModalField}>
+                <label className={styles.itemModalLabel}>Note (.md file)</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="file"
+                    accept=".md,.markdown,text/markdown"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) readFileToState(f, setObsidianNotePath, setObsidianContent);
+                    }}
+                    style={{ flex: "0 0 auto" }}
+                  />
+                  <input
+                    ref={firstInputRef as React.RefObject<HTMLInputElement>}
+                    className={styles.itemModalInput}
+                    value={obsidianNotePath}
+                    onChange={(e) => setObsidianNotePath(e.target.value)}
+                    placeholder="Projects/OCC.md"
+                    style={{ flex: 1 }}
+                  />
+                </div>
+              </div>
+              <div className={styles.itemModalField}>
+                <label className={styles.itemModalLabel}>Markdown content</label>
+                <textarea
+                  className={`${styles.itemModalTextarea} ${styles.itemModalMono}`}
+                  value={obsidianContent}
+                  onChange={(e) => setObsidianContent(e.target.value)}
+                  placeholder="# My note&#10;&#10;Pick a .md file above or paste content here..."
+                  rows={8}
                 />
               </div>
             </>
@@ -321,13 +417,35 @@ export function CanvasItemEditModal({
               </div>
               <div className={styles.itemModalField}>
                 <label className={styles.itemModalLabel}>Model</label>
-                <input
-                  ref={firstInputRef as React.RefObject<HTMLInputElement>}
-                  className={styles.itemModalInput}
-                  value={terminalModel}
-                  onChange={(e) => setTerminalModel(e.target.value)}
-                  placeholder="claude-sonnet-4-6"
-                />
+                {modelsForProvider.length > 0 ? (
+                  <select
+                    ref={firstInputRef as unknown as React.RefObject<HTMLSelectElement>}
+                    className={styles.itemModalSelect}
+                    value={terminalModel}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "__custom__") return; // sentinel: user typed below
+                      setTerminalModel(v);
+                    }}
+                  >
+                    {!modelsForProvider.includes(terminalModel) && terminalModel && (
+                      <option value={terminalModel}>{terminalModel} (custom)</option>
+                    )}
+                    {modelsForProvider.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                ) : (
+                  // Provider not enumerated by the backend (no API key, etc.) —
+                  // keep the free-form input so the user can still type a model.
+                  <input
+                    ref={firstInputRef as React.RefObject<HTMLInputElement>}
+                    className={styles.itemModalInput}
+                    value={terminalModel}
+                    onChange={(e) => setTerminalModel(e.target.value)}
+                    placeholder="claude-sonnet-4-6"
+                  />
+                )}
               </div>
               <div className={styles.itemModalField}>
                 <label className={styles.itemModalLabel}>Agent name</label>
@@ -396,6 +514,7 @@ function kindLabel(kind: CanvasItemKind): string {
     file: "File Viewer",
     link: "Link Bookmark",
     terminal: "Terminal Agent",
+    obsidian: "Obsidian Note",
   };
   return map[kind] ?? kind;
 }
@@ -409,6 +528,7 @@ function kindIcon(kind: CanvasItemKind): string {
     file: "\uD83D\uDCC4",
     link: "\uD83D\uDD17",
     terminal: "\uD83D\uDCBB",
+    obsidian: "\uD83D\uDCD3",
   };
   return map[kind] ?? "\u2699";
 }
@@ -422,6 +542,7 @@ function defaultLabel(kind: CanvasItemKind): string {
     file: "File",
     link: "Link",
     terminal: "Agent",
+    obsidian: "Note",
   };
   return map[kind] ?? "Item";
 }
@@ -435,6 +556,7 @@ function defaultSize(kind: CanvasItemKind): { w: number; h: number } {
     file: { w: 320, h: 240 },
     link: { w: 260, h: 48 },
     terminal: { w: 380, h: 320 },
+    obsidian: { w: 320, h: 280 },
   };
   return map[kind] ?? { w: 200, h: 100 };
 }

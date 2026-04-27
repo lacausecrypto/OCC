@@ -75,12 +75,22 @@ export interface StepAdvancedConfig {
   webhook_body?: string;
   webhook_timeout_ms?: number;
   webhook_retry?: number;
+  // Image generation
+  image_prompt?: string;          // text description of the image
+  image_provider?: "openai" | "huggingface" | "stability";
+  image_model?: string;           // e.g. "dall-e-3", "FLUX.1-schnell"
+  image_size?: string;            // e.g. "1024x1024", "1792x1024"
+  image_format?: "png" | "jpeg" | "webp";
+  image_quality?: "standard" | "hd";
+  image_style?: "vivid" | "natural";
+  image_n?: number;               // number of images
+  negative_prompt?: string;       // what to avoid (HF / Stability)
   // Guardrails
   guardrails?: Array<{ type: string; value?: string | number }>;
 }
 
 /** Discriminator for canvas item kinds */
-export type CanvasItemKind = "step" | "sticky" | "text" | "portal" | "file" | "link" | "terminal";
+export type CanvasItemKind = "step" | "sticky" | "text" | "portal" | "file" | "link" | "terminal" | "obsidian";
 
 export interface CanvasNode {
   id: string;
@@ -126,6 +136,13 @@ export interface CanvasNode {
   terminalSystemPrompt?: string;  // role instructions
   terminalMessages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   terminalName?: string;          // display name (e.g. "Claude Code", "GPT-4o")
+  // ─── Obsidian note fields ───────────────────────────────────────
+  /** Display name of the vault (purely informational — no FS access from browser). */
+  obsidianVault?: string;
+  /** Note name / relative path inside the vault (e.g. "Projects/OCC.md"). */
+  obsidianNotePath?: string;
+  /** Full markdown content — populated when the user picks a file via the modal. */
+  obsidianContent?: string;
 }
 
 export interface CanvasEdge {

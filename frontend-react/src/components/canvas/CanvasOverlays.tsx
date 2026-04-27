@@ -28,12 +28,22 @@ function PortalOverlayItem({ node, camera }: { node: CanvasNode; camera: { x: nu
     setLoadError(false);
   }, []);
 
-  // Screen positioning — body area below header bar
+  // Screen positioning — body area below header bar.
+  // Outer wrapper sits at the on-screen rectangle (zoom-clipped).
+  // The iframe inside is rendered at the node's NATIVE pixel size and then
+  // transform-scaled to match canvas zoom — otherwise sites with responsive
+  // layouts (e.g. GitHub) reflow into a mobile view when the iframe shrinks
+  // at low zoom, which is what the user reported as "weird zoom on canvas
+  // items": the terminal overlay scales its font with zoom, but the portal
+  // iframe was sized at 100% of the wrapper so its content kept native size
+  // and reflowed instead of zooming together with the rest of the canvas.
   const headerH = 28 * camera.zoom;
   const screenX = node.x * camera.zoom + camera.x;
   const screenY = node.y * camera.zoom + camera.y + headerH;
   const screenW = node.w * camera.zoom;
   const screenH = (node.h - 28) * camera.zoom;
+  const nativeW = node.w;
+  const nativeH = node.h - 28;
 
   return (
     <div
@@ -72,11 +82,13 @@ function PortalOverlayItem({ node, camera }: { node: CanvasNode; camera: { x: nu
           src={proxyUrl}
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
           style={{
-            width: "100%",
-            height: "100%",
+            width: nativeW,
+            height: nativeH,
             border: "none",
             background: "#1a1a1e",
             pointerEvents: "auto",
+            transform: `scale(${camera.zoom})`,
+            transformOrigin: "0 0",
           }}
           title={`Portal: ${url}`}
           onError={() => setLoadError(true)}

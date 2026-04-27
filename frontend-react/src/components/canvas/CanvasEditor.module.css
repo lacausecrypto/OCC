@@ -788,12 +788,13 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 32px;
   padding: 0 10px;
   background: #161b22;
   border-bottom: 1px solid #30363d;
   flex-shrink: 0;
 }
-.terminalTrafficLights { display: flex; align-items: center; }
+.terminalTrafficLights { display: flex; align-items: center; gap: 5px; }
 .terminalTitle {
   flex: 1;
   text-align: center;
@@ -839,7 +840,7 @@
   font-size: 12px;
   line-height: 1.45;
   color: #c9d1d9;
-  font-family: var(--m-mono, "SF Mono", monospace);
+  font-family: var(--m-font-mono, "SF Mono", monospace);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -874,7 +875,7 @@
   padding: 4px 8px;
   color: #c9d1d9;
   font-size: 12px;
-  font-family: var(--m-mono, "SF Mono", monospace);
+  font-family: var(--m-font-mono, "SF Mono", monospace);
   outline: none;
 }
 .terminalInputField:focus { border-color: #58a6ff; }
@@ -932,7 +933,7 @@
 .connectionPopoverMeta {
   font-size: 10px;
   color: var(--m-text2, #86868b);
-  font-family: var(--m-mono, monospace);
+  font-family: var(--m-font-mono, monospace);
 }
 .connectionPopoverActions {
   display: flex;

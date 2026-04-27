@@ -283,9 +283,9 @@ export function CanvasEditor() {
           // Add step (submenu)
           { icon: "\u2795", label: "Add Step", sub: addStepSub },
           // Add rich canvas items — open modal for each kind
-          { icon: "\u{1F4CC}", label: "Add Canvas Item", sub: (["sticky", "text", "portal", "file", "link", "terminal"] as CanvasItemKind[]).map((kind) => {
-            const icons: Record<string, string> = { sticky: "\uD83D\uDCCB", text: "\uD83D\uDCDD", portal: "\uD83C\uDF10", file: "\uD83D\uDCC4", link: "\uD83D\uDD17", terminal: "\uD83D\uDCBB" };
-            const labels: Record<string, string> = { sticky: "Sticky Note", text: "Text Block", portal: "Portal (Browser)", file: "File Viewer", link: "Link Bookmark", terminal: "Terminal (Agent)" };
+          { icon: "\u{1F4CC}", label: "Add Canvas Item", sub: (["sticky", "text", "portal", "file", "link", "terminal", "obsidian"] as CanvasItemKind[]).map((kind) => {
+            const icons: Record<string, string> = { sticky: "\uD83D\uDCCB", text: "\uD83D\uDCDD", portal: "\uD83C\uDF10", file: "\uD83D\uDCC4", link: "\uD83D\uDD17", terminal: "\uD83D\uDCBB", obsidian: "\uD83D\uDCD3" };
+            const labels: Record<string, string> = { sticky: "Sticky Note", text: "Text Block", portal: "Portal (Browser)", file: "File Viewer", link: "Link Bookmark", terminal: "Terminal (Agent)", obsidian: "Obsidian Note" };
             return {
               label: `${icons[kind] ?? ""} ${labels[kind] ?? kind}`,
               icon: "",

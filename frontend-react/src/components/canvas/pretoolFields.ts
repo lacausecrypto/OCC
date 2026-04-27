@@ -136,7 +136,7 @@ export const MODELS = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5
 
 export const STEP_TYPES = [
   "agent", "router", "evaluator", "gate", "transform",
-  "loop", "merge", "webhook", "subchain", "debate", "browser",
+  "loop", "merge", "webhook", "subchain", "debate", "browser", "image_gen",
 ];
 
 function cssVar(name: string, fb: string): string {
@@ -150,11 +150,12 @@ export function getTypeColors(): Record<string, string> {
     merge: cssVar("--icon-green", "#30d158"), webhook: cssVar("--c-warning", "#ffd60a"),
     subchain: cssVar("--icon-purple", "#6366f1"), debate: cssVar("--icon-pink", "#ff6482"),
     browser: cssVar("--m-text2", "#a1a1aa"),
+    image_gen: cssVar("--icon-pink", "#ff6b9d"),
   };
 }
 /** @deprecated Use getTypeColors() for live theme colors */
 export const TYPE_COLORS: Record<string, string> = {
   agent: "#0a84ff", router: "#bf5af2", evaluator: "#ff375f", gate: "#ff9f0a",
   transform: "#5e5ce6", loop: "#64d2ff", merge: "#30d158", webhook: "#ffd60a",
-  subchain: "#6366f1", debate: "#ff6482", browser: "#a1a1aa",
+  subchain: "#6366f1", debate: "#ff6482", browser: "#a1a1aa", image_gen: "#ff6b9d",
 };

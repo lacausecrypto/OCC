@@ -19,7 +19,7 @@ interface StepEditModalProps {
 }
 
 /** Convert PreTool[] (string | object) to PreToolData[] for editing */
-function preToolsToData(preTools: PreTool[]): PreToolData[] {
+export function preToolsToData(preTools: PreTool[]): PreToolData[] {
   return preTools.map((pt) => {
     if (typeof pt === "string") {
       return { tool: pt, inject_as: pt + "_data" };
@@ -236,7 +236,7 @@ export function StepEditModal({ nodeId, onClose }: StepEditModalProps) {
         return (
           <Section title="Router Configuration" defaultOpen>
             <F label="Routes (JSON: route_name → [step_ids])">
-              <textarea style={{ ...miniInput, minHeight: 60, fontFamily: "monospace" }}
+              <textarea style={{ ...miniInput, minHeight: 60, fontFamily: "var(--m-font-mono)" }}
                 value={adv.routes ? JSON.stringify(adv.routes, null, 2) : ""}
                 onChange={(e) => { try { patchAdv({ routes: JSON.parse(e.target.value) }); } catch { /* ignore parse errors while typing */ } }}
                 placeholder='{"positive": ["step_a"], "negative": ["step_b"]}' />
@@ -419,7 +419,7 @@ export function StepEditModal({ nodeId, onClose }: StepEditModalProps) {
                 placeholder="name of chain to execute" />
             </F>
             <F label="Input Map (JSON: param → variable)">
-              <textarea style={{ ...miniInput, minHeight: 50, fontFamily: "monospace" }}
+              <textarea style={{ ...miniInput, minHeight: 50, fontFamily: "var(--m-font-mono)" }}
                 value={adv.subchain_input_map ? JSON.stringify(adv.subchain_input_map, null, 2) : ""}
                 onChange={(e) => { try { patchAdv({ subchain_input_map: JSON.parse(e.target.value) }); } catch { /* ignore parse errors while typing */ } }}
                 placeholder='{"query": "{user_input}"}' />
@@ -431,7 +431,7 @@ export function StepEditModal({ nodeId, onClose }: StepEditModalProps) {
         return (
           <Section title="Debate Configuration" defaultOpen>
             <F label="Agents (JSON array: [{'{'}prompt, model{'}'}])">
-              <textarea style={{ ...miniInput, minHeight: 60, fontFamily: "monospace" }}
+              <textarea style={{ ...miniInput, minHeight: 60, fontFamily: "var(--m-font-mono)" }}
                 value={adv.debate_agents ? JSON.stringify(adv.debate_agents, null, 2) : ""}
                 onChange={(e) => { try { patchAdv({ debate_agents: JSON.parse(e.target.value) }); } catch { /* ignore parse errors while typing */ } }}
                 placeholder='[{"prompt": "Argue for...", "model": "claude-sonnet-4-6"}]' />
@@ -473,7 +473,7 @@ export function StepEditModal({ nodeId, onClose }: StepEditModalProps) {
               </F>
             </div>
             <F label="Headers (JSON)">
-              <textarea style={{ ...miniInput, minHeight: 40, fontFamily: "monospace" }}
+              <textarea style={{ ...miniInput, minHeight: 40, fontFamily: "var(--m-font-mono)" }}
                 value={adv.webhook_headers ? JSON.stringify(adv.webhook_headers, null, 2) : ""}
                 onChange={(e) => { try { patchAdv({ webhook_headers: JSON.parse(e.target.value) }); } catch { /* ignore parse errors while typing */ } }}
                 placeholder='{"Authorization": "Bearer ..."}' />
@@ -489,6 +489,113 @@ export function StepEditModal({ nodeId, onClose }: StepEditModalProps) {
             </F>
           </Section>
         );
+
+      case "image_gen": {
+        // Models grouped by provider — selecting auto-sets image_provider
+        const IMG_MODELS: Record<NonNullable<StepAdvancedConfig["image_provider"]>, string[]> = {
+          openai: ["dall-e-3", "dall-e-2", "gpt-image-1"],
+          huggingface: [
+            "black-forest-labs/FLUX.1-schnell",
+            "black-forest-labs/FLUX.1-dev",
+            "stabilityai/stable-diffusion-3.5-large",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "playgroundai/playground-v2.5-1024px-aesthetic",
+          ],
+          stability: ["sd3", "sd3-large", "sd3-large-turbo", "core", "ultra"],
+        };
+        // Sizes per provider (different APIs accept different sizes)
+        const IMG_SIZES: Record<NonNullable<StepAdvancedConfig["image_provider"]>, string[]> = {
+          openai: ["1024x1024", "1024x1792", "1792x1024", "512x512", "256x256"],
+          huggingface: ["1024x1024", "768x768", "512x512"],
+          stability: ["1:1", "16:9", "9:16", "3:2", "2:3", "4:5", "5:4", "21:9", "9:21"],
+        };
+
+        const provider = adv.image_provider ?? "openai";
+        const models = IMG_MODELS[provider];
+        const sizes = IMG_SIZES[provider];
+
+        // When provider changes, default-pick the first model for that provider
+        const switchProvider = (p: NonNullable<StepAdvancedConfig["image_provider"]>) => {
+          patchAdv({
+            image_provider: p,
+            image_model: IMG_MODELS[p][0],
+            image_size: IMG_SIZES[p][0],
+          });
+        };
+
+        return (
+          <Section title="Image Generation" defaultOpen>
+            <F label="Prompt">
+              <textarea style={{ ...miniInput, minHeight: 60 }}
+                value={adv.image_prompt ?? ""}
+                onChange={(e) => patchAdv({ image_prompt: e.target.value || undefined })}
+                placeholder="A serene landscape with snow-capped mountains, photorealistic..." />
+            </F>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8 }}>
+              <F label="Provider">
+                <select style={miniSelect} value={provider}
+                  onChange={(e) => switchProvider(e.target.value as NonNullable<StepAdvancedConfig["image_provider"]>)}>
+                  <option value="openai">OpenAI</option>
+                  <option value="huggingface">HuggingFace</option>
+                  <option value="stability">Stability AI</option>
+                </select>
+              </F>
+              <F label="Model">
+                <select style={miniSelect} value={adv.image_model ?? models[0]}
+                  onChange={(e) => patchAdv({ image_model: e.target.value })}>
+                  {models.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </F>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              <F label={provider === "stability" ? "Aspect ratio" : "Size"}>
+                <select style={miniSelect} value={adv.image_size ?? sizes[0]}
+                  onChange={(e) => patchAdv({ image_size: e.target.value })}>
+                  {sizes.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </F>
+              <F label="Format">
+                <select style={miniSelect} value={adv.image_format ?? "png"}
+                  onChange={(e) => patchAdv({ image_format: e.target.value as StepAdvancedConfig["image_format"] })}>
+                  <option value="png">png</option>
+                  <option value="jpeg">jpeg</option>
+                  <option value="webp">webp</option>
+                </select>
+              </F>
+              <F label="Count">
+                <input type="number" style={miniInput} value={adv.image_n ?? 1} min={1} max={10}
+                  onChange={(e) => patchAdv({ image_n: e.target.value ? Number(e.target.value) : undefined })} />
+              </F>
+            </div>
+            {provider === "openai" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <F label="Quality">
+                  <select style={miniSelect} value={adv.image_quality ?? "standard"}
+                    onChange={(e) => patchAdv({ image_quality: e.target.value as StepAdvancedConfig["image_quality"] })}>
+                    <option value="standard">standard</option>
+                    <option value="hd">hd</option>
+                  </select>
+                </F>
+                <F label="Style">
+                  <select style={miniSelect} value={adv.image_style ?? "vivid"}
+                    onChange={(e) => patchAdv({ image_style: e.target.value as StepAdvancedConfig["image_style"] })}>
+                    <option value="vivid">vivid</option>
+                    <option value="natural">natural</option>
+                  </select>
+                </F>
+              </div>
+            )}
+            {(provider === "huggingface" || provider === "stability") && (
+              <F label="Negative prompt">
+                <textarea style={{ ...miniInput, minHeight: 40 }}
+                  value={adv.negative_prompt ?? ""}
+                  onChange={(e) => patchAdv({ negative_prompt: e.target.value || undefined })}
+                  placeholder="blurry, low quality, distorted..." />
+              </F>
+            )}
+          </Section>
+        );
+      }
 
       default:
         return null;

@@ -26,12 +26,120 @@ function getTypeColors(): Record<string, string> {
     subchain:  v("--icon-purple", "#6366f1"),
     debate:    v("--icon-pink", "#ff6482"),
     browser:   v("--m-text2", "#a1a1aa"),
+    image_gen: v("--icon-pink", "#ff6b9d"),
   };
 }
 
 // ─── Helper: read CSS variable ──────────────────────────────────────────
 function cssVar(name: string, fallback: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+// ─── Visual tiers (hierarchy) ──────────────────────────────────────────
+// Primary  → cœur d'exécution, full detail (model + label)
+// Utility  → helpers de logique, compact
+// Flow     → control flow, icon-prominent, minimal text
+const TIER_PRIMARY = new Set(["agent", "subchain", "debate", "browser", "webhook", "image_gen"]);
+const TIER_FLOW    = new Set(["router", "loop", "merge"]);
+// Utility = everything else (transform, evaluator, gate)
+
+function getTier(type: string): "primary" | "utility" | "flow" {
+  if (TIER_PRIMARY.has(type)) return "primary";
+  if (TIER_FLOW.has(type)) return "flow";
+  return "utility";
+}
+
+// ─── Type-specific subtitle generator ───────────────────────────────────
+/** Returns a short, useful subtitle for a node — what it actually does,
+ *  not just its type. Falls back to type name if no specific data. */
+function getTypeSubtitle(n: CanvasNode): string {
+  const adv = n.advanced ?? {};
+  switch (n.type) {
+    case "agent": {
+      // Show model, or first meaningful word of prompt
+      if (n.model) return n.model.replace(/^claude-/, "").replace(/-/g, " ");
+      if (n.prompt) {
+        const first = n.prompt.trim().slice(0, 28);
+        return first + (n.prompt.length > 28 ? "…" : "");
+      }
+      return "agent";
+    }
+    case "evaluator": {
+      if (adv.criteria) return adv.criteria.slice(0, 28) + (adv.criteria.length > 28 ? "…" : "");
+      if (adv.eval_threshold !== undefined) return `score ≥ ${adv.eval_threshold}`;
+      return "evaluate";
+    }
+    case "gate": {
+      if (adv.gate_actions?.length) return adv.gate_actions.join(", ").slice(0, 26);
+      if (adv.timeout_hours) return `timeout ${adv.timeout_hours}h`;
+      return "manual approval";
+    }
+    case "router": {
+      const routeCount = Object.keys(adv.routes ?? {}).length;
+      if (routeCount) return `${routeCount} routes`;
+      return "branch";
+    }
+    case "transform": {
+      if (adv.operation) return adv.operation.slice(0, 28);
+      if (adv.json_path) return `json: ${adv.json_path.slice(0, 20)}`;
+      if (adv.regex) return `regex`;
+      if (adv.template_str) return `template`;
+      return "transform";
+    }
+    case "loop": {
+      if (adv.items_var) {
+        const max = adv.max_parallel ? ` × ${adv.max_parallel}` : "";
+        return `for ${adv.items_var}${max}`;
+      }
+      if (adv.loop_until) return `until ${adv.loop_until.slice(0, 18)}`;
+      return "iterate";
+    }
+    case "merge": {
+      const inputCount = (adv.inputs ?? []).length;
+      const strat = adv.strategy ?? "concatenate";
+      if (inputCount) return `${inputCount} → 1 · ${strat}`;
+      return strat;
+    }
+    case "webhook": {
+      if (adv.webhook_url) {
+        try { return `${adv.webhook_method ?? "POST"} ${new URL(adv.webhook_url).hostname}`; }
+        catch { return adv.webhook_method ?? "POST"; }
+      }
+      return "webhook";
+    }
+    case "subchain": {
+      if (adv.subchain) return adv.subchain;
+      return "subchain";
+    }
+    case "debate": {
+      const agents = adv.debate_agents?.length ?? 0;
+      const rounds = adv.debate_rounds ?? 1;
+      if (agents) return `${agents} agents · ${rounds} rounds`;
+      return "debate";
+    }
+    case "browser": {
+      if (adv.browser_url) {
+        try { return new URL(adv.browser_url).hostname; }
+        catch { return "browser"; }
+      }
+      return "browser";
+    }
+    case "image_gen": {
+      // Show "model · size" or "size · n images" as primary signal
+      const model = adv.image_model;
+      const size = adv.image_size ?? "1024x1024";
+      const n_imgs = adv.image_n ?? 1;
+      if (model) {
+        // Strip provider prefix like "openai/" or "black-forest-labs/"
+        const shortModel = model.includes("/") ? model.split("/").pop()! : model;
+        return `${shortModel} · ${size}`;
+      }
+      if (n_imgs > 1) return `${n_imgs}× ${size}`;
+      return size;
+    }
+    default:
+      return n.model ?? n.type;
+  }
 }
 
 // ─── Coordinate conversion ──────────────────────────────────────────────
@@ -240,6 +348,7 @@ export function renderCanvas(
     if (kind === "file") { drawFileNode(ctx, n, selection.has(n.id), textColor, text2Color, surfaceColor, borderColor, fontFamily, monoFamily); continue; }
     if (kind === "link") { drawLinkNode(ctx, n, selection.has(n.id), textColor, text2Color, surfaceColor, borderColor, fontFamily); continue; }
     if (kind === "terminal") { drawTerminalNode(ctx, n, selection.has(n.id), textColor, text2Color, surfaceColor, borderColor, fontFamily, monoFamily); continue; }
+    if (kind === "obsidian") { drawObsidianNode(ctx, n, selection.has(n.id), textColor, text2Color, surfaceColor, borderColor, fontFamily, monoFamily); continue; }
     const color = TYPE_COLORS[n.type] ?? "#888";
     const isSelected = selection.has(n.id);
     const rr = Math.min(radius, n.h / 2);
@@ -273,10 +382,18 @@ export function renderCanvas(
 
     // Fill
     ctx.fillStyle = surfaceColor;
-    if (useShadows) {
-      ctx.shadowColor = color + "22";
-      ctx.shadowBlur = isSelected ? 16 : 8;
+    // Glow only on active states (selected or running) — calm at rest
+    const execStateForGlow = nodeExecState.get(n.id);
+    const isExecuting = execStateForGlow?.status === "running";
+    if (useShadows && (isSelected || isExecuting)) {
+      ctx.shadowColor = color + (isExecuting ? "55" : "33");
+      ctx.shadowBlur = isExecuting ? 14 : 12;
       ctx.shadowOffsetY = 2;
+    } else if (useShadows) {
+      // Subtle neutral depth shadow (no color, no glow)
+      ctx.shadowColor = "rgba(0,0,0,0.18)";
+      ctx.shadowBlur = 4;
+      ctx.shadowOffsetY = 1;
     }
     ctx.fill();
     ctx.shadowColor = "transparent";
@@ -292,13 +409,12 @@ export function renderCanvas(
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // ─── Top accent bar (clipped to same shape as node) ─────────
-    if (n.type !== "router") {
+    // ─── Top accent bar — tier-aware (no bar for router/flow) ───
+    const tierForBar = getTier(n.type);
+    if (n.type !== "router" && tierForBar !== "flow") {
       ctx.save();
       ctx.beginPath();
-      if (n.type === "loop") {
-        ctx.roundRect(n.x, n.y, n.w, n.h, n.h / 2);
-      } else if (n.type === "gate") {
+      if (n.type === "gate") {
         const inset = 14;
         ctx.moveTo(n.x + inset, n.y);
         ctx.lineTo(n.x + n.w - inset, n.y);
@@ -312,54 +428,109 @@ export function renderCanvas(
       }
       ctx.clip();
       ctx.fillStyle = color;
-      ctx.fillRect(n.x, n.y, n.w, 5);
-      // Subtle gradient fade on header bar
-      const grad = ctx.createLinearGradient(n.x, n.y, n.x, n.y + 5);
-      grad.addColorStop(0, color);
-      grad.addColorStop(1, color + "00");
-      ctx.fillStyle = grad;
-      ctx.fillRect(n.x, n.y + 5, n.w, 4);
+      // Primary: thick solid bar; Utility: thin minimal bar
+      const barH = tierForBar === "primary" ? 5 : 2;
+      ctx.fillRect(n.x, n.y, n.w, barH);
+      // Gradient fade only on primary tier
+      if (tierForBar === "primary") {
+        const grad = ctx.createLinearGradient(n.x, n.y, n.x, n.y + 5);
+        grad.addColorStop(0, color);
+        grad.addColorStop(1, color + "00");
+        ctx.fillStyle = grad;
+        ctx.fillRect(n.x, n.y + 5, n.w, 4);
+      }
       ctx.restore();
     }
 
-    // ─── Inner content ──────────────────────────────────────────
-    const innerX = n.type === "router" ? n.x + n.w * 0.3 : n.type === "loop" ? n.x + n.h / 2 + 4 : n.x + 4;
-    const innerW = n.type === "router" ? n.w * 0.4 : n.type === "loop" ? n.w - n.h - 8 : n.w - 8;
+    // ─── Inner content (tier-aware layout) ──────────────────────
+    const tier = getTier(n.type);
 
     if (n.type === "router") {
-      // Diamond: centered content
+      // ── ROUTER: diamond, icon-centric ──────────────────────────
       const cx = n.x + n.w / 2;
       const cy = n.y + n.h / 2;
-      if (useDetails) drawNodeIcon(ctx, n.type, cx, cy - 14, color);
+      if (useDetails) drawNodeIcon(ctx, n.type, cx, cy - 12, color);
+      ctx.fillStyle = textColor;
+      ctx.font = `700 11px ${fontFamily}, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText(n.label.slice(0, 16), cx, cy + 4);
+      const sub = getTypeSubtitle(n);
+      if (sub) {
+        ctx.fillStyle = color;
+        ctx.font = `500 8px ${fontFamily}, sans-serif`;
+        ctx.fillText(sub.slice(0, 18), cx, cy + 14);
+      }
+    } else if (tier === "flow") {
+      // ── FLOW (loop/merge): icon-prominent, mono subtitle ───────
+      const innerX = n.type === "loop" ? n.x + n.h / 2 + 4 : n.x + 4;
+      const innerW = n.type === "loop" ? n.w - n.h - 8 : n.w - 8;
+      const iconX = innerX + 14;
+
+      if (useDetails) drawNodeIcon(ctx, n.type, iconX, n.y + n.h / 2, color);
+
+      const labelX = useDetails ? iconX + 18 : innerX + 6;
+      const maxTextW = innerW - (useDetails ? 36 : 12);
+
       ctx.fillStyle = textColor;
       ctx.font = `600 11px ${fontFamily}, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillText(n.label.slice(0, 20), cx, cy + 2);
+      ctx.textAlign = "left";
+      let displayLabel = n.label;
+      if (maxTextW > 10) {
+        while (ctx.measureText(displayLabel).width > maxTextW && displayLabel.length > 3) {
+          displayLabel = displayLabel.slice(0, -1);
+        }
+        if (displayLabel !== n.label) displayLabel += "\u2026";
+      }
+      ctx.fillText(displayLabel, labelX, n.y + n.h / 2 - 3);
+
       ctx.fillStyle = color;
-      ctx.font = `600 8px ${fontFamily}, sans-serif`;
-      ctx.fillText(n.type, cx, cy + 14);
+      ctx.font = `500 9px ${monoFamily}, monospace`;
+      const sub = getTypeSubtitle(n);
+      let displaySub = sub;
+      if (maxTextW > 10) {
+        while (ctx.measureText(displaySub).width > maxTextW && displaySub.length > 3) {
+          displaySub = displaySub.slice(0, -1);
+        }
+        if (displaySub !== sub) displaySub += "\u2026";
+      }
+      ctx.fillText(displaySub, labelX, n.y + n.h / 2 + 10);
     } else {
-      // Standard layout: icon circle + label + type
-      const iconX = innerX + 16;
+      // ── PRIMARY / UTILITY: icon + label + type-specific subtitle
+      const innerX = n.x + 4;
+      const innerW = n.w - 8;
+      const iconR = tier === "primary" ? 14 : 11;
+      const iconX = innerX + iconR + 2;
       const labelY = n.y + n.h / 2 - 4;
 
       if (useDetails) {
-        // Icon circle
-        ctx.fillStyle = color + "15";
-        ctx.strokeStyle = color + "30";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(iconX, n.y + n.h / 2, 13, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+        if (tier === "primary") {
+          // Primary: filled circle, more visual weight
+          ctx.fillStyle = color + "15";
+          ctx.strokeStyle = color + "40";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(iconX, n.y + n.h / 2, iconR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        } else {
+          // Utility: dashed outline, more discreet
+          ctx.strokeStyle = color + "50";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 2]);
+          ctx.beginPath();
+          ctx.arc(iconX, n.y + n.h / 2, iconR, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
         drawNodeIcon(ctx, n.type, iconX, n.y + n.h / 2, color);
       }
 
-      // Label
-      const labelX = useDetails ? iconX + 20 : innerX + 6;
-      const maxTextW = innerW - (useDetails ? 46 : 12);
+      const labelX = useDetails ? iconX + iconR + 7 : innerX + 6;
+      const maxTextW = innerW - (useDetails ? iconR * 2 + 14 : 12);
       ctx.fillStyle = textColor;
-      ctx.font = `600 12px ${fontFamily}, sans-serif`;
+      const labelWeight = tier === "primary" ? 700 : 600;
+      const labelSize = tier === "primary" ? 12 : 11;
+      ctx.font = `${labelWeight} ${labelSize}px ${fontFamily}, sans-serif`;
       ctx.textAlign = "left";
       let displayLabel = n.label;
       if (maxTextW > 10) {
@@ -370,12 +541,17 @@ export function renderCanvas(
       }
       ctx.fillText(displayLabel, labelX, labelY);
 
-      // Type + model
-      ctx.fillStyle = text2Color;
       ctx.font = `500 9px ${fontFamily}, sans-serif`;
-      let meta = n.type;
-      if (useDetails && n.model) meta += ` \u00B7 ${n.model}`;
-      ctx.fillText(meta, labelX, labelY + 14);
+      const sub = getTypeSubtitle(n);
+      ctx.fillStyle = tier === "primary" ? text2Color : color + "B0";
+      let displaySub = sub;
+      if (maxTextW > 10) {
+        while (ctx.measureText(displaySub).width > maxTextW && displaySub.length > 3) {
+          displaySub = displaySub.slice(0, -1);
+        }
+        if (displaySub !== sub) displaySub += "\u2026";
+      }
+      ctx.fillText(displaySub, labelX, labelY + 14);
     }
 
     // ─── Ports (top=input, bottom=output for top-down DAG) ────
@@ -1248,6 +1424,110 @@ function drawTerminalNode(
     ctx.shadowColor = "rgba(88,166,255,0.5)";
     ctx.shadowBlur = 18;
     ctx.strokeStyle = "rgba(88,166,255,0.7)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(n.x - 2, n.y - 2, n.w + 4, n.h + 4, r + 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawObsidianNode(
+  ctx: CanvasRenderingContext2D,
+  n: CanvasNode,
+  isSelected: boolean,
+  textColor: string,
+  text2Color: string,
+  surfaceColor: string,
+  borderColor: string,
+  fontFamily: string,
+  monoFamily: string,
+) {
+  const r = 8;
+  const obsidianPurple = "#8b5cf6"; // matches Obsidian's brand purple
+
+  // Background card with a slight purple wash so the kind is recognizable.
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.25)";
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = surfaceColor;
+  ctx.beginPath();
+  ctx.roundRect(n.x, n.y, n.w, n.h, r);
+  ctx.fill();
+  ctx.restore();
+
+  // Header
+  ctx.fillStyle = "rgba(139,92,246,0.10)";
+  ctx.beginPath();
+  ctx.roundRect(n.x, n.y, n.w, 24, [r, r, 0, 0]);
+  ctx.fill();
+
+  // Title bar: 📓 + note path + optional vault badge
+  const noteName = (n.obsidianNotePath ?? n.label ?? "untitled").split("/").pop() ?? "untitled";
+  ctx.fillStyle = obsidianPurple;
+  ctx.font = `600 11px ${fontFamily}, sans-serif`;
+  ctx.textAlign = "left";
+  ctx.fillText("📓 " + noteName, n.x + 8, n.y + 16);
+
+  if (n.obsidianVault) {
+    ctx.fillStyle = text2Color;
+    ctx.font = `500 9px ${fontFamily}, sans-serif`;
+    ctx.textAlign = "right";
+    ctx.fillText(n.obsidianVault, n.x + n.w - 8, n.y + 16);
+  }
+
+  // Markdown preview — render heading lines bigger, regular lines smaller.
+  // No real Markdown parser here; just simple line-prefix detection.
+  const content = n.obsidianContent ?? "Pick a .md file in the modal to preview.";
+  const padding = 10;
+  const lineH = 14;
+  const startY = n.y + 36;
+  const maxLines = Math.floor((n.h - 32) / lineH);
+  const lines = content.split("\n").slice(0, maxLines);
+  ctx.textAlign = "left";
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const y = startY + i * lineH;
+    if (line.startsWith("# ")) {
+      ctx.fillStyle = textColor;
+      ctx.font = `700 12px ${fontFamily}, sans-serif`;
+      ctx.fillText(line.slice(2).slice(0, 50), n.x + padding, y);
+    } else if (line.startsWith("## ")) {
+      ctx.fillStyle = textColor;
+      ctx.font = `700 11px ${fontFamily}, sans-serif`;
+      ctx.fillText(line.slice(3).slice(0, 55), n.x + padding, y);
+    } else if (line.startsWith("- ") || line.startsWith("* ")) {
+      ctx.fillStyle = textColor + "CC";
+      ctx.font = `400 10px ${fontFamily}, sans-serif`;
+      ctx.fillText("• " + line.slice(2).slice(0, 55), n.x + padding + 4, y);
+    } else if (/^\s*\[\[.+\]\]/.test(line)) {
+      // Obsidian-style wikilink line
+      ctx.fillStyle = obsidianPurple;
+      ctx.font = `500 10px ${fontFamily}, sans-serif`;
+      ctx.fillText(line.trim().slice(0, 60), n.x + padding, y);
+    } else {
+      ctx.fillStyle = textColor + "AA";
+      ctx.font = `400 10px ${monoFamily}, monospace`;
+      ctx.fillText(line.slice(0, 65), n.x + padding, y);
+    }
+  }
+
+  // Border with the Obsidian accent
+  ctx.strokeStyle = isSelected ? obsidianPurple : borderColor;
+  ctx.lineWidth = isSelected ? 2 : 1;
+  ctx.beginPath();
+  ctx.roundRect(n.x, n.y, n.w, n.h, r);
+  ctx.stroke();
+
+  drawItemPorts(ctx, n, obsidianPurple, surfaceColor, borderColor);
+
+  if (isSelected) {
+    ctx.save();
+    ctx.shadowColor = "rgba(139,92,246,0.5)";
+    ctx.shadowBlur = 14;
+    ctx.strokeStyle = "rgba(139,92,246,0.7)";
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.roundRect(n.x - 2, n.y - 2, n.w + 4, n.h + 4, r + 2);

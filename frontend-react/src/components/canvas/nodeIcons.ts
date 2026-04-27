@@ -154,6 +154,24 @@ export function drawNodeIcon(
       ctx.lineTo(6, 0);
       ctx.stroke();
       break;
+    case "image_gen": // picture frame with mountain + sun
+      // Frame
+      ctx.beginPath();
+      ctx.rect(-7, -5, 14, 10);
+      ctx.stroke();
+      // Sun (small filled circle, top-left)
+      ctx.beginPath();
+      ctx.arc(-3, -2, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      // Mountain (zigzag along bottom)
+      ctx.beginPath();
+      ctx.moveTo(-7, 4);
+      ctx.lineTo(-2, -1);
+      ctx.lineTo(2, 2);
+      ctx.lineTo(5, -1);
+      ctx.lineTo(7, 1);
+      ctx.stroke();
+      break;
     default: // dot
       ctx.beginPath();
       ctx.arc(0, 0, 4, 0, Math.PI * 2);
