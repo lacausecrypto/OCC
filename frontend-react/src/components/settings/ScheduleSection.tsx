@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { ItemListManager } from "./ItemListManager";
+import { CollapsibleSection } from "./Collapsible";
 import styles from "./Settings.module.css";
 
 interface Schedule {
@@ -161,8 +162,7 @@ export function ScheduleSection() {
   };
 
   return (
-    <div className={styles.section}>
-      <div className={styles.sectionTitle}>Scheduled Jobs ({schedules.length})</div>
+    <CollapsibleSection id="schedules" title="Scheduled Jobs" badge={`${schedules.length}`}>
       <div className={styles.sectionCard}>
         {loading && <div className={styles.loadingRow}>Loading...</div>}
         {!loading && schedules.length === 0 && !adding && (
@@ -317,6 +317,6 @@ export function ScheduleSection() {
           return s ? (s.label || s.chainName) : id;
         }}
       />
-    </div>
+    </CollapsibleSection>
   );
 }

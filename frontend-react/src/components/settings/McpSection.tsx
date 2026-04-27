@@ -3,6 +3,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { ItemListManager } from "./ItemListManager";
+import { CollapsibleSection } from "./Collapsible";
 import styles from "./Settings.module.css";
 
 interface McpServerConfig {
@@ -255,11 +256,16 @@ export function McpSection() {
   };
 
   return (
-    <div className={styles.section}>
-      <div className={styles.sectionTitle}>
-        MCP Servers ({Object.keys(installed).length})
-        {saveStatus && <span className={styles.sectionBadge} style={{ background: saveStatus.startsWith("Error") ? "rgba(255,55,95,0.15)" : undefined, color: saveStatus.startsWith("Error") ? "var(--c-error)" : undefined }}>{saveStatus}</span>}
-      </div>
+    <CollapsibleSection
+      id="mcp"
+      title="MCP Servers"
+      badge={(
+        <>
+          <span>{Object.keys(installed).length}</span>
+          {saveStatus && <span style={{ marginLeft: 6, color: saveStatus.startsWith("Error") ? "var(--c-error)" : "var(--c-success)" }}>{saveStatus}</span>}
+        </>
+      )}
+    >
       <div className={styles.sectionCard}>
         {loading && <div className={styles.loadingRow}>Loading...</div>}
 
@@ -379,6 +385,6 @@ export function McpSection() {
           <div className={styles.marketplaceGrid}>{displayList.map(renderCard)}</div>
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   );
 }

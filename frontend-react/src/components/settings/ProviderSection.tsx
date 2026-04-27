@@ -5,12 +5,13 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { ItemListManager } from "./ItemListManager";
+import { CollapsibleSection } from "./Collapsible";
 import styles from "./Settings.module.css";
 
 interface LLMProvider {
   id: string;
   name: string;
-  type: "claude" | "openrouter" | "openai" | "ollama" | "huggingface" | "custom";
+  type: "claude" | "codex" | "openrouter" | "openai" | "ollama" | "huggingface" | "custom";
   apiKey: string;
   baseUrl: string;
   defaultModel?: string;
@@ -58,6 +59,34 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     keyPlaceholder: "sk-...",
     keyHint: "Get your key at platform.openai.com/api-keys",
     defaultModels: ["gpt-4o", "gpt-4o-mini", "o3-mini", "o4-mini"],
+  },
+  {
+    id: "codex", name: "OpenAI Codex CLI", type: "codex",
+    description: "Open-source coding agent CLI (github.com/openai/codex). Uses your local `codex` login — no API key needed in OCC.",
+    icon: "\u{1F4BB}", color: "var(--icon-cyan-bg)",
+    baseUrl: "",
+    keyPlaceholder: "(optional — leave empty)",
+    keyHint: "Codex CLI handles its own auth via `codex login`. No key required here. Install: npm install -g @openai/codex",
+    defaultModels: [
+      // GPT-5.5 — current frontier (ChatGPT login only)
+      "gpt-5.5",
+      // GPT-5.4 family — default + lightweight
+      "gpt-5.4", "gpt-5.4-mini",
+      // GPT-5.3 codex — coding-tuned + research preview
+      "gpt-5.3-codex", "gpt-5.3-codex-spark",
+      // GPT-5.2 family
+      "gpt-5.2", "gpt-5.2-codex",
+      // Older GPT-5 family (still selectable)
+      "gpt-5", "gpt-5-codex",
+      // o-series reasoning
+      "o4-mini", "o3", "o3-mini", "o3-pro", "o1", "o1-mini", "o1-pro",
+      // GPT-4.1 family
+      "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+      // GPT-4o family
+      "gpt-4o", "gpt-4o-mini", "chatgpt-4o-latest",
+      // Legacy
+      "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
+    ],
   },
   {
     id: "groq", name: "Groq", type: "custom",
@@ -152,7 +181,9 @@ export function ProviderSection() {
   const installedIds = new Set(providers.map((p) => p.id));
 
   const handleQuickInstall = async (preset: ProviderPreset) => {
-    if (!apiKeyInput.trim()) return;
+    // Codex CLI handles its own auth, Ollama runs locally — neither needs a key.
+    const keyOptional = preset.type === "codex" || preset.type === "ollama";
+    if (!keyOptional && !apiKeyInput.trim()) return;
     await fetch("/providers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -183,6 +214,35 @@ export function ProviderSection() {
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this provider? This will remove the API key.")) return;
     await fetch(`/providers/${id}`, { method: "DELETE" });
+    loadProviders();
+  };
+
+  /** Sync an installed provider's model list to the latest preset defaults. */
+  const handleSyncDefaults = async (id: string) => {
+    const preset = PROVIDER_PRESETS.find((pp) => pp.id === id);
+    if (!preset) return;
+    const provider = providers.find((p) => p.id === id);
+    if (!provider) return;
+    // Merge: keep custom-added models that aren't in the preset, append new
+    // preset models. Preserves user customizations while bringing in updates.
+    const existing = new Set(provider.models ?? []);
+    const merged = [
+      ...preset.defaultModels,
+      ...(provider.models ?? []).filter((m) => !preset.defaultModels.includes(m)),
+    ];
+    if (merged.every((m) => existing.has(m)) && (provider.models ?? []).length === merged.length) {
+      // Already up-to-date
+      setTestResults((r) => ({ ...r, [id]: "Already up-to-date" }));
+      setTimeout(() => setTestResults((r) => { const n = { ...r }; delete n[id]; return n; }), 3000);
+      return;
+    }
+    await fetch(`/providers/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ models: merged }),
+    });
+    setTestResults((r) => ({ ...r, [id]: `Synced (${merged.length} models)` }));
+    setTimeout(() => setTestResults((r) => { const n = { ...r }; delete n[id]; return n; }), 3000);
     loadProviders();
   };
 
@@ -225,12 +285,12 @@ export function ProviderSection() {
 
   const typeColors: Record<string, string> = {
     claude: "var(--icon-blue-bg)", openrouter: "var(--icon-purple-bg)", openai: "var(--icon-green-bg)",
+    codex: "var(--icon-cyan-bg)",
     ollama: "var(--icon-cyan-bg)", huggingface: "var(--icon-orange-bg)", custom: "var(--icon-orange-bg)",
   };
 
   return (
-    <div className={styles.section}>
-      <div className={styles.sectionTitle}>LLM Providers ({providers.length})</div>
+    <CollapsibleSection id="providers" title="LLM Providers" badge={`${providers.length}`}>
       <div className={styles.sectionCard}>
         {loading && <div className={styles.loadingRow}>Loading...</div>}
 
@@ -265,6 +325,15 @@ export function ProviderSection() {
               <button className={styles.rowBtn} onClick={() => handleTest(p.id)}>
                 {testResults[p.id] ?? "Test"}
               </button>
+              {PROVIDER_PRESETS.some((pp) => pp.id === p.id) && (
+                <button
+                  className={styles.rowBtn}
+                  onClick={() => handleSyncDefaults(p.id)}
+                  title="Refresh model list from preset defaults (keeps your custom additions)"
+                >
+                  {"\u21BB"}
+                </button>
+              )}
               <button className={styles.rowBtn} onClick={() => {
                 setEditing(p.id);
                 setEditForm({
@@ -343,7 +412,11 @@ export function ProviderSection() {
                   <span className={styles.formHint}>{preset.keyHint}</span>
                   <div className={styles.formActions}>
                     <button className={styles.rowBtn} onClick={() => { setSetupId(null); setApiKeyInput(""); }}>Cancel</button>
-                    <button className={`${styles.rowBtn} ${styles.rowBtnPrimary}`} onClick={() => handleQuickInstall(preset)} disabled={!apiKeyInput.trim()}>
+                    <button
+                      className={`${styles.rowBtn} ${styles.rowBtnPrimary}`}
+                      onClick={() => handleQuickInstall(preset)}
+                      disabled={!apiKeyInput.trim() && preset.type !== "codex" && preset.type !== "ollama"}
+                    >
                       Connect
                     </button>
                   </div>
@@ -378,6 +451,6 @@ export function ProviderSection() {
       <div className={styles.sectionHint}>
         Each step can use any model from any enabled provider. Set <code>model: "openrouter/gpt-4o"</code> or select in Workflow editor.
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }

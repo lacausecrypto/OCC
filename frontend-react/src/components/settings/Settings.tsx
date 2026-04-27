@@ -8,10 +8,13 @@ import { useServerStore } from "../../stores/server";
 import { ScheduleSection } from "./ScheduleSection";
 import { McpSection } from "./McpSection";
 import { ProviderSection } from "./ProviderSection";
+import { SystemPromptsSection } from "./SystemPromptsSection";
 import { OllamaSection } from "./OllamaSection";
 import { HuggingFaceSection } from "./HuggingFaceSection";
 import { useShortcutStore, formatCombo } from "../../stores/shortcuts";
 import type { ShortcutAction, KeyCombo } from "../../stores/shortcuts";
+import { CollapsibleSection } from "./Collapsible";
+import { collapseAll, expandAll } from "./collapse-state";
 import styles from "./Settings.module.css";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -80,7 +83,7 @@ interface ToolPermissions {
 interface LLMProvider {
   id: string;
   name: string;
-  type: "claude" | "openrouter" | "openai" | "custom";
+  type: "claude" | "codex" | "openrouter" | "openai" | "ollama" | "huggingface" | "custom";
   apiKey: string;
   baseUrl: string;
   defaultModel?: string;
@@ -189,6 +192,7 @@ interface DayDetailed {
   pipelines: SourceTokens;
   blob: SourceTokens;
   workflowChat: SourceTokens;
+  agentChat: SourceTokens;
 }
 interface TokenUsageDetailed {
   days: number;
@@ -197,14 +201,15 @@ interface TokenUsageDetailed {
   topChains: Array<{ name: string; input: number; output: number; count: number; total: number }>;
 }
 
-const SOURCES = ["chains", "pipelines", "blob", "workflowChat"] as const;
+const SOURCES = ["chains", "pipelines", "blob", "workflowChat", "agentChat"] as const;
 const SOURCE_COLORS: Record<string, string> = {
   chains: "var(--m-accent)",
   pipelines: "var(--c-purple, #bf5af2)",
   blob: "var(--icon-green, #30d158)",
   workflowChat: "var(--c-warning, #ff9f0a)",
+  agentChat: "var(--icon-cyan-bg, #5ac8fa)",
 };
-const SOURCE_LABELS: Record<string, string> = { chains: "Chains", pipelines: "Pipelines", blob: "The Blob", workflowChat: "Workflow Chat" };
+const SOURCE_LABELS: Record<string, string> = { chains: "Chains", pipelines: "Pipelines", blob: "The Blob", workflowChat: "Workflow Chat", agentChat: "Terminal Agent" };
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -223,7 +228,7 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
       const weekStart = new Date(dt);
       weekStart.setDate(dt.getDate() - dt.getDay());
       const key = weekStart.toISOString().slice(0, 10);
-      const existing = weekMap.get(key) ?? { date: key, chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 }, workflowChat: { input: 0, output: 0, count: 0 } };
+      const existing = weekMap.get(key) ?? { date: key, chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 }, workflowChat: { input: 0, output: 0, count: 0 }, agentChat: { input: 0, output: 0, count: 0 } };
       for (const src of SOURCES) {
         existing[src].input += d[src].input;
         existing[src].output += d[src].output;
@@ -241,21 +246,25 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
   while (padded.length < 7 && padded.length > 0) {
     const lastDate = new Date(padded[padded.length - 1].date);
     lastDate.setDate(lastDate.getDate() + (mode === "weekly" ? 7 : 1));
-    padded.push({ date: lastDate.toISOString().slice(0, 10), chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 }, workflowChat: { input: 0, output: 0, count: 0 } });
+    padded.push({ date: lastDate.toISOString().slice(0, 10), chains: { input: 0, output: 0, count: 0 }, pipelines: { input: 0, output: 0, count: 0 }, blob: { input: 0, output: 0, count: 0 }, workflowChat: { input: 0, output: 0, count: 0 }, agentChat: { input: 0, output: 0, count: 0 } });
   }
 
   const maxTokens = Math.max(...padded.map((d) => {
     let total = 0;
-    for (const src of SOURCES) total += d[src].input + d[src].output;
+    for (const src of SOURCES) {
+      const s = d[src];
+      if (s) total += s.input + s.output;
+    }
     return total;
   }), 1);
   const yLabels = [maxTokens, Math.round(maxTokens * 0.5), 0];
 
   // Source totals for legend
-  const sourceTotals: Record<string, number> = { chains: 0, pipelines: 0, blob: 0, workflowChat: 0 };
+  const sourceTotals: Record<string, number> = { chains: 0, pipelines: 0, blob: 0, workflowChat: 0, agentChat: 0 };
   for (const d of data.daily) {
     for (const src of SOURCES) {
-      sourceTotals[src] += d[src].input + d[src].output;
+      const s = d[src];
+      if (s) sourceTotals[src] += s.input + s.output;
     }
   }
   const activeSources = SOURCES.filter((s) => sourceTotals[s] > 0);
@@ -309,17 +318,19 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
               const heights: Record<string, number> = {};
               let dayTotal = 0;
               for (const src of SOURCES) {
-                const t = d[src].input + d[src].output;
+                const s = d[src];
+                const t = s ? s.input + s.output : 0;
                 heights[src] = (t / maxTokens) * 100;
                 dayTotal += t;
               }
               const tooltip = dayTotal > 0
-                ? `${d.date}\n${SOURCES.filter((s) => d[s].input + d[s].output > 0).map((s) => `${SOURCE_LABELS[s]}: ${(d[s].input + d[s].output).toLocaleString()}`).join("\n")}\nTotal: ${dayTotal.toLocaleString()}`
+                ? `${d.date}\n${SOURCES.filter((s) => d[s] && (d[s].input + d[s].output) > 0).map((s) => `${SOURCE_LABELS[s]}: ${(d[s].input + d[s].output).toLocaleString()}`).join("\n")}\nTotal: ${dayTotal.toLocaleString()}`
                 : d.date;
               return (
                 <div key={d.date} className={styles.chartBar} title={tooltip}>
                   <div className={styles.chartBarStack}>
-                    {/* Render bottom → top: workflowChat, blob, pipelines, chains */}
+                    {/* Render bottom → top: agentChat, workflowChat, blob, pipelines, chains */}
+                    {heights.agentChat > 0 && <div className={styles.chartBarSegment} style={{ height: `${heights.agentChat}%`, background: SOURCE_COLORS.agentChat }} />}
                     {heights.workflowChat > 0 && <div className={styles.chartBarSegment} style={{ height: `${heights.workflowChat}%`, background: SOURCE_COLORS.workflowChat }} />}
                     {heights.blob > 0 && <div className={styles.chartBarSegment} style={{ height: `${heights.blob}%`, background: SOURCE_COLORS.blob }} />}
                     {heights.pipelines > 0 && <div className={styles.chartBarSegment} style={{ height: `${heights.pipelines}%`, background: SOURCE_COLORS.pipelines }} />}
@@ -351,9 +362,10 @@ function TokenDashboard({ data, mode }: { data: TokenUsageDetailed | null; mode:
             const pct = data.totals.input + data.totals.output > 0 ? ((c.total / (data.totals.input + data.totals.output)) * 100) : 0;
             const isBlob = c.name.startsWith("blob_");
             const isWfc = c.name === "_workflow_chat";
+            const isAgent = c.name === "_agent_chat";
             const isPipe = c.name.includes("|");
-            const dotColor = isWfc ? SOURCE_COLORS.workflowChat : isBlob ? SOURCE_COLORS.blob : isPipe ? SOURCE_COLORS.pipelines : SOURCE_COLORS.chains;
-            const displayName = isWfc ? "Workflow Chat" : isBlob ? "Blob session" : c.name;
+            const dotColor = isWfc ? SOURCE_COLORS.workflowChat : isAgent ? SOURCE_COLORS.agentChat : isBlob ? SOURCE_COLORS.blob : isPipe ? SOURCE_COLORS.pipelines : SOURCE_COLORS.chains;
+            const displayName = isWfc ? "Workflow Chat" : isAgent ? "Terminal Agent" : isBlob ? "Blob session" : c.name;
             return (
               <div key={c.name} className={styles.tokenTableRow}>
                 <span className={styles.tokenTableName}>
@@ -395,6 +407,9 @@ export function Settings() {
 
   // Token chart state
   const [chartMode, setChartMode] = useState<"daily" | "weekly">("daily");
+
+  // Tool Security: which provider::model has its individual pills expanded
+  const [expandedToolModel, setExpandedToolModel] = useState<string | null>(null);
 
   // Keyboard shortcut editing
   const shortcutStore = useShortcutStore();
@@ -553,6 +568,7 @@ export function Settings() {
     { id: "queue", label: "Queue" },
     { id: "schedules", label: "Schedules" },
     { id: "mcp", label: "MCP Servers" },
+    { id: "system-prompts", label: "System Prompts" },
     { id: "interface", label: "Interface" },
     { id: "paths", label: "Paths & Security" },
     { id: "storage", label: "Storage" },
@@ -619,9 +635,13 @@ export function Settings() {
       <div className={styles.settingsInner}>
         <h1 className={styles.pageTitle}>Settings</h1>
 
+        <div className={styles.collapseAllBar}>
+          <button type="button" className={styles.collapseAllBtn} onClick={collapseAll}>Collapse all</button>
+          <button type="button" className={styles.collapseAllBtn} onClick={expandAll}>Expand all</button>
+        </div>
+
         {/* ═══ Server Connection ═══ */}
-        <div id="server" className={styles.section}>
-          <div className={styles.sectionTitle}>Server Connection</div>
+        <CollapsibleSection id="server" title="Server Connection" badge={<span style={{ color: serverOnline ? "var(--c-success)" : "var(--c-error)" }}>{serverOnline ? "●" : "○"}</span>}>
           <div className={styles.sectionCard}>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-blue-bg)" }}>S</div>
@@ -655,11 +675,10 @@ export function Settings() {
               <Toggle on={autoConnect} onToggle={() => toggleLocal("occ-auto-connect", !autoConnect, setAutoConnect)} />
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Execution ═══ */}
-        <div id="execution" className={styles.section}>
-          <div className={styles.sectionTitle}>Execution</div>
+        <CollapsibleSection id="execution" title="Execution">
           <div className={styles.sectionCard}>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-purple-bg)" }}>P</div>
@@ -738,30 +757,27 @@ export function Settings() {
             </div>
           </div>
           {configDirty && <div className={styles.sectionHint} style={{ color: "var(--m-accent)" }}>Changes saved — some settings require server restart.</div>}
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ LLM Providers (extracted component) ═══ */}
-        <div id="providers"><ProviderSection /></div>
+        <ProviderSection />
 
         {/* ═══ Ollama (local models) ═══ */}
-        <div id="ollama" className={styles.section}>
-          <div className={styles.sectionTitle}>Ollama — Local Models</div>
+        <CollapsibleSection id="ollama" title={"Ollama — Local Models"}>
           <div className={styles.sectionCard}>
             <OllamaSection />
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ HuggingFace (inference API) ═══ */}
-        <div id="huggingface" className={styles.section}>
-          <div className={styles.sectionTitle}>HuggingFace — Inference API</div>
+        <CollapsibleSection id="huggingface" title={"HuggingFace — Inference API"}>
           <div className={styles.sectionCard}>
             <HuggingFaceSection />
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Tool Security ═══ */}
-        <div id="toolsecurity" className={styles.section}>
-          <div className={styles.sectionTitle}>Tool Security</div>
+        <CollapsibleSection id="toolsecurity" title="Tool Security">
 
           {/* Per-model permissions with preset buttons */}
           {(() => {
@@ -806,7 +822,7 @@ export function Settings() {
             };
 
             const nonClaude = (providers ?? []).filter(p => p.type !== "claude");
-            const tColor: Record<string, string> = { ollama: "var(--icon-cyan-bg)", huggingface: "var(--icon-orange-bg)", openrouter: "var(--icon-purple-bg)", openai: "var(--icon-green-bg)" };
+            const tColor: Record<string, string> = { ollama: "var(--icon-cyan-bg)", huggingface: "var(--icon-orange-bg)", openrouter: "var(--icon-purple-bg)", openai: "var(--icon-green-bg)", codex: "var(--icon-cyan-bg)", claude: "var(--icon-blue-bg)" };
 
             if (nonClaude.length === 0) return <div className={styles.sectionCard}><div className={styles.row}><div className={styles.rowBody}><div className={styles.rowDesc}>No non-Claude providers configured.</div></div></div></div>;
 
@@ -828,70 +844,86 @@ export function Settings() {
               color: on ? "#30d158" : "rgba(255,55,95,0.4)",
             });
 
-            return nonClaude.map((p) => (
-              <div key={p.id} className={styles.sectionCard} style={{ padding: 0, overflow: "hidden" }}>
-                <div style={{ padding: "5px 12px", background: "var(--glass-tint-subtle)", display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 16, borderRadius: 4, background: tColor[p.type] ?? "var(--m-text2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 700, color: "#fff" }}>{p.name.charAt(0).toUpperCase()}</div>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: "var(--m-text2)", textTransform: "uppercase", letterSpacing: 0.5 }}>{p.name}</span>
-                  <span style={{ fontSize: 9, color: "var(--m-text2)", opacity: 0.5 }}>{(p.models ?? []).length} model{(p.models ?? []).length !== 1 ? "s" : ""}</span>
-                </div>
-                {(p.models ?? []).map((model) => {
-                  const base = p.toolPermissions ?? {};
-                  const override = p.perModelPermissions?.[model] ?? {};
-                  const perms = { ...base, ...override };
-                  const on = perms.toolsEnabled !== false;
-                  const denied = new Set<string>(perms.deniedTools ?? []);
-                  const iter = perms.maxIterations ?? 15;
-                  const activePreset = detectPreset(denied);
-
-                  return (
-                    <div key={model} style={{ padding: "8px 12px", borderTop: "1px solid var(--glass-border)", opacity: on ? 1 : 0.3 }}>
-                      {/* Row 1: model name + presets + iter + toggle */}
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, fontFamily: "var(--m-font-mono)", color: "var(--m-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>{model.includes("/") ? model.split("/").pop() : model}</span>
-                        {on && <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
-                          {PRESETS.map(pr => (
-                            <button key={pr.id} title={pr.desc} onClick={() => updateModelPerms(p, model, { deniedTools: pr.denied })}
-                              style={{
-                                fontSize: 8, padding: "2px 6px", borderRadius: 3, border: "none", cursor: "pointer",
-                                fontWeight: 700, letterSpacing: 0.2,
-                                background: activePreset === pr.id ? pr.color : "var(--glass-tint)",
-                                color: activePreset === pr.id ? "#fff" : "var(--m-text2)",
-                                opacity: activePreset === pr.id ? 1 : 0.6,
-                              }}>{pr.label}</button>
-                          ))}
-                          {activePreset === "custom" && <span style={{ fontSize: 8, padding: "2px 4px", color: "var(--m-accent)", fontWeight: 600 }}>Custom</span>}
-                        </div>}
-                        <input type="number" min={1} max={50} value={iter} onChange={(e) => updateModelPerms(p, model, { maxIterations: parseInt(e.target.value) || 15 })} disabled={!on}
-                          style={{ width: 32, textAlign: "center", fontSize: 10, background: "var(--m-surface)", border: "1px solid var(--m-border)", borderRadius: 3, color: "var(--m-text)", padding: "1px 0", flexShrink: 0 }} />
-                        <div style={{ flexShrink: 0 }}><Toggle on={on} onToggle={() => updateModelPerms(p, model, { toolsEnabled: !on })} /></div>
-                      </div>
-                      {/* Row 2: individual pills (only if custom or user wants fine-tuning) */}
-                      {on && denied.size > 0 && denied.size < ALL_ITEMS.length && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 2, marginTop: 5 }}>
-                          {ALL_ITEMS.map(item => {
-                            const isOn = !denied.has(item);
-                            const label = item.startsWith("pre:") ? item.slice(4) : item.startsWith("mcp:") ? item.slice(4) : item;
-                            const prefix = item.startsWith("mcp:") ? "\u{1F50C}" : item.startsWith("pre:") ? "" : "";
-                            return (
-                              <button key={item} title={item} onClick={() => updateModelPerms(p, model, { deniedTools: toggleItem(denied, item) })}
-                                style={pillStyle(isOn)}>{prefix}{label}</button>
-                            );
-                          })}
-                        </div>
-                      )}
+            return (
+              <div className={styles.sectionCard} style={{ padding: 0, overflow: "hidden" }}>
+                {nonClaude.map((p, providerIdx) => (
+                  <div key={p.id}>
+                    <div style={{ padding: "3px 10px", background: "var(--glass-tint-subtle)", display: "flex", alignItems: "center", gap: 6, borderTop: providerIdx === 0 ? "none" : "1px solid var(--glass-border)" }}>
+                      <div style={{ width: 12, height: 12, borderRadius: 3, background: tColor[p.type] ?? "var(--m-text2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 7, fontWeight: 700, color: "#fff" }}>{p.name.charAt(0).toUpperCase()}</div>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: "var(--m-text2)", textTransform: "uppercase", letterSpacing: 0.4 }}>{p.name}</span>
+                      <span style={{ fontSize: 9, color: "var(--m-text2)", opacity: 0.5 }}>{(p.models ?? []).length}</span>
                     </div>
-                  );
-                })}
-                {(p.models ?? []).length === 0 && <div style={{ padding: "8px 12px", fontSize: 10, color: "var(--m-text2)", fontStyle: "italic" }}>No models selected</div>}
+                    {(p.models ?? []).map((model) => {
+                      const base = p.toolPermissions ?? {};
+                      const override = p.perModelPermissions?.[model] ?? {};
+                      const perms = { ...base, ...override };
+                      const on = perms.toolsEnabled !== false;
+                      const denied = new Set<string>(perms.deniedTools ?? []);
+                      const iter = perms.maxIterations ?? 15;
+                      const activePreset = detectPreset(denied);
+                      const expandKey = `${p.id}::${model}`;
+                      const isExpanded = expandedToolModel === expandKey;
+                      const showPills = on && isExpanded && denied.size > 0 && denied.size < ALL_ITEMS.length;
+
+                      return (
+                        <div key={model} style={{ padding: "3px 10px", borderTop: "1px solid var(--glass-border)", opacity: on ? 1 : 0.35 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 11, fontWeight: 500, fontFamily: "var(--m-font-mono)", color: "var(--m-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>{model.includes("/") ? model.split("/").pop() : model}</span>
+                            {on && <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                              {PRESETS.map(pr => (
+                                <button key={pr.id} title={pr.desc} onClick={() => updateModelPerms(p, model, { deniedTools: pr.denied })}
+                                  style={{
+                                    fontSize: 8, padding: "1px 5px", borderRadius: 2, border: "none", cursor: "pointer",
+                                    fontWeight: 700, letterSpacing: 0.2, lineHeight: 1.4,
+                                    background: activePreset === pr.id ? pr.color : "var(--glass-tint)",
+                                    color: activePreset === pr.id ? "#fff" : "var(--m-text2)",
+                                    opacity: activePreset === pr.id ? 1 : 0.55,
+                                  }}>{pr.label}</button>
+                              ))}
+                              {activePreset === "custom" && (
+                                <button onClick={() => setExpandedToolModel(isExpanded ? null : expandKey)} title="Custom — click to fine-tune"
+                                  style={{ fontSize: 8, padding: "1px 5px", borderRadius: 2, border: "none", cursor: "pointer", fontWeight: 700, lineHeight: 1.4, background: "var(--m-accent)", color: "#fff" }}>
+                                  Custom {isExpanded ? "▴" : "▾"}
+                                </button>
+                              )}
+                              {activePreset !== "custom" && (
+                                <button onClick={() => setExpandedToolModel(isExpanded ? null : expandKey)} title="Fine-tune individual tools"
+                                  style={{ fontSize: 8, padding: "1px 5px", borderRadius: 2, border: "none", cursor: "pointer", fontWeight: 600, lineHeight: 1.4, background: "transparent", color: "var(--m-text2)", opacity: 0.4 }}>
+                                  {isExpanded ? "▴" : "✎"}
+                                </button>
+                              )}
+                            </div>}
+                            <input type="number" min={1} max={50} value={iter} onChange={(e) => updateModelPerms(p, model, { maxIterations: parseInt(e.target.value) || 15 })} disabled={!on}
+                              title="Max iterations"
+                              style={{ width: 28, textAlign: "center", fontSize: 9, background: "var(--m-surface)", border: "1px solid var(--m-border)", borderRadius: 2, color: "var(--m-text)", padding: "0", flexShrink: 0 }} />
+                            <div style={{ flexShrink: 0 }}><Toggle on={on} onToggle={() => updateModelPerms(p, model, { toolsEnabled: !on })} /></div>
+                          </div>
+                          {(showPills || (on && isExpanded)) && (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 2, marginTop: 4, marginBottom: 2 }}>
+                              {ALL_ITEMS.map(item => {
+                                const isOn = !denied.has(item);
+                                const label = item.startsWith("pre:") ? item.slice(4) : item.startsWith("mcp:") ? item.slice(4) : item;
+                                const prefix = item.startsWith("mcp:") ? "\u{1F50C}" : "";
+                                return (
+                                  <button key={item} title={item} onClick={() => updateModelPerms(p, model, { deniedTools: toggleItem(denied, item) })}
+                                    style={pillStyle(isOn)}>{prefix}{label}</button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {(p.models ?? []).length === 0 && <div style={{ padding: "4px 10px", fontSize: 9, color: "var(--m-text2)", fontStyle: "italic" }}>No models selected</div>}
+                  </div>
+                ))}
               </div>
-            ));
+            );
           })()}
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Job Queue ═══ */}
-        <div id="queue" className={styles.section}>
-          <div className={styles.sectionTitle}>Job Queue</div>
+        <CollapsibleSection id="queue" title="Job Queue" badge={queue ? `${(queue.queued ?? 0) + (queue.running ?? 0)} active` : undefined}>
           <div className={styles.sectionCard}>
             <div className={styles.row}><div className={styles.rowIcon} style={{ background: "var(--icon-cyan-bg)" }}>Q</div><div className={styles.rowBody}><div className={styles.rowLabel}>Queued</div></div><span className={styles.rowValue}>{queue?.queued ?? 0}</span></div>
             <div className={styles.row}><div className={styles.rowIcon} style={{ background: "var(--icon-blue-bg)" }}>R</div><div className={styles.rowBody}><div className={styles.rowLabel}>Running</div></div><span className={styles.rowValue}>{queue?.running ?? 0}</span></div>
@@ -906,26 +938,27 @@ export function Settings() {
               <button className={`${styles.rowBtn} ${styles.rowBtnDanger}`} onClick={handlePurgeQueue}>Purge Old</button>
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Schedules (extracted component) ═══ */}
-        <div id="schedules"><ScheduleSection /></div>
+        <ScheduleSection />
 
         {/* ═══ MCP Servers (extracted component) ═══ */}
-        <div id="mcp"><McpSection /></div>
+        <McpSection />
+
+        {/* ═══ System Prompts (per-context personas) ═══ */}
+        <SystemPromptsSection />
 
         {/* ═══ Interface ═══ */}
-        <div id="interface" className={styles.section}>
-          <div className={styles.sectionTitle}>Interface</div>
+        <CollapsibleSection id="interface" title="Interface">
           <div className={styles.sectionCard}>
             <div className={styles.row}><div className={styles.rowIcon} style={{ background: "var(--icon-cyan-bg)" }}>M</div><div className={styles.rowBody}><div className={styles.rowLabel}>Show Minimap <InfoTip text={"Show a small navigation minimap in the bottom-left corner of the Workflow canvas.\n\nHelps orient yourself in large workflows. The minimap shows all nodes and your current viewport position.\n\nDefault: enabled. Hidden automatically on screens < 480px wide."} /></div><div className={styles.rowDesc}>Canvas minimap overlay</div></div><Toggle on={showMinimap} onToggle={() => toggleLocal("occ-show-minimap", !showMinimap, setShowMinimap)} /></div>
             <div className={styles.row}><div className={styles.rowIcon} style={{ background: "var(--icon-purple-bg)" }}>S</div><div className={styles.rowBody}><div className={styles.rowLabel}>Auto-scroll Logs <InfoTip text={"Automatically scroll the Live Monitor log to the latest entry as events arrive.\n\nDisable to freeze the view while reading older entries. Can also be toggled directly in the monitor panel.\n\nDefault: enabled."} /></div><div className={styles.rowDesc}>Scroll to latest log entry</div></div><Toggle on={autoScroll} onToggle={() => toggleLocal("occ-auto-scroll", !autoScroll, setAutoScroll)} /></div>
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Paths & Security ═══ */}
-        <div id="paths" className={styles.section}>
-          <div className={styles.sectionTitle}>Paths & Security</div>
+        <CollapsibleSection id="paths" title={"Paths & Security"}>
           <div className={styles.sectionCard}>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--m-text2)" }}>C</div>
@@ -968,11 +1001,10 @@ export function Settings() {
             <div className={styles.row}><div className={styles.rowIcon} style={{ background: "var(--icon-orange-bg)" }}>S</div><div className={styles.rowBody}><div className={styles.rowLabel}>SSRF Protection <InfoTip text={"Blocks HTTP requests to private/internal IP addresses from pre-tools (http_fetch, web_search, etc.).\n\nAlways enabled. Prevents Server-Side Request Forgery attacks. Blocked ranges: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, ::1, fc00::/7."} /></div><div className={styles.rowDesc}>Blocks private IPs</div></div><span className={styles.rowValue}>Enabled</span></div>
           </div>
           {configDirty && <div className={styles.sectionHint} style={{ color: "var(--m-accent)" }}>Saved — restart server to apply path changes.</div>}
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Storage ═══ */}
-        <div id="storage" className={styles.section}>
-          <div className={styles.sectionTitle}>Storage</div>
+        <CollapsibleSection id="storage" title="Storage">
           <div className={styles.sectionCard}>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-orange-bg)" }}>M</div>
@@ -1006,11 +1038,10 @@ export function Settings() {
             </div>
           </div>
           {configDirty && <div className={styles.sectionHint} style={{ color: "var(--m-accent)" }}>Saved — restart server to apply storage changes.</div>}
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Email (Resend) ═══ */}
-        <div id="email" className={styles.section}>
-          <div className={styles.sectionTitle}>Email</div>
+        <CollapsibleSection id="email" title="Email">
           <div className={styles.sectionCard}>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-blue-bg)" }}>R</div>
@@ -1030,11 +1061,10 @@ export function Settings() {
             </div>
           </div>
           <div className={styles.sectionHint}>Optional — used by the email pre-tool in chains. Provider: Resend.</div>
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ About + Token Usage Charts ═══ */}
-        <div id="about" className={styles.section}>
-          <div className={styles.sectionTitle}>About</div>
+        <CollapsibleSection id="about" title="About" badge={health?.version ?? undefined}>
           <div className={styles.sectionCard}>
             <div className={styles.statsGrid}>
               <div className={styles.statCell}><span className={styles.statValue}>{health?.version ?? "—"}</span><span className={styles.statLabel}>Version</span></div>
@@ -1076,27 +1106,31 @@ export function Settings() {
               >Run Setup Check</button>
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Token Usage Charts ═══ */}
-        <div id="tokens" className={styles.section}>
-          <div className={styles.sectionTitle}>
-            Token Usage
-            <div className={styles.chartModeToggle}>
-              <button className={`${styles.chartModeBtn} ${chartMode === "daily" ? styles.chartModeBtnActive : ""}`} onClick={() => setChartMode("daily")}>Daily</button>
-              <button className={`${styles.chartModeBtn} ${chartMode === "weekly" ? styles.chartModeBtnActive : ""}`} onClick={() => setChartMode("weekly")}>Weekly</button>
-            </div>
-          </div>
+        <CollapsibleSection
+          id="tokens"
+          title={(
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              Token Usage
+              <span className={styles.chartModeToggle} onClick={(e) => e.stopPropagation()}>
+                <button className={`${styles.chartModeBtn} ${chartMode === "daily" ? styles.chartModeBtnActive : ""}`} onClick={(e) => { e.stopPropagation(); setChartMode("daily"); }}>Daily</button>
+                <button className={`${styles.chartModeBtn} ${chartMode === "weekly" ? styles.chartModeBtnActive : ""}`} onClick={(e) => { e.stopPropagation(); setChartMode("weekly"); }}>Weekly</button>
+              </span>
+            </span>
+          )}
+          badge={tokenData ? `${formatTokens((tokenData.totals?.input ?? 0) + (tokenData.totals?.output ?? 0))} tokens` : undefined}
+        >
           <div className={styles.sectionCard}>
             <div style={{ padding: 16 }}>
               <TokenDashboard data={tokenData} mode={chartMode} />
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ LLM Models ═══ */}
-        <div id="models" className={styles.section}>
-          <div className={styles.sectionTitle}>LLM Models</div>
+        <CollapsibleSection id="models" title="LLM Models">
 
           {/* BLOB Models */}
           <div className={styles.sectionCard}>
@@ -1178,11 +1212,10 @@ export function Settings() {
             </div>
           </div>
           {configDirty && <div className={styles.sectionHint} style={{ color: "var(--m-accent)" }}>Changes saved — applied on next request.</div>}
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ BLOB Configuration ═══ */}
-        <div id="blob" className={styles.section}>
-          <div className={styles.sectionTitle}>BLOB</div>
+        <CollapsibleSection id="blob" title="BLOB">
           <div className={styles.sectionCard}>
             <div className={styles.row}>
               <div className={styles.rowIcon} style={{ background: "var(--icon-cyan-bg)" }}>T</div>
@@ -1202,11 +1235,10 @@ export function Settings() {
             </div>
           </div>
           {configDirty && <div className={styles.sectionHint} style={{ color: "var(--m-accent)" }}>Saved — restart server to apply BLOB changes.</div>}
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Data Management ═══ */}
-        <div id="data" className={styles.section}>
-          <div className={styles.sectionTitle}>Data Management</div>
+        <CollapsibleSection id="data" title="Data Management">
 
           {/* Context & Cache */}
           <div className={styles.sectionCard}>
@@ -1416,15 +1448,18 @@ export function Settings() {
           <div className={styles.sectionHint}>
             Backend data (executions, chains, BLOB) is stored in SQLite and JSON files on the server. Local data is stored in the browser.
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* ═══ Keyboard Shortcuts (configurable) ═══ */}
-        <div id="shortcuts" className={styles.section}>
-          <div className={styles.sectionTitle}>
-            Keyboard Shortcuts
-            <button className={styles.chartModeBtn} style={{ marginLeft: "auto" }} onClick={() => { shortcutStore.resetAll(); setEditingShortcut(null); }}>Reset All</button>
-          </div>
-
+        <CollapsibleSection
+          id="shortcuts"
+          title={(
+            <span style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
+              Keyboard Shortcuts
+              <button className={styles.chartModeBtn} style={{ marginLeft: "auto" }} onClick={(e) => { e.stopPropagation(); shortcutStore.resetAll(); setEditingShortcut(null); }}>Reset All</button>
+            </span>
+          )}
+        >
           {(["Navigation", "Workflow Canvas", "The Blob", "Global"] as const).map((cat) => (
             <div key={cat} className={styles.sectionCard}>
               <div className={styles.sectionSubtitle}>{cat}</div>
@@ -1451,7 +1486,7 @@ export function Settings() {
               ))}
             </div>
           ))}
-        </div>
+        </CollapsibleSection>
 
       </div>
     </div>

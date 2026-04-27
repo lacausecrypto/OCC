@@ -139,6 +139,88 @@
   letter-spacing: 0.5px;
   padding: 0 16px 6px;
 }
+
+/* ─── Collapsible section header ─── */
+.sectionTitleCollapsible {
+  font-size: var(--s-xs);
+  font-weight: 600;
+  color: var(--m-text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 14px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 6px;
+  margin: 0 2px 0;
+  transition: background 0.15s, color 0.15s;
+  width: calc(100% - 4px);
+  text-align: left;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+}
+.sectionTitleCollapsible:hover {
+  background: var(--m-hover);
+  color: var(--m-text);
+}
+.sectionChevron {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.18s ease;
+  margin-right: 2px;
+  opacity: 0.6;
+}
+.sectionTitleCollapsible[data-open="true"] .sectionChevron {
+  transform: rotate(45deg);
+}
+.sectionBadge {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--m-text2);
+  opacity: 0.5;
+  text-transform: none;
+  letter-spacing: 0.2px;
+}
+
+.collapseAllBar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 10px;
+}
+.collapseAllBtn {
+  background: var(--glass-tint);
+  color: var(--m-text2);
+  border: 1px solid var(--m-border);
+  border-radius: 5px;
+  padding: 3px 9px;
+  font-size: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.collapseAllBtn:hover {
+  background: var(--m-hover);
+  color: var(--m-text);
+}
+.sectionBodyHidden {
+  display: none;
+}
+
+/* When the section is collapsed, kill the bottom margin so consecutive
+   collapsed sections sit close together — easier to scan a long list. */
+.sectionCollapsed {
+  margin-bottom: 4px;
+}
 .sectionSubtitle {
   font-size: 10px;
   font-weight: 600;
