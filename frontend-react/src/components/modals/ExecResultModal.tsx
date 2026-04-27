@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useServerStore } from "../../stores/server";
 import { useMonitorStore } from "../../stores/monitor";
-import { fetchExecution } from "../../api/executions";
+import { fetchExecution, fetchExecutionTimeline, type TimelineCheckpoint } from "../../api/executions";
 import { mdToHtml } from "../../utils/markdown";
 import { esc } from "../../utils/escape";
 import { ModalOverlay } from "./ModalOverlay";
 import type { ChainExecution, StepResult } from "../../types/execution";
 import styles from "./Modal.module.css";
 
-type ExecTab = "steps" | "result" | "rendered";
+type ExecTab = "steps" | "timeline" | "result" | "rendered";
 
 interface ExecResultModalProps {
   executionId: string;
@@ -237,6 +237,18 @@ export function ExecResultModal({ executionId, onClose }: ExecResultModalProps) 
   const [activeTab, setActiveTab] = useState<ExecTab>("steps");
   const [copyLabel, setCopyLabel] = useState("Copy");
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [timeline, setTimeline] = useState<TimelineCheckpoint[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+
+  // Lazy-load timeline when the timeline tab is activated
+  useEffect(() => {
+    if (activeTab !== "timeline" || !serverOnline) return;
+    setTimelineLoading(true);
+    fetchExecutionTimeline(executionId)
+      .then((cps) => setTimeline(Array.isArray(cps) ? cps : []))
+      .catch(() => setTimeline([]))
+      .finally(() => setTimelineLoading(false));
+  }, [activeTab, executionId, serverOnline]);
 
   // Load full execution from REST or fallback to monitor store
   useEffect(() => {
@@ -376,9 +388,10 @@ export function ExecResultModal({ executionId, onClose }: ExecResultModalProps) 
 
         {/* Tabs */}
         <div className={styles.execTabs}>
-          {(["steps", "result", "rendered"] as ExecTab[]).map((tab) => {
+          {(["steps", "timeline", "result", "rendered"] as ExecTab[]).map((tab) => {
             const label =
               tab === "steps" ? `Steps (${steps.length})`
+              : tab === "timeline" ? "Timeline"
               : tab === "result" ? "Raw Result"
               : "Rendered";
             return (
@@ -454,6 +467,49 @@ export function ExecResultModal({ executionId, onClose }: ExecResultModalProps) 
                 })
               )}
             </>
+          )}
+
+          {activeTab === "timeline" && (
+            <div className={styles.execTimeline}>
+              {timelineLoading ? (
+                <div className={styles.emptyState}>Loading timeline...</div>
+              ) : timeline.length === 0 ? (
+                <div className={styles.emptyState}>No timeline checkpoints recorded.</div>
+              ) : (
+                <div className={styles.timelineList}>
+                  {timeline.map((cp, i) => {
+                    const ts = new Date(cp.checkpointAt);
+                    const dur = cp.durationMs ? `${(cp.durationMs / 1000).toFixed(2)}s` : "";
+                    const tokens = (cp.inputTokens || cp.outputTokens)
+                      ? `${cp.inputTokens ?? 0} in / ${cp.outputTokens ?? 0} out`
+                      : "";
+                    return (
+                      <div key={`${cp.stepId}-${i}`} className={styles.timelineRow}>
+                        <span
+                          className={styles.timelineDot}
+                          style={{ background: statusColor(cp.status) }}
+                        >
+                          {statusIcon(cp.status)}
+                        </span>
+                        <div className={styles.timelineContent}>
+                          <div className={styles.timelineHead}>
+                            <span className={styles.timelineStep}>{cp.stepId}</span>
+                            <span className={styles.timelineStatus} style={{ color: statusColor(cp.status) }}>
+                              {cp.status}
+                            </span>
+                          </div>
+                          <div className={styles.timelineMeta}>
+                            <span>{ts.toLocaleTimeString()}</span>
+                            {dur && <span> &middot; {dur}</span>}
+                            {tokens && <span> &middot; {tokens}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           )}
 
           {activeTab === "result" && (

@@ -430,6 +430,65 @@
   font-size: calc(var(--m-body-size) * 0.86);
 }
 
+/* ─── Execution timeline ─── */
+.execTimeline {
+  padding: 8px 4px;
+}
+.timelineList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.timelineRow {
+  display: flex;
+  gap: 10px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--m-border);
+  align-items: flex-start;
+}
+.timelineRow:hover {
+  background: var(--glass-tint-subtle);
+}
+.timelineDot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+.timelineContent {
+  flex: 1;
+  min-width: 0;
+}
+.timelineHead {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-family: var(--m-font-mono, monospace);
+  font-size: var(--s-xs);
+}
+.timelineStep {
+  font-weight: 600;
+  color: var(--m-text);
+}
+.timelineStatus {
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.timelineMeta {
+  font-size: 10px;
+  color: var(--m-text2);
+  margin-top: 2px;
+  font-family: var(--m-font-mono, monospace);
+}
+
 /* ═══ Responsive ═══ */
 @media (max-width: 768px) {
   .modal {

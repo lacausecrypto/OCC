@@ -609,7 +609,7 @@
   transition: background 0.15s, color 0.15s;
 }
 .floorBtn:hover { background: var(--glass-tint-hover); color: var(--m-text); }
-.floorBtnActive { color: var(--m-accent, #0a84ff); background: rgba(10,132,255,0.12); }
+.floorBtnActive { color: var(--m-accent, #0a84ff); background: rgba(var(--m-accent-rgb, 10,132,255), 0.12); }
 .floorDivider {
   width: 1px;
   height: 18px;

@@ -45,6 +45,7 @@ export function CanvasItemEditModal({
 
   // Portal
   const [portalUrl, setPortalUrl] = useState(existingNode?.portalUrl ?? "https://");
+  const [portalMode, setPortalMode] = useState<"static" | "interactive">(existingNode?.portalMode ?? "static");
 
   // File
   const [filePath, setFilePath] = useState(existingNode?.filePath ?? "");
@@ -87,9 +88,52 @@ export function CanvasItemEditModal({
       .then((data) => { if (Array.isArray(data)) setProviderModels(data); })
       .catch(() => { /* leave empty — input stays free-form */ });
   }, []);
-  const modelsForProvider = providerModels
+  // Curated fallback model lists — shown when the backend returns no models
+  // for the selected provider (typically: provider not yet added, or no API key).
+  // Keeps the dropdown UX even before full provider config.
+  const FALLBACK_MODELS: Record<string, string[]> = {
+    claude: ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
+    codex: [
+      // GPT-5.5 — current frontier (ChatGPT login only)
+      "gpt-5.5",
+      // GPT-5.4 family — default + mini
+      "gpt-5.4", "gpt-5.4-mini",
+      // GPT-5.3 codex — coding-tuned
+      "gpt-5.3-codex", "gpt-5.3-codex-spark",
+      // GPT-5.2 family
+      "gpt-5.2", "gpt-5.2-codex",
+      // Older GPT-5 family
+      "gpt-5", "gpt-5-codex",
+      // o-series reasoning
+      "o4-mini", "o3", "o3-mini", "o3-pro", "o1", "o1-mini", "o1-pro",
+      // GPT-4.1 family
+      "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+      // GPT-4o family
+      "gpt-4o", "gpt-4o-mini", "chatgpt-4o-latest",
+      // Legacy
+      "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
+    ],
+    openrouter: [
+      "anthropic/claude-sonnet-4", "anthropic/claude-opus-4",
+      "openai/gpt-4o", "openai/gpt-4o-mini", "openai/o3-mini",
+      "google/gemini-2.5-pro", "google/gemini-2.5-flash",
+      "deepseek/deepseek-r1", "deepseek/deepseek-chat",
+      "meta-llama/llama-4-maverick", "mistralai/mistral-large",
+      "qwen/qwen3-235b-a22b",
+    ],
+    openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3-mini", "o4-mini"],
+    ollama: ["llama3", "llama3.3", "mistral", "qwen2.5", "deepseek-r1"],
+  };
+
+  const backendModels = providerModels
     .filter((m) => m.provider === terminalProvider)
     .map((m) => m.model);
+
+  // Prefer backend-reported models; fall back to curated defaults so the
+  // dropdown is always populated for known providers.
+  const modelsForProvider = backendModels.length > 0
+    ? backendModels
+    : (FALLBACK_MODELS[terminalProvider] ?? []);
 
   // Focus first input
   const firstInputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
@@ -133,7 +177,7 @@ export function CanvasItemEditModal({
       case "text":
         return { markdown };
       case "portal":
-        return { portalUrl };
+        return { portalUrl, portalMode };
       case "file":
         return { filePath, fileContent, label: filePath.split("/").pop() ?? label };
       case "link":
@@ -270,17 +314,42 @@ export function CanvasItemEditModal({
           )}
 
           {kind === "portal" && (
-            <div className={styles.itemModalField}>
-              <label className={styles.itemModalLabel}>URL</label>
-              <input
-                ref={firstInputRef as React.RefObject<HTMLInputElement>}
-                className={styles.itemModalInput}
-                value={portalUrl}
-                onChange={(e) => setPortalUrl(e.target.value)}
-                placeholder="https://example.com"
-                type="url"
-              />
-            </div>
+            <>
+              <div className={styles.itemModalField}>
+                <label className={styles.itemModalLabel}>URL</label>
+                <input
+                  ref={firstInputRef as React.RefObject<HTMLInputElement>}
+                  className={styles.itemModalInput}
+                  value={portalUrl}
+                  onChange={(e) => setPortalUrl(e.target.value)}
+                  placeholder="https://example.com"
+                  type="url"
+                />
+              </div>
+              <div className={styles.itemModalField}>
+                <label className={styles.itemModalLabel}>Mode</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", padding: 8, borderRadius: 6, border: portalMode === "static" ? "1px solid var(--m-accent)" : "1px solid var(--m-border)", background: portalMode === "static" ? "rgba(var(--m-accent-rgb),0.08)" : "transparent" }}>
+                    <input type="radio" name="portalMode" checked={portalMode === "static"} onChange={() => setPortalMode("static")} style={{ marginTop: 2 }} />
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 12 }}>Static</div>
+                      <div style={{ fontSize: 11, color: "var(--m-text2)", marginTop: 2 }}>
+                        Server-side fetch, no JS, no cookies. Cheap and anonymous. Breaks on SPAs (X, Gmail, Notion).
+                      </div>
+                    </div>
+                  </label>
+                  <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", padding: 8, borderRadius: 6, border: portalMode === "interactive" ? "1px solid var(--m-accent)" : "1px solid var(--m-border)", background: portalMode === "interactive" ? "rgba(var(--m-accent-rgb),0.08)" : "transparent" }}>
+                    <input type="radio" name="portalMode" checked={portalMode === "interactive"} onChange={() => setPortalMode("interactive")} style={{ marginTop: 2 }} />
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 12 }}>Interactive (login)</div>
+                      <div style={{ fontSize: 11, color: "var(--m-text2)", marginTop: 2 }}>
+                        Real Chromium streamed over WebSocket. Cookies, JS, WebSockets all work. Login persists per node.
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </>
           )}
 
           {kind === "file" && (
@@ -402,6 +471,7 @@ export function CanvasItemEditModal({
                     // Set default model when switching provider
                     const defaults: Record<string, string> = {
                       claude: "claude-sonnet-4-6",
+                      codex: "gpt-5.4",
                       openrouter: "anthropic/claude-sonnet-4",
                       openai: "gpt-4o",
                       ollama: "llama3",
@@ -410,40 +480,55 @@ export function CanvasItemEditModal({
                   }}
                 >
                   <option value="claude">Claude (Anthropic)</option>
+                  <option value="codex">OpenAI Codex CLI</option>
                   <option value="openrouter">OpenRouter</option>
                   <option value="openai">OpenAI</option>
                   <option value="ollama">Ollama (local)</option>
                 </select>
               </div>
               <div className={styles.itemModalField}>
-                <label className={styles.itemModalLabel}>Model</label>
+                <label className={styles.itemModalLabel}>
+                  Model
+                  {backendModels.length === 0 && modelsForProvider.length > 0 && (
+                    <span style={{ marginLeft: 8, fontSize: 9, opacity: 0.6 }}>
+                      (suggested — configure provider for live list)
+                    </span>
+                  )}
+                </label>
                 {modelsForProvider.length > 0 ? (
-                  <select
-                    ref={firstInputRef as unknown as React.RefObject<HTMLSelectElement>}
-                    className={styles.itemModalSelect}
-                    value={terminalModel}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === "__custom__") return; // sentinel: user typed below
-                      setTerminalModel(v);
-                    }}
-                  >
-                    {!modelsForProvider.includes(terminalModel) && terminalModel && (
-                      <option value={terminalModel}>{terminalModel} (custom)</option>
+                  <>
+                    <select
+                      ref={firstInputRef as unknown as React.RefObject<HTMLSelectElement>}
+                      className={styles.itemModalSelect}
+                      value={modelsForProvider.includes(terminalModel) ? terminalModel : "__custom__"}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v !== "__custom__") setTerminalModel(v);
+                      }}
+                    >
+                      {modelsForProvider.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                      <option value="__custom__">— Custom model name —</option>
+                    </select>
+                    {!modelsForProvider.includes(terminalModel) && (
+                      <input
+                        className={styles.itemModalInput}
+                        style={{ marginTop: 6 }}
+                        value={terminalModel}
+                        onChange={(e) => setTerminalModel(e.target.value)}
+                        placeholder="enter custom model id"
+                      />
                     )}
-                    {modelsForProvider.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
+                  </>
                 ) : (
-                  // Provider not enumerated by the backend (no API key, etc.) —
-                  // keep the free-form input so the user can still type a model.
+                  // Truly unknown provider — pure free-form
                   <input
                     ref={firstInputRef as React.RefObject<HTMLInputElement>}
                     className={styles.itemModalInput}
                     value={terminalModel}
                     onChange={(e) => setTerminalModel(e.target.value)}
-                    placeholder="claude-sonnet-4-6"
+                    placeholder="model id"
                   />
                 )}
               </div>

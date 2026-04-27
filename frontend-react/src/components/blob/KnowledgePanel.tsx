@@ -39,6 +39,8 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
   const [editFacts, setEditFacts] = useState("");
   const [allKnowledge, setAllKnowledge] = useState<KnowledgeEntry[]>([]);
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
+  const [linkBusy, setLinkBusy] = useState(false);
 
   // Load from backend (single source of truth)
   const loadKnowledge = () => {
@@ -46,6 +48,23 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
       .then((r) => r.ok ? r.json() : [])
       .then((data) => { if (Array.isArray(data)) setAllKnowledge(data); })
       .catch(() => {});
+  };
+
+  const handleLink = async (id1: string, id2: string) => {
+    if (id1 === id2) { setLinkSourceId(null); return; }
+    setLinkBusy(true);
+    try {
+      await fetch("/knowledge/link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id1, id2 }),
+      });
+      setLinkSourceId(null);
+      // Reload to get the new related concepts
+      loadKnowledge();
+    } finally {
+      setLinkBusy(false);
+    }
   };
 
   useEffect(() => { loadKnowledge(); }, []);
@@ -131,6 +150,28 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
         />
       </div>
 
+      {/* Link mode hint */}
+      {linkSourceId && (
+        <div style={{
+          margin: "4px 12px",
+          padding: "4px 8px",
+          fontSize: 10,
+          background: "rgba(var(--m-accent-rgb), 0.1)",
+          border: "1px dashed var(--m-accent)",
+          borderRadius: 4,
+          color: "var(--m-accent)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+        }}>
+          <span>
+            Linking from <strong>{allKnowledge.find(x => x.id === linkSourceId)?.concept ?? "?"}</strong> — click another concept name
+          </span>
+          <button className={styles.kpBtn} onClick={() => setLinkSourceId(null)}>Cancel</button>
+        </div>
+      )}
+
       {/* Tag filters */}
       <div className={styles.gitToolbar} style={{ paddingTop: 4, paddingBottom: 4 }}>
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -177,8 +218,30 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
                   {k.inferredTag.tag.toUpperCase()}
                 </span>
               )}
-              <span className={styles.kpConcept}>{k.concept}</span>
+              <span
+                className={styles.kpConcept}
+                style={linkSourceId === k.id
+                  ? { background: "rgba(var(--m-accent-rgb), 0.18)", padding: "1px 4px", borderRadius: 3 }
+                  : linkSourceId
+                    ? { cursor: "pointer", textDecoration: "underline dotted" }
+                    : undefined}
+                onClick={() => {
+                  if (linkSourceId && linkSourceId !== k.id) {
+                    void handleLink(linkSourceId, k.id);
+                  }
+                }}
+                title={linkSourceId
+                  ? (linkSourceId === k.id ? "Click another concept to link" : "Click to link to " + (allKnowledge.find(x => x.id === linkSourceId)?.concept ?? "source"))
+                  : k.concept}
+              >{k.concept}</span>
               <span className={styles.kpAccessCount}>{k.facts.length}f · {k.accessCount}x</span>
+              <button
+                className={styles.kpBtn}
+                disabled={linkBusy}
+                title={linkSourceId === k.id ? "Cancel link mode" : "Start link from this concept"}
+                onClick={() => setLinkSourceId(linkSourceId === k.id ? null : k.id)}
+                style={linkSourceId === k.id ? { borderColor: "var(--m-accent)", color: "var(--m-accent)" } : undefined}
+              >{"\u29C9"}</button>
               <button className={styles.kpBtn} onClick={() => {
                 setEditingId(editingId === k.id ? null : k.id);
                 setEditFacts(k.facts.join("\n"));

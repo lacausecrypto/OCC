@@ -40,6 +40,8 @@ export default defineConfig({
       "/download": { target: OCC_BACKEND, changeOrigin: true },
       "/cache": { target: OCC_BACKEND, changeOrigin: true },
       "/prerequisites": { target: OCC_BACKEND, changeOrigin: true },
+      "/system-prompts": { target: OCC_BACKEND, changeOrigin: true },
+      "/agent-chat": { target: OCC_BACKEND, changeOrigin: true },
       "/api/docs": { target: OCC_BACKEND, changeOrigin: true },
       "/api/openapi": { target: OCC_BACKEND, changeOrigin: true },
       // SSE event stream
@@ -65,10 +67,14 @@ export default defineConfig({
         target: OCC_BACKEND,
         changeOrigin: true,
       },
-      // Portal proxy for iframe embedding (strips X-Frame-Options)
+      // Portal proxy for iframe embedding (strips X-Frame-Options) AND
+      // interactive portal sessions (REST + WebSocket screencast/input).
+      // ws:true is required so /portal/:id/screencast and /portal/:id/input
+      // upgrade requests reach the backend instead of being treated as HTTP.
       "/portal": {
         target: OCC_BACKEND,
         changeOrigin: true,
+        ws: true,
       },
     },
   },

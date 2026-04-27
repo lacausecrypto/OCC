@@ -822,6 +822,88 @@ export function BlobCanvas() {
     useBlobStore.getState().saveActiveSession();
   }, [activeSessionId]);
 
+  // ─── Execute all steps in a branch via SSE streaming ──────────
+  const executeBranch = useCallback(async (branchNodeId: string) => {
+    if (!activeSessionId) return;
+    useBlobStore.getState().addMessage({
+      id: `msg_eb_${Date.now()}`, role: "system",
+      content: `Executing branch ${branchNodeId.slice(-8)}...`,
+      timestamp: new Date().toISOString(), spawnedNodeIds: [],
+    });
+
+    let res: Response;
+    try {
+      res = await fetch(`/blobs/${activeSessionId}/execute-branch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branchNodeId }),
+      });
+    } catch (err) {
+      useBlobStore.getState().addMessage({
+        id: `msg_eb_err_${Date.now()}`, role: "system",
+        content: `Branch execute failed: ${err instanceof Error ? err.message : "network"}`,
+        timestamp: new Date().toISOString(), spawnedNodeIds: [],
+      });
+      return;
+    }
+
+    if (!res.ok || !res.body) {
+      useBlobStore.getState().addMessage({
+        id: `msg_eb_err_${Date.now()}`, role: "system",
+        content: `Branch execute returned ${res.status}`,
+        timestamp: new Date().toISOString(), spawnedNodeIds: [],
+      });
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const stepOutputs = new Map<string, string>();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const evt = JSON.parse(line.slice(6));
+          if (evt.type === "step_start") {
+            useBlobStore.getState().updateNode(evt.stepId, { status: "running" });
+          } else if (evt.type === "chunk") {
+            stepOutputs.set(evt.stepId, (stepOutputs.get(evt.stepId) ?? "") + evt.text);
+          } else if (evt.type === "step_done") {
+            const node = useBlobStore.getState().nodes.get(evt.stepId);
+            if (node && node.data.kind === "step") {
+              useBlobStore.getState().updateNode(evt.stepId, {
+                status: "done",
+                data: {
+                  ...node.data,
+                  output: evt.output ?? stepOutputs.get(evt.stepId) ?? "",
+                  durationMs: evt.durationMs,
+                  inputTokens: evt.inputTokens,
+                  outputTokens: evt.outputTokens,
+                },
+              });
+            }
+          } else if (evt.type === "step_error") {
+            useBlobStore.getState().updateNode(evt.stepId, { status: "error" });
+          } else if (evt.type === "branch_done") {
+            useBlobStore.getState().addMessage({
+              id: `msg_eb_done_${Date.now()}`, role: "system",
+              content: `Branch done: ${evt.stepsExecuted} steps executed`,
+              timestamp: new Date().toISOString(), spawnedNodeIds: [],
+            });
+          }
+        } catch { /* skip malformed line */ }
+      }
+    }
+    useBlobStore.getState().saveActiveSession();
+  }, [activeSessionId]);
+
   // ─── Poll for autonomous plans ─────────────────────────────────
   useEffect(() => {
     if (!activeSessionId) return;
@@ -962,7 +1044,7 @@ export function BlobCanvas() {
 
       {/* Selected node info */}
       {selectedNode && !showKnowledge && !showGitGraph && nodes.get(selectedNode) && (
-        <NodeInfoPanel nodeId={selectedNode} onClose={() => setSelectedNode(null)} onExecute={executeStep} />
+        <NodeInfoPanel nodeId={selectedNode} onClose={() => setSelectedNode(null)} onExecute={executeStep} onExecuteBranch={executeBranch} />
       )}
 
       {/* Top-right action buttons */}

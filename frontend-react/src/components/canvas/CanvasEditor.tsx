@@ -27,6 +27,7 @@ import { ConnectionPopover } from "./ConnectionPopover";
 import { FloorIndicator } from "./FloorIndicator";
 import { FloorOverview } from "./FloorOverview";
 import { useFloorsStore } from "../../stores/floors";
+import { useFloorPalette } from "../../utils/floorColors";
 import styles from "./CanvasEditor.module.css";
 
 /** Renders FloorOverview only when open (subscribes to store) */
@@ -636,6 +637,7 @@ function FloorCardsLayer({ floors, activeFloorId, targetFloorId, scale, interact
 }) {
   const floorList = [...floors.values()];
   const count = floorList.length;
+  const palette = useFloorPalette();
 
   // Card sizing
   const cardW = Math.min(560, window.innerWidth * 0.65);
@@ -670,6 +672,7 @@ function FloorCardsLayer({ floors, activeFloorId, targetFloorId, scale, interact
           const isActive = floor.id === activeFloorId;
           const isTarget = floor.id === targetFloorId;
           const nodeCount = floor.nodes.size;
+          const color = palette[floor.colorSlot % palette.length] ?? palette[0];
 
           // Vertical position: bottom floor = idx 0 at bottom, top floor = last at top
           const reverseIdx = count - 1 - idx;
@@ -695,9 +698,9 @@ function FloorCardsLayer({ floors, activeFloorId, targetFloorId, scale, interact
                 marginLeft: -cardW / 2,
                 transform: `rotateX(${rotateX}deg) translateZ(${translateZ}px) scale(${scaleCard})`,
                 zIndex: idx, // higher floors on top
-                borderColor: isTarget ? floor.color : isActive ? floor.color + "40" : "rgba(255,255,255,0.06)",
+                borderColor: isTarget ? color : isActive ? color + "40" : "rgba(255,255,255,0.06)",
                 boxShadow: isTarget
-                  ? `0 0 50px ${floor.color}30, 0 40px 80px rgba(0,0,0,0.6)`
+                  ? `0 0 50px ${color}30, 0 40px 80px rgba(0,0,0,0.6)`
                   : `0 ${24 + idx * 6}px ${48 + idx * 10}px rgba(0,0,0,${0.25 + idx * 0.04})`,
               }}
             >
@@ -711,7 +714,7 @@ function FloorCardsLayer({ floors, activeFloorId, targetFloorId, scale, interact
                     width={Math.max(6, n.w * 0.2)}
                     height={Math.max(4, n.h * 0.2)}
                     rx={2}
-                    fill={floor.color + "70"}
+                    fill={color + "70"}
                   />
                 ))}
                 {[...floor.edges.values()].slice(0, 20).map((e) => {
@@ -725,7 +728,7 @@ function FloorCardsLayer({ floors, activeFloorId, targetFloorId, scale, interact
                       y1={(from.y + from.h) * 0.2 + 20}
                       x2={(to.x + to.w / 2) * 0.2 + 40}
                       y2={to.y * 0.2 + 20}
-                      stroke={floor.color + "30"}
+                      stroke={color + "30"}
                       strokeWidth={1}
                     />
                   );
@@ -739,9 +742,9 @@ function FloorCardsLayer({ floors, activeFloorId, targetFloorId, scale, interact
 
               {/* Label bar */}
               <div className={styles.floorTransCardLabel}>
-                <span className={styles.floorDot} style={{ background: floor.color }} />
+                <span className={styles.floorDot} style={{ background: color }} />
                 <span>{floor.name}</span>
-                {isTarget && <span style={{ marginLeft: "auto", color: floor.color }}>{"\u25C0"}</span>}
+                {isTarget && <span style={{ marginLeft: "auto", color: color }}>{"\u25C0"}</span>}
                 {isActive && !isTarget && <span style={{ marginLeft: "auto", opacity: 0.4, fontSize: 10 }}>current</span>}
               </div>
             </div>

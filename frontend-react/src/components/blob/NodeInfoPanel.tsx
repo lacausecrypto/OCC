@@ -2,6 +2,7 @@
  * NodeInfoPanel — shared detail panel for selected blob nodes.
  * Used in both Blob view and Graph view.
  */
+import { useState } from "react";
 import { useBlobStore } from "../../stores/blob";
 import styles from "./Blob.module.css";
 
@@ -9,13 +10,23 @@ interface Props {
   nodeId: string;
   onClose: () => void;
   onExecute?: (nodeId: string) => void;
+  /** Streaming-aware branch executor (sets up SSE → live node updates). */
+  onExecuteBranch?: (branchNodeId: string) => Promise<void>;
 }
 
-export function NodeInfoPanel({ nodeId, onClose, onExecute }: Props) {
+export function NodeInfoPanel({ nodeId, onClose, onExecute, onExecuteBranch }: Props) {
   const node = useBlobStore((s) => s.nodes.get(nodeId));
+  const [branchRunning, setBranchRunning] = useState(false);
   if (!node) return null;
 
   const d = node.data;
+
+  const handleExecuteBranch = async () => {
+    if (!onExecuteBranch || branchRunning) return;
+    setBranchRunning(true);
+    try { await onExecuteBranch(node.id); }
+    finally { setBranchRunning(false); }
+  };
 
   return (
     <div className={styles.nodeInfo}>
@@ -53,11 +64,23 @@ export function NodeInfoPanel({ nodeId, onClose, onExecute }: Props) {
 
       {/* Branch details */}
       {d.kind === "branch" && (
-        <div className={styles.nodeInfoSection}>
-          <span className={styles.nodeInfoSectionTitle}>Topic</span>
-          <div className={styles.nodeInfoMeta}>{d.topic}</div>
-          {d.summary && <div className={styles.nodeInfoMeta}>{d.summary}</div>}
-        </div>
+        <>
+          <div className={styles.nodeInfoSection}>
+            <span className={styles.nodeInfoSectionTitle}>Topic</span>
+            <div className={styles.nodeInfoMeta}>{d.topic}</div>
+            {d.summary && <div className={styles.nodeInfoMeta}>{d.summary}</div>}
+          </div>
+          {onExecuteBranch && (
+            <button
+              className={styles.nodeInfoBtn}
+              onClick={handleExecuteBranch}
+              disabled={branchRunning}
+              title="Execute all steps in this branch sequentially with streaming"
+            >
+              {branchRunning ? "Running…" : "▶ Execute branch"}
+            </button>
+          )}
+        </>
       )}
 
       {/* Core — message count */}

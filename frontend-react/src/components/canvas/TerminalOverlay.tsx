@@ -48,21 +48,28 @@ function TerminalOverlayItem({ node, camera }: TerminalOverlayItemProps) {
 
       // Inject content from canvas items connected to this terminal so the
       // agent can actually act on a Portal / File / Obsidian / Sticky etc.
-      // Read the LIVE store state (not the captured `node` closure) so edits
-      // made between messages are reflected.
       const live = useCanvasStore.getState();
       const connected = buildConnectedContext(node.id, live.nodes, live.edges);
-      const baseSystem = node.terminalSystemPrompt
-        || `You are ${node.terminalName ?? "an AI assistant"}. Be concise and helpful.`;
-      const systemPrompt = connected ? `${connected}\n\n${baseSystem}` : baseSystem;
+      // If the user authored a custom system prompt for this terminal, use it
+      // as-is. Otherwise let the backend fall back to the configurable
+      // `terminalAgent` system prompt (Settings → System Prompts).
+      const baseSystem = node.terminalSystemPrompt && node.terminalSystemPrompt.trim().length > 0
+        ? node.terminalSystemPrompt
+        : "";
+      const systemPrompt = connected
+        ? (baseSystem ? `${connected}\n\n${baseSystem}` : connected)
+        : baseSystem;
 
-      const res = await fetch(`/blobs/${encodeURIComponent(node.id)}/chat`, {
+      // Use /agent-chat (no BLOB persona, multi-provider routing).
+      const res = await fetch(`/agent-chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMsg,
-          context: context.slice(0, -1), // exclude the just-added user message (it's in 'message')
-          systemPrompt,
+          context: context.slice(0, -1),
+          systemPrompt: systemPrompt || undefined,
+          model: node.terminalModel,
+          provider: node.terminalProvider,
         }),
       });
 

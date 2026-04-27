@@ -361,7 +361,8 @@ export function StepEditModal({ nodeId, onClose }: StepEditModalProps) {
           </Section>
         );
 
-      case "browser":
+      case "browser": {
+        const vp = adv.browser_viewport ?? { width: 1280, height: 720 };
         return (
           <Section title="Browser Configuration" defaultOpen>
             <F label="URL">
@@ -390,12 +391,54 @@ export function StepEditModal({ nodeId, onClose }: StepEditModalProps) {
                 </select>
               </F>
             </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              <F label="Viewport Width">
+                <input type="number" style={miniInput} value={adv.browser_viewport?.width ?? ""}
+                  min={320} max={3840} placeholder="1280"
+                  onChange={(e) => patchAdv({ browser_viewport: e.target.value
+                    ? { width: Number(e.target.value), height: vp.height }
+                    : undefined })} />
+              </F>
+              <F label="Viewport Height">
+                <input type="number" style={miniInput} value={adv.browser_viewport?.height ?? ""}
+                  min={240} max={2160} placeholder="720"
+                  onChange={(e) => patchAdv({ browser_viewport: e.target.value
+                    ? { width: vp.width, height: Number(e.target.value) }
+                    : undefined })} />
+              </F>
+              <F label="Debug Port">
+                <input type="number" style={miniInput} value={adv.browser_port ?? ""}
+                  min={1024} max={65535} placeholder="9222 (auto)"
+                  onChange={(e) => patchAdv({ browser_port: e.target.value ? Number(e.target.value) : undefined })} />
+              </F>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <F label="Page Name (persistent)">
+                <input style={miniInput} value={adv.browser_page_name ?? ""}
+                  onChange={(e) => patchAdv({ browser_page_name: e.target.value || undefined })}
+                  placeholder="e.g. login-session" />
+              </F>
+              <F label="Scroll Strategy">
+                <select style={miniSelect} value={adv.browser_scroll_strategy ?? "auto"}
+                  onChange={(e) => patchAdv({ browser_scroll_strategy: e.target.value as StepAdvancedConfig["browser_scroll_strategy"] })}>
+                  <option value="auto">Auto</option>
+                  <option value="full">Full page</option>
+                  <option value="none">None</option>
+                </select>
+              </F>
+            </div>
+            <F label="Cookies Domain (filter)">
+              <input style={miniInput} value={adv.browser_cookies_domain ?? ""}
+                onChange={(e) => patchAdv({ browser_cookies_domain: e.target.value || undefined })}
+                placeholder="e.g. example.com" />
+            </F>
             <F label="Headless">
               <input type="checkbox" checked={adv.browser_headless !== false}
                 onChange={(e) => patchAdv({ browser_headless: e.target.checked })} />
             </F>
           </Section>
         );
+      }
 
       case "subchain":
         return (
