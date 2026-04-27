@@ -75,8 +75,11 @@ describe("pretoolFields", () => {
       expect(PRETOOL_TYPES.sort()).toEqual(Object.keys(PRETOOL_FIELDS).sort());
     });
 
-    it("has 29 types", () => {
-      expect(PRETOOL_TYPES.length).toBe(29);
+    it("has at least 29 types and stays in sync with PRETOOL_FIELDS", () => {
+      // The catalog grows over time (image_generate, …). Pin the floor and
+      // the cross-check rather than a brittle exact count.
+      expect(PRETOOL_TYPES.length).toBeGreaterThanOrEqual(29);
+      expect(PRETOOL_TYPES.length).toBe(Object.keys(PRETOOL_FIELDS).length);
     });
   });
 
@@ -209,9 +212,11 @@ describe("pretoolFields", () => {
       for (const fields of Object.values(PRETOOL_FIELDS)) {
         for (const f of fields) if (f.type === "textarea") textareaKeys.push(f.k);
       }
-      // We don't enforce an exact list, but each textarea key should look multi-line-ish.
+      // We don't enforce an exact list, but each textarea key should look
+      // multi-line-ish (long text, prompts, lists, code, etc.).
+      const allowed = /^(urls?|template|html|content|body|message|description|query|prompt|negative_prompt|notes?)$/;
       for (const k of textareaKeys) {
-        expect(k).toMatch(/^(urls|template|html|content|body|message|description)$/);
+        expect(k, `unexpected textarea field "${k}" — extend the allow-list if intentional`).toMatch(allowed);
       }
     });
   });

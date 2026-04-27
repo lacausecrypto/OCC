@@ -34,6 +34,11 @@ vi.mock("../../src/api/chains", () => ({
 
 vi.mock("../../src/utils/canvasToYaml", () => ({
   canvasToYaml: (...args: unknown[]) => mockCanvasToYaml(...args),
+  // Pipeline detection + decomposition were added to the SaveChainModal flow.
+  // Tests don't exercise that path, so a permissive default is enough:
+  // every canvas is treated as a single chain (not a pipeline).
+  isPipelineCanvas: () => false,
+  canvasToPipelineChains: () => ({ pipeline: "", chains: [] }),
 }));
 
 // Store mocks
@@ -183,11 +188,12 @@ describe("SaveChainModal", () => {
     const saveBtn = saveBtns.find((el) => el.tagName === "BUTTON")!;
     fireEvent.click(saveBtn);
     await waitFor(() => {
-      // doSave's closure captures stale versionMessage due to missing dep
+      // The doSave closure now correctly captures the typed versionMessage
+      // (the missing-dep stale-closure bug was fixed upstream).
       expect(mockSaveChain).toHaveBeenCalledWith(
         "my-chain",
         "name: test\nsteps: []",
-        undefined,
+        "Added step",
       );
     });
   });

@@ -43,6 +43,15 @@ export function useCanvasInteractions(
         return;
       }
 
+      // Right-click (or any non-primary button) belongs to onContextMenu.
+      // Without this guard, a right-click on empty canvas armed a `box`
+      // drag state and a right-click on a node armed a `node` drag —
+      // the context menu opened over a phantom box-select rectangle and
+      // the node would shift if the mouse moved before pointer-up.
+      if (e.button !== 0) {
+        return;
+      }
+
       // Connect tool
       if (state.activeTool === "connect") {
         const hit = nodeAt(sx, sy, state.camera, state.nodes);
