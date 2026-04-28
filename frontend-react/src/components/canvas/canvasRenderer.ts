@@ -248,7 +248,13 @@ export function renderCanvas(
 
     const fp = portPos(fromNode, "out"); // bottom center
     const tp = portPos(toNode, "in");    // top center
-    const srcColor = TYPE_COLORS[fromNode.type] ?? "#888";
+    // Delegate edges (terminal ↔ terminal, agent-to-agent) get a distinct
+    // purple stroke + dashed pattern + bidirectional arrows, so the user
+    // can read at a glance that they enable agent delegation rather than
+    // the default one-way context propagation. Other edges keep the
+    // type-color convention.
+    const isDelegate = edge.kind === "delegate";
+    const srcColor = isDelegate ? "#bf5af2" : (TYPE_COLORS[fromNode.type] ?? "#888");
 
     // Get rope physics state for this edge
     const ropeState = getRopeState(edge.id);
@@ -271,29 +277,43 @@ export function renderCanvas(
       ctx.shadowBlur = 12;
       ctx.strokeStyle = srcColor + "CC";
       ctx.lineWidth = 3;
+      if (isDelegate) ctx.setLineDash([8, 4]);
       ctx.beginPath();
       ctx.moveTo(fp.x, fp.y);
       ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, tp.x, tp.y);
       ctx.stroke();
       ctx.restore();
     } else {
-      ctx.strokeStyle = srcColor + "60";
-      ctx.lineWidth = 1.5;
+      ctx.save();
+      ctx.strokeStyle = isDelegate ? srcColor + "AA" : srcColor + "60";
+      ctx.lineWidth = isDelegate ? 2 : 1.5;
+      if (isDelegate) ctx.setLineDash([8, 4]);
       ctx.beginPath();
       ctx.moveTo(fp.x, fp.y);
       ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, tp.x, tp.y);
       ctx.stroke();
+      ctx.restore();
     }
 
-    // Arrow head pointing into target
+    // Arrow head — for delegate edges we draw arrows on BOTH ends to
+    // signal that delegation is bidirectional (each terminal can call
+    // the other). Context edges keep the single arrow into the target.
     const arrowSize = isEdgeSelected ? 8 : 6;
-    ctx.fillStyle = isEdgeSelected ? srcColor + "CC" : srcColor + "60";
+    ctx.fillStyle = isEdgeSelected ? srcColor + "CC" : srcColor + "AA";
     ctx.beginPath();
     ctx.moveTo(tp.x, tp.y);
     ctx.lineTo(tp.x - arrowSize * 0.5, tp.y - arrowSize);
     ctx.lineTo(tp.x + arrowSize * 0.5, tp.y - arrowSize);
     ctx.closePath();
     ctx.fill();
+    if (isDelegate) {
+      ctx.beginPath();
+      ctx.moveTo(fp.x, fp.y);
+      ctx.lineTo(fp.x - arrowSize * 0.5, fp.y + arrowSize);
+      ctx.lineTo(fp.x + arrowSize * 0.5, fp.y + arrowSize);
+      ctx.closePath();
+      ctx.fill();
+    }
 
     // Control point handles for selected edge
     if (isEdgeSelected) {

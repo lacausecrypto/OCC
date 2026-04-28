@@ -2303,75 +2303,355 @@ app.post("/blobs/:id/chat", async (req, res) => {
 //     provider?: string }                     // explicit provider id (optional)
 // Returns:
 //   { text, inputTokens, outputTokens, durationMs }
-app.post("/agent-chat", async (req, res) => {
-  const { message, context, systemPrompt, model, provider } = req.body as {
-    message: string;
-    context?: Array<{ role: string; content: string }>;
-    systemPrompt?: string;
-    model?: string;
-    provider?: string;
+/**
+ * Agent-to-agent delegation primitives.
+ *
+ * When two `terminal` canvas nodes are linked by a `kind: "delegate"` edge,
+ * the LLM driving each terminal is told it can call the other(s) as a
+ * sub-agent via a structured-JSON directive. This works on any provider
+ * (Claude / Codex / OpenAI / Ollama / HF) because we don't rely on
+ * provider-specific tool-use APIs — the contract is a single JSON line
+ * the model emits, OCC parses, dispatches, and feeds the result back.
+ *
+ * Protocol:
+ *   To delegate, the model outputs ONLY this on a single line:
+ *     {"delegate":"<agent_name>","task":"<the sub-task>"}
+ *   OCC catches it, calls runAgentChat for the target, and re-prompts the
+ *   caller with the sub-result appended to the context. Loops until either
+ *   no JSON is emitted, MAX_DELEGATION_DEPTH is reached, or a cycle is
+ *   detected.
+ */
+const MAX_DELEGATION_DEPTH = 5;
+
+interface DelegateTarget {
+  nodeId: string;
+  name: string;
+  model?: string;
+  provider?: string;
+  systemPrompt?: string;
+}
+
+interface AgentChatRequest {
+  message: string;
+  context?: Array<{ role: string; content: string }>;
+  systemPrompt?: string;
+  model?: string;
+  provider?: string;
+  // Delegation state — propagated through recursive calls.
+  nodeId?: string;
+  delegateTargets?: DelegateTarget[];
+  /** Recursion depth. Caller-provided when sub-calling. */
+  _depth?: number;
+  /** Visited node ids for cycle detection. */
+  _path?: string[];
+}
+
+interface AgentChatResult {
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number;
+  /**
+   * Trace of sub-agent calls that happened during this turn. Empty when
+   * the agent answered directly. Each entry includes the target's id +
+   * name, the task that was delegated, and the sub-agent's response —
+   * surfaced to the frontend so the user can see the chain of reasoning.
+   * `targetNodeId` lets the frontend push the exchange into the target
+   * terminal's chat history too, so both sides of the conversation show.
+   */
+  delegationTrace: Array<{
+    targetNodeId: string;
+    target: string;
+    task: string;
+    response: string;
+    durationMs: number;
+  }>;
+}
+
+/** Build the system-prompt addendum that teaches the LLM how to delegate. */
+function buildDelegationInstructions(targets: DelegateTarget[]): string {
+  if (targets.length === 0) return "";
+  const lines: string[] = [];
+  lines.push("");
+  lines.push("## Delegation");
+  lines.push("");
+  lines.push("You can delegate sub-tasks to the following peer agents:");
+  for (const t of targets) {
+    const detail = [t.model ? `model: ${t.model}` : null, t.provider ? `provider: ${t.provider}` : null]
+      .filter(Boolean).join(", ");
+    lines.push(`- "${t.name}"${detail ? ` (${detail})` : ""}`);
+  }
+  lines.push("");
+  lines.push("To delegate, output **ONLY this single-line JSON** as your");
+  lines.push("entire response — no prose before or after, no code fence:");
+  lines.push("");
+  lines.push(`  {"delegate":"<agent_name>","task":"<the sub-task to send>"}`);
+  lines.push("");
+  lines.push("The `agent_name` MUST match one of the names above exactly.");
+  lines.push("The system will run that agent, capture its response, and");
+  lines.push("re-prompt you with the result. You can then either delegate");
+  lines.push("again or answer the user.");
+  lines.push("");
+  lines.push("Only delegate when another agent is genuinely better suited.");
+  lines.push("If you can answer directly, just answer.");
+  return lines.join("\n");
+}
+
+/** Best-effort parse of a delegation JSON directive from the LLM output. */
+function parseDelegationDirective(text: string): { delegate: string; task: string } | null {
+  if (!text) return null;
+  // Look for a {"delegate":...} JSON object in the text. We accept both
+  // a clean single-line response and a model that adds backticks/whitespace.
+  const m = text.match(/\{\s*"delegate"\s*:\s*"([^"]+)"\s*,\s*"task"\s*:\s*"((?:\\.|[^"\\])*)"\s*\}/);
+  if (!m) return null;
+  try {
+    const obj = JSON.parse(m[0]);
+    if (typeof obj.delegate === "string" && typeof obj.task === "string") {
+      return { delegate: obj.delegate, task: obj.task };
+    }
+  } catch { /* malformed JSON */ }
+  return null;
+}
+
+/**
+ * Single LLM turn — no delegation logic. Used both for the user-facing
+ * agent-chat call AND for recursive sub-agent calls.
+ */
+async function runSingleAgentTurn(
+  req: Pick<AgentChatRequest, "message" | "context" | "systemPrompt" | "model" | "provider"> & { execId: string },
+): Promise<{ text: string; inputTokens: number; outputTokens: number; durationMs: number }> {
+  const { runStepWithRetry } = await import("./claude-runner.js");
+
+  const sys = req.systemPrompt && req.systemPrompt.trim().length > 0
+    ? req.systemPrompt
+    : getSystemPrompt("terminalAgent");
+
+  const maxCtx = parseInt(process.env.AGENT_CHAT_CONTEXT_CHARS ?? "12000", 10);
+  let ctxMsgs = req.context ?? [];
+  if (maxCtx > 0 && ctxMsgs.length > 0) {
+    let total = ctxMsgs.reduce((s, m) => s + m.role.length + m.content.length + 3, 0);
+    while (total > maxCtx && ctxMsgs.length > 1) {
+      const removed = ctxMsgs[0];
+      total -= removed.role.length + removed.content.length + 3;
+      ctxMsgs = ctxMsgs.slice(1);
+    }
+  }
+  const ctxStr = ctxMsgs.map((m) => `${m.role}: ${m.content}`).join("\n");
+  const fullPrompt = ctxStr
+    ? `${sys}\n\nConversation:\n${ctxStr}\nuser: ${req.message}\nassistant:`
+    : `${sys}\n\nuser: ${req.message}\nassistant:`;
+
+  let text = "";
+  const stepShim = {
+    id: "agent-chat",
+    type: "agent" as const,
+    model: req.model ?? "claude-sonnet-4-6",
+    prompt: "",
+    tools: [],
+    output_var: "_chat",
+    pre_tools: [],
+    provider: req.provider,
   };
-  if (!message) return res.status(400).json({ error: "message required" });
+
+  const result = await runStepWithRetry(
+    stepShim as Parameters<typeof runStepWithRetry>[0],
+    fullPrompt,
+    (chunk) => { text += chunk; },
+    req.execId,
+    (msg, level) => logger[level]("agent-chat", msg),
+  );
+
+  // Some providers (codex CLI in --json mode, certain Ollama versions) don't
+  // emit streaming chunks reliably — they deliver the full response in
+  // result.stdout at completion instead. Fall back to that when streamed
+  // text is empty so a successful sub-call doesn't look like a silent fail.
+  const finalText = text && text.trim().length > 0 ? text : (result.stdout ?? "");
+
+  if (!finalText.trim()) {
+    logger.warn("agent-chat", `Empty response from ${req.provider ?? "default provider"} model ${req.model ?? "claude-sonnet-4-6"}`, {
+      streamedChars: text.length,
+      stdoutChars: (result.stdout ?? "").length,
+      durationMs: result.durationMs ?? 0,
+    });
+  }
+
+  return {
+    text: finalText,
+    inputTokens: result.inputTokens ?? 0,
+    outputTokens: result.outputTokens ?? 0,
+    durationMs: result.durationMs ?? 0,
+  };
+}
+
+/**
+ * Recursive agent runner with delegation support. Loops a single LLM turn
+ * until the model emits a final answer (no delegation directive) or until
+ * we hit a depth/cycle guard.
+ */
+async function runAgentChatWithDelegation(req: AgentChatRequest): Promise<AgentChatResult> {
+  const depth = req._depth ?? 0;
+  if (depth > MAX_DELEGATION_DEPTH) {
+    return {
+      text: `[delegation depth limit ${MAX_DELEGATION_DEPTH} exceeded]`,
+      inputTokens: 0, outputTokens: 0, durationMs: 0, delegationTrace: [],
+    };
+  }
+  const path = req._path ?? [];
+  const targets = req.delegateTargets ?? [];
+
+  // Compose system prompt: caller's + delegation instructions if any.
+  const baseSystem = req.systemPrompt && req.systemPrompt.trim().length > 0
+    ? req.systemPrompt
+    : getSystemPrompt("terminalAgent");
+  const augmentedSystem = targets.length > 0
+    ? baseSystem + buildDelegationInstructions(targets)
+    : baseSystem;
+
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalDuration = 0;
+  const trace: AgentChatResult["delegationTrace"] = [];
+  let context = [...(req.context ?? [])];
+  let nextMessage = req.message;
+  let lastText = "";
+
+  // Cap how many times the same caller can delegate consecutively before we
+  // force it to answer. Prevents a model from looping on delegate directives.
+  const MAX_TURNS = 8;
+  for (let turn = 0; turn < MAX_TURNS; turn++) {
+    const execId = `agent_chat_${Date.now()}_${turn}`;
+    const turnResult = await runSingleAgentTurn({
+      message: nextMessage,
+      context,
+      systemPrompt: augmentedSystem,
+      model: req.model,
+      provider: req.provider,
+      execId,
+    });
+    totalInputTokens += turnResult.inputTokens;
+    totalOutputTokens += turnResult.outputTokens;
+    totalDuration += turnResult.durationMs;
+    lastText = turnResult.text;
+
+    // Did the LLM emit a delegation directive?
+    const directive = parseDelegationDirective(turnResult.text);
+    if (!directive || targets.length === 0) {
+      // Final answer — return to caller.
+      return {
+        text: turnResult.text,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        durationMs: totalDuration,
+        delegationTrace: trace,
+      };
+    }
+
+    // Match the requested target by name (case-insensitive, exact match
+    // first then substring fallback so the LLM doesn't have to be perfect).
+    const lower = directive.delegate.trim().toLowerCase();
+    const target = targets.find((t) => t.name.toLowerCase() === lower)
+      ?? targets.find((t) => t.name.toLowerCase().includes(lower));
+
+    if (!target) {
+      // Unknown target — feed an error back so the model can correct itself.
+      const errMsg = `[delegation error: no agent named "${directive.delegate}" — known: ${targets.map((t) => `"${t.name}"`).join(", ")}]`;
+      context = [
+        ...context,
+        { role: "user", content: nextMessage },
+        { role: "assistant", content: turnResult.text },
+        { role: "user", content: errMsg + " Either delegate to a known agent or answer directly." },
+      ];
+      nextMessage = "";
+      continue;
+    }
+
+    // Cycle detection — refuse if we'd revisit a node already in the path
+    // (including ourselves: A → B → A is blocked).
+    if (req.nodeId && (path.includes(target.nodeId) || target.nodeId === req.nodeId)) {
+      const errMsg = `[delegation error: cycle detected, "${target.name}" is already in the call path]`;
+      context = [
+        ...context,
+        { role: "user", content: nextMessage },
+        { role: "assistant", content: turnResult.text },
+        { role: "user", content: errMsg + " Answer directly instead." },
+      ];
+      nextMessage = "";
+      continue;
+    }
+
+    // Recursive sub-call. The sub-agent gets *no* delegate targets of its
+    // own in this MVP — keeps the call tree linear. Phase 2 can pass the
+    // sub-agent's own connected delegates.
+    logger.info("agent-chat", `Delegating from depth=${depth} to "${target.name}"`, {
+      task: directive.task.slice(0, 200),
+    });
+    const subStart = Date.now();
+    const sub = await runAgentChatWithDelegation({
+      message: directive.task,
+      context: [], // sub-agent starts fresh — task is self-contained
+      systemPrompt: target.systemPrompt,
+      model: target.model,
+      provider: target.provider,
+      nodeId: target.nodeId,
+      delegateTargets: [], // see comment above
+      _depth: depth + 1,
+      _path: req.nodeId ? [...path, req.nodeId] : path,
+    });
+    totalInputTokens += sub.inputTokens;
+    totalOutputTokens += sub.outputTokens;
+
+    trace.push({
+      targetNodeId: target.nodeId,
+      target: target.name,
+      task: directive.task,
+      response: sub.text,
+      durationMs: Date.now() - subStart,
+    });
+
+    // Re-prompt: append the directive + result to context, and ask the
+    // caller to continue.
+    context = [
+      ...context,
+      { role: "user", content: nextMessage },
+      { role: "assistant", content: turnResult.text },
+      { role: "user", content:
+        `[delegation result from "${target.name}"]\n${sub.text}\n\n` +
+        `You may now answer the user, or delegate again if needed.` },
+    ];
+    nextMessage = "";
+  }
+
+  // Hit MAX_TURNS without a final answer — return what we have.
+  return {
+    text: lastText || "[agent loop limit reached without a final answer]",
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    durationMs: totalDuration,
+    delegationTrace: trace,
+  };
+}
+
+app.post("/agent-chat", async (req, res) => {
+  const body = req.body as AgentChatRequest;
+  if (!body.message) return res.status(400).json({ error: "message required" });
 
   const startTime = Date.now();
   const execId = `agent_chat_${startTime}`;
   try {
-    const { runStepWithRetry } = await import("./claude-runner.js");
-
-    // Use the configurable terminalAgent prompt as default; client override wins.
-    const sys = systemPrompt && systemPrompt.trim().length > 0
-      ? systemPrompt
-      : getSystemPrompt("terminalAgent");
-
-    // Trim context to a reasonable budget
-    const maxCtx = parseInt(process.env.AGENT_CHAT_CONTEXT_CHARS ?? "12000", 10);
-    let ctxMsgs = context ?? [];
-    if (maxCtx > 0 && ctxMsgs.length > 0) {
-      let total = ctxMsgs.reduce((s, m) => s + m.role.length + m.content.length + 3, 0);
-      while (total > maxCtx && ctxMsgs.length > 1) {
-        const removed = ctxMsgs[0];
-        total -= removed.role.length + removed.content.length + 3;
-        ctxMsgs = ctxMsgs.slice(1);
-      }
-    }
-    const ctxStr = ctxMsgs.map((m) => `${m.role}: ${m.content}`).join("\n");
-    const fullPrompt = ctxStr
-      ? `${sys}\n\nConversation:\n${ctxStr}\nuser: ${message}\nassistant:`
-      : `${sys}\n\nuser: ${message}\nassistant:`;
-
-    let text = "";
-    const stepShim = {
-      id: "agent-chat",
-      type: "agent" as const,
-      model: model ?? "claude-sonnet-4-6",
-      prompt: "",
-      tools: [],
-      output_var: "_chat",
-      pre_tools: [],
-      provider, // consumed by resolveProvider in runStepWithRetry
-    };
-
-    const result = await runStepWithRetry(
-      stepShim as Parameters<typeof runStepWithRetry>[0],
-      fullPrompt,
-      (chunk) => { text += chunk; },
-      execId,
-      (msg, level) => logger[level]("agent-chat", msg),
-    );
+    const result = await runAgentChatWithDelegation(body);
 
     res.json({
-      text,
-      inputTokens: result.inputTokens ?? 0,
-      outputTokens: result.outputTokens ?? 0,
-      durationMs: result.durationMs ?? 0,
+      text: result.text,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      durationMs: result.durationMs,
+      delegationTrace: result.delegationTrace,
     });
 
     // Persist to SQLite so the token-usage dashboard sees Terminal Agent traffic.
-    // chainName "_agent_chat" lets the dashboard classify these the same way it
-    // classifies "_workflow_chat".
     try {
       saveExecution({ id: execId, chainName: "_agent_chat", status: "done", input: {}, steps: {}, startedAt: new Date(startTime).toISOString(), finishedAt: new Date().toISOString(), durationMs: Date.now() - startTime });
-      checkpointStep(execId, { stepId: "chat", status: "done", inputTokens: result.inputTokens ?? 0, outputTokens: result.outputTokens ?? 0 });
+      checkpointStep(execId, { stepId: "chat", status: "done", inputTokens: result.inputTokens, outputTokens: result.outputTokens });
     } catch { /* non-critical */ }
   } catch (err) {
     res.status(500).json({ error: safeErrorMessage(err) });

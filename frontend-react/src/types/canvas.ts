@@ -138,7 +138,24 @@ export interface CanvasNode {
   terminalProvider?: string;      // provider ID (e.g. "openrouter", "ollama")
   terminalModel?: string;         // model ID
   terminalSystemPrompt?: string;  // role instructions
-  terminalMessages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+  terminalMessages?: Array<{
+    role: "user" | "assistant" | "system";
+    content: string;
+    /**
+     * Optional delegation transcript attached to an assistant turn —
+     * surfaced as collapsible "→ asked X" entries so the user can audit
+     * the chain of reasoning when the agent delegated sub-tasks to
+     * connected peer terminals.
+     */
+    delegationTrace?: Array<{
+      /** Node id of the agent that was called — lets the UI link to it. */
+      targetNodeId?: string;
+      target: string;
+      task: string;
+      response: string;
+      durationMs?: number;
+    }>;
+  }>;
   terminalName?: string;          // display name (e.g. "Claude Code", "GPT-4o")
   // ─── Obsidian note fields ───────────────────────────────────────
   /** Display name of the vault (purely informational — no FS access from browser). */
@@ -156,6 +173,16 @@ export interface CanvasEdge {
   /** Optional bezier control point offsets for manual reshaping */
   cp1?: { dx: number; dy: number };
   cp2?: { dx: number; dy: number };
+  /**
+   * Edge semantics:
+   *  - "context"  (default): the `from` node's content flows into `to`'s prompt
+   *                          (read-only context, current behavior)
+   *  - "delegate": bidirectional agent-to-agent delegation. Both endpoints
+   *                can call the other as a tool ("Hey GPT, code me X" →
+   *                Opus dispatches the sub-task and continues with the result).
+   *                Auto-applied when both endpoints are `terminal` nodes.
+   */
+  kind?: "context" | "delegate";
 }
 
 /** Pastel colors for sticky notes */

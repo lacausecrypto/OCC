@@ -110,7 +110,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   addEdge: (edge) =>
     set((s) => {
       const edges = new Map(s.edges);
-      edges.set(edge.id, edge);
+      // Auto-classify: terminal-to-terminal edges default to "delegate"
+      // (bidirectional agent-to-agent calling). All other edges stay
+      // "context" (one-way prompt enrichment) which matches the legacy
+      // behavior. Caller can override by passing `kind` explicitly.
+      let resolved = edge;
+      if (edge.kind === undefined) {
+        const fromNode = s.nodes.get(edge.from);
+        const toNode = s.nodes.get(edge.to);
+        const isTerminalEdge =
+          fromNode?.kind === "terminal" && toNode?.kind === "terminal";
+        resolved = { ...edge, kind: isTerminalEdge ? "delegate" : "context" };
+      }
+      edges.set(resolved.id, resolved);
       return { edges };
     }),
 
