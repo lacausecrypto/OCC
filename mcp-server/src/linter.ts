@@ -20,6 +20,15 @@ function extractVarRefs(text: string): string[] {
 
 export function lintChain(chain: ChainDefinition): LintIssue[] {
   const issues: LintIssue[] = [];
+
+  // Canvas-only chains (zero steps + populated `canvas_items`) are valid
+  // workspaces — the loader's Zod schema accepts them and the executor
+  // refuses to run them with a clear message. None of the per-step lint
+  // rules apply, so we short-circuit and return zero issues.
+  if (!chain.steps || chain.steps.length === 0) {
+    return issues;
+  }
+
   const stepIds = new Set(chain.steps.map((s) => s.id));
   const outputVars = new Set(chain.steps.map((s) => s.output_var));
   const inputNames = new Set((chain.inputs ?? []).map((i) => i.name));

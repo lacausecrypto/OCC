@@ -79,22 +79,39 @@ describe("Chain YAML definitions", () => {
       expect(chain.name.length).toBeGreaterThan(0);
     });
 
-    it("has at least 1 step", () => {
+    // ── Helper: detect "canvas-only" chains (no executable steps) ───────
+    // These are chains with `steps: []` and a populated `canvas_items[]`
+    // — typically saved from the canvas editor when only Portal / Sticky /
+    // Terminal etc. were placed. They're loadable + reloadable but not
+    // runnable, so step-shape assertions don't apply. The schema
+    // (loader.ts ChainSchema) explicitly accepts this case.
+    const isCanvasOnly = (): boolean => {
+      try {
+        process.env.CHAINS_DIR = chainsDir;
+        const c = loadChain(chainName);
+        return (c.steps?.length ?? 0) === 0;
+      } catch { return false; }
+    };
+
+    it("has at least 1 step (skipped for canvas-only chains)", () => {
       process.env.CHAINS_DIR = chainsDir;
       const chain = loadChain(chainName);
+      if (chain.steps.length === 0) return; // canvas-only: nothing to assert
       expect(chain.steps.length).toBeGreaterThanOrEqual(1);
     });
 
-    it("has a valid output field", () => {
+    it("has a valid output field (skipped for canvas-only chains)", () => {
       process.env.CHAINS_DIR = chainsDir;
       const chain = loadChain(chainName);
+      if (chain.steps.length === 0) return;
       expect(chain.output).toBeTruthy();
       expect(typeof chain.output).toBe("string");
     });
 
-    it("output var matches a step's output_var", () => {
+    it("output var matches a step's output_var (skipped for canvas-only chains)", () => {
       process.env.CHAINS_DIR = chainsDir;
       const chain = loadChain(chainName);
+      if (chain.steps.length === 0) return;
       const outputVars = new Set(chain.steps.map((s) => s.output_var));
       expect(outputVars.has(chain.output)).toBe(true);
     });
@@ -118,9 +135,10 @@ describe("Chain YAML definitions", () => {
       }
     });
 
-    it("dependency graph builds without errors", () => {
+    it("dependency graph builds without errors (skipped for canvas-only chains)", () => {
       process.env.CHAINS_DIR = chainsDir;
       const chain = loadChain(chainName);
+      if (chain.steps.length === 0) return; // graph is empty by definition
       const graph = buildDependencyGraph(chain);
       expect(graph).toBeDefined();
       expect(graph.waves.length).toBeGreaterThanOrEqual(1);
@@ -129,8 +147,12 @@ describe("Chain YAML definitions", () => {
     it("no circular dependencies", () => {
       process.env.CHAINS_DIR = chainsDir;
       const chain = loadChain(chainName);
+      if (chain.steps.length === 0) return;
       // buildDependencyGraph throws on circular deps — if it returns, we're good
       expect(() => buildDependencyGraph(chain)).not.toThrow();
     });
+
+    // Helper-keep: linter could later use isCanvasOnly() if needed.
+    void isCanvasOnly;
   });
 });
