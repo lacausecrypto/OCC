@@ -1,5 +1,55 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed — Interactive Portal mode (Playwright screencast)
+
+The interactive Portal mode (Playwright session streamed over WebSocket
+with per-node persistent profiles, browser selector, headed-off-screen
+launching, etc. — added in 2.2.0 and extended through "Portal v2") has been
+**removed**. After extensive testing on real-world login flows (X.com,
+Cloudflare-protected sites), the value/complexity ratio didn't justify
+keeping it: anti-bot detection at the binary level kept finding new
+signals to flag (window fingerprint, audio, WebGL, mouse cadence, …) and
+the macOS UX of an always-visible Dock icon for each active node was
+hard to make invisible without invasive workarounds.
+
+Portal nodes now keep only the **static** mode: server-side fetch via
+`GET /portal?url=…`, X-Frame-Options stripped, rendered in a sandboxed
+iframe. No cookies, no JS cross-origin, no login — but rock-solid for
+read-only embeds (docs, blog posts, dashboards that don't need auth).
+For sites that need a real session, the "Open in browser" fallback
+remains.
+
+**Surface dropped**:
+
+- Backend modules: `portal-sessions.ts`, `portal-ws.ts`, `browser-detect.ts`.
+- REST endpoints: `POST /portal/session`, `GET /portal/sessions`,
+  `POST /portal/session/:id/navigate`, `DELETE /portal/session/:id`,
+  `GET /portal/snapshot`, `GET /portal/browsers`, `GET /portal/profiles`,
+  `DELETE /portal/profile/:persistKey`.
+- Backend tests: `portal-sessions.test.ts`, `browser-detect.test.ts`.
+- Backend deps: `ws`, `@types/ws`.
+- Frontend: `api/portal.ts`, `BrowserSelector` + `BrowserInstallWarning`
+  helpers in the modal, `Settings/PortalProfilesSection.tsx`, the
+  interactive overlay (`CanvasOverlays.InteractivePortalOverlayItem`),
+  the async live-snapshot path in `canvasContext.ts`, the per-node
+  toolbar pills (`CHROME 147`, `HEADED`, etc.), the per-node "Reset
+  login" button.
+- Canvas types: `portalMode`, `portalPersistKey`, `portalBrowserId`.
+- Vite proxy: `ws: true` on `/portal`.
+- Disk: `~/.occ-portals/` and `mcp-server/portal-sessions/` directories
+  wiped on cleanup.
+
+**Kept**:
+
+- `GET /portal?url=…` static iframe proxy.
+- Canvas `portal` node kind with `portalUrl / Title / Description /
+  Favicon / Status / Screenshot` fields.
+- `StaticPortalOverlayItem` rendering (now the only path).
+- `canvas_items:` YAML round-trip for portal nodes (no longer carries
+  the dropped fields).
+
 ## [2.2.0] - 2026-04-27
 
 ### Added
