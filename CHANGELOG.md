@@ -1,6 +1,98 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.0] - 2026-04-28
+
+Release notes follow the npm package version (`occ-orchestrator`).
+33 commits since `v0.4.0`. Roll-up of every change since the last
+release; per-feature detail lives in the section below + the older
+2.x notes that document the earlier platform additions still kept on
+disk for reference.
+
+### Headline features
+
+- **Interactive canvas overhaul** — Obsidian Note kind, Terminal Agent
+  with model selector + connected-context propagation (Portal URL,
+  File content, Sticky text, Obsidian markdown all flow into the
+  agent's system prompt), Portal/Terminal overlays render at native
+  size with a single `transform: scale(zoom)` so SPAs stop reflowing
+  at low zoom, File Viewer file picker, right-click no longer arms a
+  phantom box-select / node-drag, custom-fontFamily CSS tokens with
+  emoji/symbol fallbacks (no more "tofu" boxes for ⏸ ⚡ ↺ ▶).
+- **Server platform** — `codex` CLI runner (mirrors `claude-runner`,
+  no API key needed), customizable system prompts (`/system-prompts`
+  GET/PUT/reset, hot-reloaded JSON), generic `/agent-chat` endpoint
+  that routes through any configured provider, execution time-travel
+  via `GET /executions/:id/timeline` (per-step checkpoint history).
+- **Pipelines from canvas** — `canvasToPipelineChains` decomposes a
+  multi-stage canvas into `PipelineChainRef[]`; `SaveChainModal`
+  detects pipeline canvases via `isPipelineCanvas` and routes through
+  `savePipeline`. New `summarize_output` field on `PipelineChainRef`
+  to control how a stage's output flows downstream.
+- **Canvas-only chains** — chains with zero steps and one or more
+  non-step canvas items (Portal / Sticky / Terminal / File / Link /
+  Free Text / Obsidian) save and reload exactly via the new
+  `canvas_items?: CanvasItemSerialized[]` side-car. Loader's Zod
+  schema accepts empty `steps`; executor refuses to run them with a
+  clear "open in canvas editor" error.
+- **Floor color slot palette** — replaces hardcoded `color: "#hex"`
+  on `FloorData` with a `colorSlot: 0..6` index into a design-space-
+  derived palette resolved at render time, so floor colors stay in
+  sync with the active theme. Persistence layer auto-migrates legacy
+  hex records via `inferSlotFromHex`.
+- **Settings UI refactor** — collapsible sections (state persisted in
+  localStorage), system prompts editor (`SystemPromptsSection`),
+  provider section gains the codex provider type, MCP/schedule
+  sections light tweaks.
+- **Workflow chat planner — concrete bug fixes**: planner respects
+  existing canvas (no more disconnected parallel chains on
+  "améliore"), MODIFY mode patches `preTools` / `advanced` /
+  `outputVar` / `depends_on` rewires atomically, named-input
+  detection drives the RUN modal and the `[ACTION:RUN]` JSON inputs
+  block, floor-aware canvas context.
+- **Test coverage push +1075→1233 (frontend 27.6% → 49.4%
+  statements)** across 12 new test files: canvasContext,
+  preToolsToData, detectInputs type-inference matrix, tools/pre-tools
+  serialization, pretoolFields schema integrity, canvasRenderer
+  helpers + main render, connectionHit (100%), useCanvasInteractions
+  (regression for the right-click bug + drag/keyboard branches —
+  86%), workflowChat applyPlanToCanvas + buildCanvasContext,
+  workflowChat sessions / persistence (90%+), floors store,
+  physarumSim (72%), blobRenderer (75%), workflowChat actions
+  (`[ACTION:ANALYZE/MODIFY/RUN]`).
+- **Misc dev quality** — frontend deps bumped to current `wanted`
+  range (vite, react, vitest, storybook, react-query…), mcp-server
+  deps bumped (`@modelcontextprotocol/sdk` 1.27→1.29, better-sqlite3,
+  eslint…), `index.html` served `Cache-Control: no-store` so the
+  browser stops holding stale asset hashes after every rebuild,
+  `.gitignore` excludes `system-prompts.json` runtime artifact.
+
+### Removed
+
+- **Interactive Portal mode (Playwright + WebSocket screencast)** —
+  added in 2.2.0 / commit `96675f2`, removed before npm release.
+  See the explanatory section in the older 2.x notes below for the
+  full rationale (anti-bot detection at the binary level kept finding
+  new signals; macOS Dock-icon UX was hard to make invisible). Portal
+  nodes keep only the static iframe proxy via `GET /portal?url=…`.
+  Surface dropped: `mcp-server/src/portal-sessions.ts`,
+  `mcp-server/src/portal-ws.ts`, `frontend-react/src/api/portal.ts`,
+  `InteractivePortalOverlayItem`, the async live-snapshot path in
+  `canvasContext.ts`, REST endpoints (`POST /portal/session`,
+  `GET /portal/sessions`, `POST /portal/session/:id/navigate`,
+  `DELETE /portal/session/:id`, `GET /portal/snapshot`), deps `ws`
+  + `@types/ws`, types `portalMode` / `portalPersistKey`, vite proxy
+  `ws: true` on `/portal`. **Net diff: −1473 / +35 lines.**
+
+### Notes
+
+- Versioning: this is the first OCC release that's published from a
+  CI-validated `main`. Every commit since `v0.4.0` was tested on the
+  full matrix (ubuntu/macos/windows × Node 20/22).
+- Historical 2.x section below is preserved as a reference for the
+  earlier platform additions; future releases will use 0.x semver
+  matching the npm package version.
+
+## [Unreleased — pre-release notes for v0.5.0, kept for historical reference]
 
 ### Removed — Interactive Portal mode (Playwright screencast)
 

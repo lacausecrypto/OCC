@@ -1,6 +1,6 @@
 {
   "name": "occ-orchestrator",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "OCC (Orchestrator Chain Chimera) — YAML-first LLM orchestrator with auto-parallelism, 30 pre-tools, 6 providers",
   "type": "module",
   "engines": {
