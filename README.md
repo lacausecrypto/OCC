@@ -4,7 +4,8 @@
 [![npm downloads](https://img.shields.io/npm/dt/occ-orchestrator?color=cb3837&logo=npm)](https://www.npmjs.com/package/occ-orchestrator)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Tests](https://github.com/lacausecrypto/OCC/actions/workflows/ci.yml/badge.svg)](https://github.com/lacausecrypto/OCC/actions)
-[![Tests](https://img.shields.io/badge/Tests-3243%20passed-brightgreen)](#tests)
+[![Backend Tests](https://img.shields.io/badge/Backend%20tests-2376%20passed-brightgreen)](#tests)
+[![Frontend Tests](https://img.shields.io/badge/Frontend%20tests-1233%20passed-brightgreen)](#tests)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org)
 [![MCP](https://img.shields.io/badge/MCP-29%20tools-purple)](https://modelcontextprotocol.io)
 [![REST](https://img.shields.io/badge/REST%20API-106%20endpoints-green)](#rest-api)
@@ -361,11 +362,23 @@ Real execution data — full methodology in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Tests
 
-**3243 tests** across 111 files (59 backend + 52 frontend):
+**3609 tests** across 124 files (59 backend + 65 frontend), all green on the
+ubuntu/macos/windows × Node 20/22 CI matrix.
+
+| | Frontend | Backend |
+|---|---:|---:|
+| **Statements** | **49.3 %** (5 945 / 12 056) | **78.1 %** (5 274 / 6 754) |
+| Branches | 38.6 % (3 115 / 8 080) | 71.2 % (3 337 / 4 685) |
+| Functions | 37.3 % (911 / 2 445) | 75.7 % (575 / 760) |
+| Lines | 52.1 % (5 292 / 10 152) | 79.8 % (4 691 / 5 881) |
 
 ```bash
-cd mcp-server && npm test       # 2344 backend tests
-cd frontend-react && npm test   # 899 frontend tests
+cd mcp-server      && npm test                # 2376 backend tests
+cd frontend-react  && npm test                # 1233 frontend tests
+
+# coverage reports
+cd mcp-server      && npm run test:coverage
+cd frontend-react  && npx vitest run --coverage
 ```
 
 ---
