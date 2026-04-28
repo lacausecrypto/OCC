@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Agent-to-agent delegation between connected Terminal nodes** — when two `terminal` canvas items are linked, the edge defaults to a new `kind: "delegate"` (terminal↔terminal is auto-classified; other pairs stay `"context"`). Either endpoint can call the other as a tool by emitting a single line of structured JSON (`{"delegate":"<peer_name>","task":"..."}`); the backend `/agent-chat` orchestrator intercepts, routes the sub-task to the named peer with that node's own system prompt + provider, captures the response, re-invokes the caller with the result inlined, and records the full `delegationTrace` (sub-agent name, task, response, duration). The trace is rendered as a collapsible "→ delegated to N agents" block in the master terminal's chat history; each sub-call is also mirrored into the target terminal's own history (one `[delegated by …]` user turn + the agent's reply) so both sides are visible. Recursion is capped at `MAX_DELEGATIONS_PER_TURN = 4` per turn. Delegate edges are painted purple (`#bf5af2`) with a dashed stroke so the user can read at a glance which connections enable delegation.
+
+### Fixed
+- **`runStepWithRetry` no longer falls back to the Claude CLI when a non-Claude provider is selected without an API key** — throws "Provider X has no API key, set one in Settings → Providers → X" instead. Ollama still runs key-less.
+- **HTTP provider error paths surface actionable messages**: OpenRouter / OpenAI / HuggingFace fetch failures become "Provider unreachable at <baseUrl>: <reason>" (was a generic JSON parse error); Ollama 404 → "Cannot reach Ollama at <url>" with a hint to start `ollama serve`; HuggingFace 401/403 → "API key invalid or expired".
+- **Codex CLI 0.122+ event schema** — defensive extraction in `codex-runner.ts` so the runner survives new event types added between releases. `ItemCompletedSchema` / `TurnCompletedSchema` use `.passthrough()`; text extraction tries `item.text` → `item.content` (string) → `item.content[].text` in order; token usage (`input_tokens` / `cached_input_tokens` / `output_tokens`) read off `turn.completed` when present.
+- **Linter no longer warns on canvas-only chains** — when `chain.steps` is empty (Portal-only / sticky-only workspaces), the per-step rules are skipped and the linter returns zero issues. The `chains.test.ts` suite gains an `isCanvasOnly()` helper that short-circuits the "has at least 1 step" / step-shape assertions for those chains, so adding a canvas-only fixture to `chains/` doesn't break the test suite.
+
 ## [0.5.0] - 2026-04-28
 
 Release notes follow the npm package version (`occ-orchestrator`).
