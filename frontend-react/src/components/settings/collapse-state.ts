@@ -12,7 +12,8 @@ export const COLLAPSED_KEY = "occ-settings-collapsed";
 
 export const ALL_SECTION_IDS = [
   "server", "execution", "providers", "ollama", "huggingface", "toolsecurity",
-  "queue", "schedules", "mcp", "system-prompts", "interface", "paths", "storage",
+  "queue", "schedules", "mcp", "system-prompts",
+  "interface", "paths", "storage",
   "email", "about", "tokens", "models", "blob", "data", "shortcuts",
 ] as const;
 

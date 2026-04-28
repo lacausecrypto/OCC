@@ -272,86 +272,6 @@ app.get("/proxy", async (req, res) => {
   }
 });
 
-// ─── Interactive portal sessions (Playwright + WebSocket screencast) ────────
-// Companion to the static /portal proxy below. These endpoints power the
-// "interactive" mode of canvas Portal nodes: a real Chromium running on the
-// backend, streamed to the frontend over WebSocket. Use this for sites that
-// need a real session (login, SPAs that call cross-origin APIs, etc.).
-//
-// Lifecycle:
-//   POST   /portal/session              → create session
-//   GET    /portal/sessions             → list active sessions
-//   POST   /portal/session/:id/navigate → change url inside an existing session
-//   DELETE /portal/session/:id          → close session (persists storageState)
-// WebSocket channels are mounted on the same server (see portal-ws.ts).
-
-app.post("/portal/session", async (req, res) => {
-  try {
-    const { url, persistKey, viewport } = req.body as {
-      url: string;
-      persistKey?: string;
-      viewport?: { width: number; height: number };
-    };
-    if (!url) return res.status(400).json({ error: "url required" });
-    await checkSSRF(url);
-    const { createPortalSession } = await import("./portal-sessions.js");
-    const session = await createPortalSession({ url, persistKey, viewport });
-    res.json({
-      sessionId: session.id,
-      url: session.currentUrl,
-      viewport: session.viewport,
-      persistKey: session.persistKey,
-    });
-  } catch (err) {
-    res.status(500).json({ error: safeErrorMessage(err) });
-  }
-});
-
-app.get("/portal/sessions", async (_req, res) => {
-  const { listPortalSessions } = await import("./portal-sessions.js");
-  res.json(listPortalSessions());
-});
-
-app.post("/portal/session/:id/navigate", async (req, res) => {
-  try {
-    const { url } = req.body as { url: string };
-    if (!url) return res.status(400).json({ error: "url required" });
-    await checkSSRF(url);
-    const { navigatePortalSession } = await import("./portal-sessions.js");
-    await navigatePortalSession(req.params.id, url);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: safeErrorMessage(err) });
-  }
-});
-
-app.delete("/portal/session/:id", async (req, res) => {
-  try {
-    const { closePortalSession } = await import("./portal-sessions.js");
-    await closePortalSession(req.params.id);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: safeErrorMessage(err) });
-  }
-});
-
-// GET /portal/snapshot?persistKey=…  or  ?sessionId=…
-// Returns a live { url, title, text } snapshot of the portal page so a
-// Terminal Agent connected to it can reason on the actual DOM rather than
-// just the URL. This is what powers "agent sees the live trading page".
-app.get("/portal/snapshot", async (req, res) => {
-  const idOrKey = (req.query.persistKey as string) || (req.query.sessionId as string);
-  if (!idOrKey) return res.status(400).json({ error: "persistKey or sessionId required" });
-  try {
-    const { getPortalSnapshot } = await import("./portal-sessions.js");
-    const snap = await getPortalSnapshot(idOrKey);
-    if (!snap) return res.status(404).json({ error: "Portal session not found or not interactive" });
-    res.json(snap);
-  } catch (err) {
-    res.status(500).json({ error: safeErrorMessage(err) });
-  }
-});
-
 // GET /portal?url=... → proxy a web page for iframe embedding on the canvas.
 // Strips X-Frame-Options and CSP frame-ancestors so the page renders in an iframe.
 // Rewrites relative URLs to absolute so assets (CSS, images) load correctly.
@@ -3355,10 +3275,6 @@ if (HOST === "0.0.0.0" && !API_KEY) {
 
 const server = app.listen(PORT, HOST, () => {
   logger.info("occ-rest", `Listening on http://${HOST}:${PORT}`, { host: HOST, port: PORT, auth: !!API_KEY, cors: CORS_ORIGIN });
-
-  // Mount portal WebSocket handlers on the same server so the upgrade event
-  // routes screencast + input traffic to the Playwright session manager.
-  void import("./portal-ws.js").then((m) => m.attachPortalWebSockets(server));
   validateClaudeBinary();
   // Optional: codex CLI is only required if a codex provider is configured.
   // Validation logs INFO if missing (not WARNING), provider just won't work.
@@ -3425,11 +3341,6 @@ async function shutdown() {
   try { await closeMcpClients(); } catch {}
   try { closeStorage(); } catch {}
   try { const { closeExtraDbs } = await import("./pretool-extras.js"); closeExtraDbs(); } catch {}
-  // 4b. Close all interactive portal sessions (persists storageState first)
-  try {
-    const { closeAllPortalSessions } = await import("./portal-sessions.js");
-    await closeAllPortalSessions();
-  } catch {}
   // 5. Allow 3s for in-flight requests to finish, then exit
   if (!process.env.VITEST) {
     setTimeout(() => process.exit(0), 3000);

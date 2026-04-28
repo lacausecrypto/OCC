@@ -9,7 +9,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useCanvasStore } from "../../stores/canvas";
 import type { CanvasNode } from "../../types/canvas";
-import { buildConnectedContextAsync } from "../../utils/canvasContext";
+import { buildConnectedContext } from "../../utils/canvasContext";
 import styles from "./CanvasEditor.module.css";
 
 const MIN_ZOOM_FOR_OVERLAY = 0.4;
@@ -48,10 +48,8 @@ function TerminalOverlayItem({ node, camera }: TerminalOverlayItemProps) {
 
       // Inject content from canvas items connected to this terminal so the
       // agent can actually act on a Portal / File / Obsidian / Sticky etc.
-      // Async because interactive Portal nodes are snapshotted server-side
-      // (live DOM text) at the moment the user sends the message.
       const live = useCanvasStore.getState();
-      const connected = await buildConnectedContextAsync(node.id, live.nodes, live.edges);
+      const connected = buildConnectedContext(node.id, live.nodes, live.edges);
       // If the user authored a custom system prompt for this terminal, use it
       // as-is. Otherwise let the backend fall back to the configurable
       // `terminalAgent` system prompt (Settings → System Prompts).

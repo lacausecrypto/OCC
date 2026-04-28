@@ -127,19 +127,6 @@ export interface CanvasNode {
   portalDescription?: string;
   portalFavicon?: string;
   portalStatus?: "loading" | "loaded" | "error";
-  /**
-   * "static"      — current default: server-side fetch + iframe (read-only)
-   * "interactive" — Playwright session streamed over WebSocket: real cookies,
-   *                 real JS, real WebSockets. Use this for sites that require
-   *                 login (X, Gmail, banks).
-   */
-  portalMode?: "static" | "interactive";
-  /**
-   * Stable id used by the backend to load/save cookies for this portal.
-   * Defaults to the node id when interactive mode is enabled — that way the
-   * same canvas node keeps the same login between sessions.
-   */
-  portalPersistKey?: string;
   // ─── File viewer fields ─────────────────────────────────────────
   filePath?: string;
   fileContent?: string;

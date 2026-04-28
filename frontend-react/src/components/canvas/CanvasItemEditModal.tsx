@@ -45,7 +45,6 @@ export function CanvasItemEditModal({
 
   // Portal
   const [portalUrl, setPortalUrl] = useState(existingNode?.portalUrl ?? "https://");
-  const [portalMode, setPortalMode] = useState<"static" | "interactive">(existingNode?.portalMode ?? "static");
 
   // File
   const [filePath, setFilePath] = useState(existingNode?.filePath ?? "");
@@ -177,7 +176,7 @@ export function CanvasItemEditModal({
       case "text":
         return { markdown };
       case "portal":
-        return { portalUrl, portalMode };
+        return { portalUrl };
       case "file":
         return { filePath, fileContent, label: filePath.split("/").pop() ?? label };
       case "link":
@@ -314,42 +313,17 @@ export function CanvasItemEditModal({
           )}
 
           {kind === "portal" && (
-            <>
-              <div className={styles.itemModalField}>
-                <label className={styles.itemModalLabel}>URL</label>
-                <input
-                  ref={firstInputRef as React.RefObject<HTMLInputElement>}
-                  className={styles.itemModalInput}
-                  value={portalUrl}
-                  onChange={(e) => setPortalUrl(e.target.value)}
-                  placeholder="https://example.com"
-                  type="url"
-                />
-              </div>
-              <div className={styles.itemModalField}>
-                <label className={styles.itemModalLabel}>Mode</label>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", padding: 8, borderRadius: 6, border: portalMode === "static" ? "1px solid var(--m-accent)" : "1px solid var(--m-border)", background: portalMode === "static" ? "rgba(var(--m-accent-rgb),0.08)" : "transparent" }}>
-                    <input type="radio" name="portalMode" checked={portalMode === "static"} onChange={() => setPortalMode("static")} style={{ marginTop: 2 }} />
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 12 }}>Static</div>
-                      <div style={{ fontSize: 11, color: "var(--m-text2)", marginTop: 2 }}>
-                        Server-side fetch, no JS, no cookies. Cheap and anonymous. Breaks on SPAs (X, Gmail, Notion).
-                      </div>
-                    </div>
-                  </label>
-                  <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", padding: 8, borderRadius: 6, border: portalMode === "interactive" ? "1px solid var(--m-accent)" : "1px solid var(--m-border)", background: portalMode === "interactive" ? "rgba(var(--m-accent-rgb),0.08)" : "transparent" }}>
-                    <input type="radio" name="portalMode" checked={portalMode === "interactive"} onChange={() => setPortalMode("interactive")} style={{ marginTop: 2 }} />
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 12 }}>Interactive (login)</div>
-                      <div style={{ fontSize: 11, color: "var(--m-text2)", marginTop: 2 }}>
-                        Real Chromium streamed over WebSocket. Cookies, JS, WebSockets all work. Login persists per node.
-                      </div>
-                    </div>
-                  </label>
-                </div>
-              </div>
-            </>
+            <div className={styles.itemModalField}>
+              <label className={styles.itemModalLabel}>URL</label>
+              <input
+                ref={firstInputRef as React.RefObject<HTMLInputElement>}
+                className={styles.itemModalInput}
+                value={portalUrl}
+                onChange={(e) => setPortalUrl(e.target.value)}
+                placeholder="https://example.com"
+                type="url"
+              />
+            </div>
           )}
 
           {kind === "file" && (
@@ -645,3 +619,4 @@ function defaultSize(kind: CanvasItemKind): { w: number; h: number } {
   };
   return map[kind] ?? { w: 200, h: 100 };
 }
+

@@ -450,3 +450,4 @@ describe("canvasToYaml — pre-tools serialization", () => {
     expect(toolsPos).toBeLessThan(preToolsPos);
   });
 });
+
