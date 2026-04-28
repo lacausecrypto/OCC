@@ -529,8 +529,18 @@ export async function runStepWithRetry(
             processTracker,
           );
         }
-        if (resolved && resolved.provider.type !== "claude" && (resolved.provider.apiKey || resolved.provider.type === "ollama")) {
-          // Non-Claude HTTP provider
+        if (resolved && resolved.provider.type !== "claude") {
+          // Non-Claude HTTP provider. Ollama runs locally without a key;
+          // every other type (openai, openrouter, huggingface, custom) needs
+          // an API key. Throw a clear error rather than silently falling
+          // through to Claude CLI when the user explicitly picked another
+          // provider but forgot to set the key.
+          if (resolved.provider.type !== "ollama" && !resolved.provider.apiKey) {
+            throw new Error(
+              `Provider "${resolved.provider.name}" has no API key configured. ` +
+              `Set one in Settings → Providers → ${resolved.provider.name}.`
+            );
+          }
           onLog(`Using provider: ${resolved.provider.name} (${resolved.model})`, "info");
           const result = await runLLMHTTP(
             {

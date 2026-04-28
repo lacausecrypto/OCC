@@ -104,10 +104,74 @@ const ErrorEventSchema = z.object({
   error: z.string().optional(),
 }).passthrough();
 
+// codex CLI 0.122+ shape:
+//   {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"..."}}
+//   {"type":"turn.completed","usage":{"input_tokens":..,"cached_input_tokens":..,"output_tokens":..}}
+const ItemCompletedSchema = z.object({
+  type: z.literal("item.completed"),
+  item: z.object({
+    type: z.string().optional(),
+    text: z.string().optional(),
+    content: z.union([
+      z.string(),
+      z.array(z.object({ type: z.string().optional(), text: z.string().optional() }).passthrough()),
+    ]).optional(),
+  }).passthrough(),
+}).passthrough();
+
+const TurnCompletedSchema = z.object({
+  type: z.literal("turn.completed"),
+  usage: z.object({
+    input_tokens: z.number().optional(),
+    output_tokens: z.number().optional(),
+    cached_input_tokens: z.number().optional(),
+  }).passthrough().optional(),
+}).passthrough();
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const CODEX_TIMEOUT_MS = Number(process.env.CODEX_TIMEOUT_MS) || 30 * 60 * 1000;
 const MAX_OUTPUT = 5_000_000;
+
+// ─── Defensive text extraction ──────────────────────────────────────────────
+//
+// codex CLI is moving fast — new event types (agent_message, reasoning,
+// task_started, final_response, …) appear between releases. Rather than
+// silently dropping output every time the schema drifts, scan the JSON event
+// for plausible text fields and emit them as chunks. Bounded depth so cyclic
+// refs or huge nested objects can't explode.
+function extractAnyText(obj: unknown, maxDepth: number): string | null {
+  if (maxDepth <= 0 || obj == null) return null;
+  if (typeof obj === "string") return obj.length > 0 ? obj : null;
+  if (Array.isArray(obj)) {
+    const parts: string[] = [];
+    for (const item of obj) {
+      const got = extractAnyText(item, maxDepth - 1);
+      if (got) parts.push(got);
+    }
+    return parts.length > 0 ? parts.join("\n") : null;
+  }
+  if (typeof obj === "object") {
+    const o = obj as Record<string, unknown>;
+    // 1) Prefer canonical text-bearing fields at this level.
+    for (const key of ["text", "content", "message", "delta", "output", "value", "result", "response"]) {
+      if (key in o) {
+        const got = extractAnyText(o[key], maxDepth - 1);
+        if (got) return got;
+      }
+    }
+    // 2) Otherwise descend into any nested object/array values (skip
+    //    metadata-ish primitive fields like ids, types, timestamps).
+    for (const [k, v] of Object.entries(o)) {
+      if (k === "type" || k === "id" || k === "thread_id" || k === "usage") continue;
+      if (v != null && typeof v === "object") {
+        const got = extractAnyText(v, maxDepth - 1);
+        if (got) return got;
+      }
+    }
+  }
+  return null;
+}
 
 // ─── Binary validation ──────────────────────────────────────────────────────
 
@@ -238,6 +302,7 @@ export function runCodex(
     let outputTokens: number | undefined;
     let stderr = "";
     let errorEvent: string | null = null;
+    const seenUnknownTypes = new Set<string>();
 
     const pushChunk = (text: string) => {
       if (!text) return;
@@ -319,6 +384,39 @@ export function runCodex(
           continue;
         }
 
+        // ── codex 0.122+ item.completed ──
+        const item = ItemCompletedSchema.safeParse(raw);
+        if (item.success) {
+          const itemType = item.data.item.type;
+          // We only emit user-facing assistant text. Skip reasoning, tool
+          // calls, file edits etc — those are diagnostic events that would
+          // pollute the chat history if streamed.
+          if (itemType === "agent_message" || itemType === "message" || itemType === "assistant") {
+            const t = item.data.item.text;
+            const content = item.data.item.content;
+            if (typeof t === "string" && t.length > 0) {
+              pushChunk(t);
+            } else if (typeof content === "string" && content.length > 0) {
+              pushChunk(content);
+            } else if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block.text) pushChunk(block.text);
+              }
+            }
+          }
+          continue;
+        }
+
+        // ── codex 0.122+ turn.completed (carries usage) ──
+        const turn = TurnCompletedSchema.safeParse(raw);
+        if (turn.success) {
+          if (turn.data.usage) {
+            inputTokens = turn.data.usage.input_tokens ?? inputTokens;
+            outputTokens = turn.data.usage.output_tokens ?? outputTokens;
+          }
+          continue;
+        }
+
         // ── Error event ──
         const err = ErrorEventSchema.safeParse(raw);
         if (err.success) {
@@ -326,7 +424,29 @@ export function runCodex(
           continue;
         }
 
-        // Unknown event — ignore
+        // ── Known-but-uninteresting events: drop silently ──
+        const evType = (raw as { type?: unknown })?.type;
+        if (typeof evType === "string" && (evType === "thread.started" || evType === "turn.started" || evType.startsWith("item.started") || evType.startsWith("item.delta"))) {
+          continue;
+        }
+
+        // ── Best-effort text extraction (fallback for unknown event types) ──
+        // codex CLI versions add new event types (agent_message, reasoning,
+        // task_started, final_response, …). Rather than going silent on
+        // every new shape, scan the JSON object for plausible text fields
+        // and emit them as chunks. Bounded depth so cyclic refs can't
+        // explode.
+        const extracted = extractAnyText(raw, 4);
+        if (extracted) {
+          pushChunk(extracted);
+          continue;
+        }
+
+        // Truly unknown event — log once for debug visibility, then ignore.
+        if (typeof evType === "string" && !seenUnknownTypes.has(evType)) {
+          seenUnknownTypes.add(evType);
+          process.stderr.write(`[codex] unhandled event type: ${JSON.stringify(evType)} (line: ${trimmed.slice(0, 200)})\n`);
+        }
       }
     });
 

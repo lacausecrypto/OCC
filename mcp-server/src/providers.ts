@@ -363,16 +363,21 @@ async function runOpenRouter(
     stream: !!onChunk,
   };
 
-  const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${provider.apiKey}`,
-      "HTTP-Referer": "https://github.com/anthropics/occ",
-      "X-Title": "OCC Chimera",
-    },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${provider.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${provider.apiKey}`,
+        "HTTP-Referer": "https://github.com/anthropics/occ",
+        "X-Title": "OCC Chimera",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new Error(`OpenRouter unreachable at ${provider.baseUrl}: ${(err as Error).message ?? String(err)}`);
+  }
 
   if (!res.ok) {
     const errText = await res.text().catch(() => res.statusText);
@@ -569,14 +574,40 @@ async function runOpenAICompat(
       body.stream_options = { include_usage: true };
     }
 
-    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${provider.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      // Bare `fetch failed` is unhelpful — translate to actionable text.
+      const msg = (err as Error).message ?? String(err);
+      if (provider.type === "ollama") {
+        throw new Error(
+          `Cannot reach Ollama at ${provider.baseUrl} (${msg}). ` +
+          `Start the local server: \`ollama serve\` (or open the Ollama app).`
+        );
+      }
+      throw new Error(`${provider.name} unreachable at ${provider.baseUrl}: ${msg}`);
+    }
 
     if (!res.ok) {
       const errText = await res.text().catch(() => res.statusText);
+      // Ollama returns 404 for un-pulled models with body { "error": "model not found" }
+      if (provider.type === "ollama" && res.status === 404) {
+        throw new Error(
+          `Ollama model "${config.model}" is not pulled locally. ` +
+          `Run: \`ollama pull ${config.model}\``
+        );
+      }
+      if (provider.type === "huggingface" && (res.status === 401 || res.status === 403)) {
+        throw new Error(
+          `HuggingFace auth failed (${res.status}). ` +
+          `Set a token in Settings → Providers → HuggingFace, or via HF_TOKEN env var. (${errText.slice(0, 200)})`
+        );
+      }
       throw new Error(`${provider.name} API ${res.status}: ${errText}`);
     }
 
